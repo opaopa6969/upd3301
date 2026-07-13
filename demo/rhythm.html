@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>PC-8031 DRUM MACHINE — ヘッドシークで刻め</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#101014; color:#ccd; font-family:ui-monospace,monospace; margin:24px; }
+  h1 { font-size:18px; color:#8fd; }
+  .row { margin:10px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .row .lbl { color:#778; min-width:120px; }
+  button { background:#223; color:#cde; border:1px solid #446; border-radius:4px; padding:6px 12px; cursor:pointer; }
+  button.on { background:#265; border-color:#4a8; }
+  table { border-collapse:collapse; }
+  td.trk { color:#9ab; padding:4px 10px 4px 0; font-size:13px; white-space:nowrap; }
+  td.cell { padding:2px; }
+  .step { width:30px; height:30px; border-radius:4px; border:1px solid #334; background:#181820; cursor:pointer; }
+  .step.on { background:#2a7a4a; border-color:#5c6; }
+  .step.now { outline:2px solid #8fd; }
+  td.beat4 .step { border-left:2px solid #556; }
+  #log { font-size:12px; color:#7a8; white-space:pre; height:72px; overflow:hidden; margin-top:10px; }
+  .note { color:#778; font-size:12px; max-width:700px; }
+  input[type=range] { accent-color:#4a8; }
+</style>
+</head>
+<body>
+<h1>PC-8031 DRUM MACHINE — ディスクユニットで刻め</h1>
+<p class="note">▶ <a href="./index.html" style="color:#8fd">CRT物理デモ</a> · <a href="./terminal.html" style="color:#8fd">ターミナル</a> · <a href="./video.html" style="color:#8fd">動画セミグラ</a></p>
+<div class="row">
+  <button id="bplay">▶ PLAY</button>
+  <label>BPM <input type="range" id="kbpm" min="60" max="200" step="1" value="112"> <span id="bpmv">112</span></label>
+  <button id="bdemo">デモパターン</button>
+  <button id="bclear">クリア</button>
+</div>
+<table id="grid"></table>
+<div id="log"></div>
+<p class="note">
+  鍵盤代わり: <b>Z</b>=シーク <b>X</b>=ヘッドロード <b>C</b>=MOTORリレー <b>V</b>=BEEP。
+  昔、PC-8031のヘッドシークがうるさすぎてドラムマシンにされてた文化と、
+  N-BASICの <b>MOTOR文</b>（カセットリレーが port 30h の d3 でカチッと鳴る）への
+  オマージュ。BEEPは port 40h の d5。トリガーのたびに流れるのは実機で
+  同じ音を出すときのOUT命令。音はぜんぶWebAudio合成（実録じゃなくて物理の真似）。
+</p>
+<script type="module">
+const TRACKS = [
+  { name: 'FDD SEEK (ガガガッ)', key: 'z', out: 'PC-8031 CMD: SEEK TRK+6' },
+  { name: 'HEAD LOAD (ゴトッ)', key: 'x', out: 'PC-8031 CMD: HEAD LOAD' },
+  { name: 'MOTOR ON/OFF (カチッ)', key: 'c', out: 'OUT 30h,≠d3 ; MOTOR relay' },
+  { name: 'BEEP 2400Hz', key: 'v', out: 'OUT 40h,20h ; BEEP on' },
+];
+const STEPS = 16;
+const pattern = TRACKS.map(() => new Array(STEPS).fill(false));
+
+// ---- WebAudio synthesis of the machine room -----------------------------
+let ac = null;
+const ctx = () => (ac ??= new AudioContext());
+
+function noiseBuffer(seconds) {
+  const a = ctx();
+  const buf = a.createBuffer(1, a.sampleRate * seconds, a.sampleRate);
+  const d = buf.getChannelData(0);
+  let s = 22050; // deterministic LCG noise, no Math.random even here ｗ
+  for (let i = 0; i < d.length; i++) {
+    s = (s * 1103515245 + 12345) & 0x7fffffff;
+    d[i] = (s / 0x3fffffff) - 1;
+  }
+  return buf;
+}
+let sharedNoise = null;
+
+function burst(t, { freq, q = 4, dur = 0.02, gain = 0.5, type = 'bandpass' }) {
+  const a = ctx();
+  sharedNoise ??= noiseBuffer(0.5);
+  const src = a.createBufferSource();
+  src.buffer = sharedNoise;
+  const f = a.createBiquadFilter();
+  f.type = type; f.frequency.value = freq; f.Q.value = q;
+  const g = a.createGain();
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  src.connect(f).connect(g).connect(a.destination);
+  src.start(t); src.stop(t + dur + 0.01);
+}
+
+function thump(t, { from = 90, to = 45, dur = 0.06, gain = 0.6 }) {
+  const a = ctx();
+  const o = a.createOscillator();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(from, t);
+  o.frequency.exponentialRampToValueAtTime(to, t + dur);
+  const g = a.createGain();
+  g.gain.setValueAtTime(gain, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(a.destination);
+  o.start(t); o.stop(t + dur + 0.01);
+}
+
+const VOICES = [
+  (t) => { // FDD seek: stepper pulse train — the gagaga
+    for (let i = 0; i < 6; i++) {
+      burst(t + i * 0.011, { freq: 1300, q: 6, dur: 0.012, gain: 0.5 });
+      burst(t + i * 0.011, { freq: 300, q: 2, dur: 0.014, gain: 0.25, type: 'lowpass' });
+    }
+  },
+  (t) => { // head load: soft thunk + a little rattle
+    thump(t, { from: 110, to: 40, dur: 0.07, gain: 0.7 });
+    burst(t + 0.004, { freq: 700, q: 3, dur: 0.03, gain: 0.3 });
+  },
+  (t) => { // relay: sharp tick + short metallic ring
+    burst(t, { freq: 4500, q: 1, dur: 0.006, gain: 0.6, type: 'highpass' });
+    burst(t + 0.002, { freq: 900, q: 12, dur: 0.035, gain: 0.35 });
+  },
+  (t) => { // BEEP: 2400Hz square gate
+    const a = ctx();
+    const o = a.createOscillator();
+    o.type = 'square'; o.frequency.value = 2400;
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.12, t);
+    g.gain.setValueAtTime(0.12, t + 0.05);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.06);
+    o.connect(g).connect(a.destination);
+    o.start(t); o.stop(t + 0.08);
+  },
+];
+
+// ---- OUT-instruction log ticker -----------------------------------------
+const logEl = document.getElementById('log');
+const lines = [];
+function logOut(i) {
+  lines.push(`${TRACKS[i].out}`);
+  if (lines.length > 5) lines.shift();
+  logEl.textContent = lines.join('\n');
+}
+
+// ---- sequencer ------------------------------------------------------------
+let playing = false, step = 0, nextTime = 0, timer = null, bpm = 112;
+
+function schedule() {
+  const a = ctx();
+  while (nextTime < a.currentTime + 0.12) {
+    const s = step % STEPS;
+    for (let i = 0; i < TRACKS.length; i++) {
+      if (pattern[i][s]) { VOICES[i](nextTime); logOut(i); }
+    }
+    markStep(s);
+    nextTime += 60 / bpm / 4; // 16th notes
+    step++;
+  }
+}
+
+function setPlaying(on) {
+  playing = on;
+  document.getElementById('bplay').textContent = on ? '■ STOP' : '▶ PLAY';
+  document.getElementById('bplay').classList.toggle('on', on);
+  if (on) {
+    ctx().resume?.();
+    step = 0;
+    nextTime = ctx().currentTime + 0.05;
+    timer = setInterval(schedule, 25);
+  } else {
+    clearInterval(timer);
+    markStep(-1);
+  }
+}
+
+// ---- grid UI ----------------------------------------------------------------
+const grid = document.getElementById('grid');
+const cellEls = [];
+TRACKS.forEach((trk, i) => {
+  const tr = document.createElement('tr');
+  const name = document.createElement('td');
+  name.className = 'trk';
+  name.textContent = `[${trk.key.toUpperCase()}] ${trk.name}`;
+  tr.appendChild(name);
+  cellEls.push([]);
+  for (let s = 0; s < STEPS; s++) {
+    const td = document.createElement('td');
+    td.className = 'cell' + (s % 4 === 0 ? ' beat4' : '');
+    const b = document.createElement('div');
+    b.className = 'step';
+    b.onclick = () => { pattern[i][s] = !pattern[i][s]; b.classList.toggle('on', pattern[i][s]); };
+    td.appendChild(b);
+    tr.appendChild(td);
+    cellEls[i].push(b);
+  }
+  grid.appendChild(tr);
+});
+
+function markStep(s) {
+  for (const row of cellEls) row.forEach((el, x) => el.classList.toggle('now', x === s));
+}
+
+function loadPattern(rows) {
+  rows.forEach((str, i) => {
+    for (let s = 0; s < STEPS; s++) {
+      pattern[i][s] = str[s] === 'x';
+      cellEls[i][s].classList.toggle('on', pattern[i][s]);
+    }
+  });
+}
+
+// four-on-the-floor, machine-room flavor
+const DEMO = [
+  'x...x...x...x.xx', // seek = kick
+  '....x.......x...', // head load = snare
+  '..x...x...x...x.', // relay = hat
+  '............x..x', // beep = accent
+];
+
+document.getElementById('bplay').onclick = () => setPlaying(!playing);
+document.getElementById('bdemo').onclick = () => loadPattern(DEMO);
+document.getElementById('bclear').onclick = () => loadPattern(['', '', '', '']);
+const bpmv = document.getElementById('bpmv');
+document.getElementById('kbpm').oninput = (e) => { bpm = +e.target.value; bpmv.textContent = bpm; };
+
+document.addEventListener('keydown', (e) => {
+  const i = TRACKS.findIndex((t) => t.key === e.key.toLowerCase());
+  if (i < 0 || e.repeat) return;
+  ctx().resume?.();
+  VOICES[i](ctx().currentTime);
+  logOut(i);
+});
+</script>
+</body>
+</html>
