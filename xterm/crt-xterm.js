@@ -247,20 +247,24 @@ export function invertCellBlock(out, w, cellX, cellY, cellCount) {
 // The addon.
 // ---------------------------------------------------------------------------
 
+// Defaults are tuned for READING, not for maximum atmosphere: this thing
+// fronts real shells. Tight focus, shallow scanlines with fat traces,
+// barely-there barrel — the CRT is present but the text wins. Crank the
+// knobs yourself for the museum look.
 const DEFAULT_OPTIONS = Object.freeze({
   phosphor: 'P22',     // key into PHOSPHORS
   mask: 'aperture',    // key into MASKS
   maskPitch: 3,
-  barrel: 0.06,
-  focus: 0.8,          // CrtTube beamWidth
-  bright: 1.2,         // toRGBA/apply scale
-  contrast: 1.0,
+  barrel: 0.02,        // a hint of curved glass; text at the edges stays straight
+  focus: 0.35,         // tight beam: glyphs crisp, edges still analog
+  bright: 1.35,        // mask + scanlines eat luminance; pay it back
+  contrast: 1.1,
   flicker: false,      // 10 Hz beat + mains drift, frame-counted
   strict1979: false,   // drop per-cell backgrounds (PC-8001 truth)
   cursorBlink: true,
   outputScale: 2,      // tube output pixels per source pixel (h; v gets ×2 more)
-  scanlineDepth: 1.0,  // 200-line look: real black between traces
-  beamHeight: 0.35,
+  scanlineDepth: 0.55, // traces visible, glyph bodies stay solid
+  beamHeight: 0.6,
 });
 
 export class CrtRendererAddon {
