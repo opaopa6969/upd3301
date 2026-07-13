@@ -653,3 +653,33 @@ test('power-off: density-boosted drive leaves a longer afterglow', () => {
   const hot = glowAfter(6, 8); // collapsed raster: same spot hit 6× harder
   assert.ok(hot > dim * 5.5, `hot spot lingers (${hot} vs ${dim})`);
 });
+
+// ---- video → semigraphic --------------------------------------------------
+
+test('semivideo: solid red frame → red cells, all dots lit', async () => {
+  const { rgbaToSemigraphic } = await import('./semivideo.js');
+  const W = 16, H = 8;
+  const rgba = new Uint8Array(W * H * 4);
+  for (let i = 0; i < W * H; i++) { rgba[i * 4] = 255; rgba[i * 4 + 3] = 255; }
+  const r = rgbaToSemigraphic(rgba, W, H);
+  assert.equal(r.cols, 8);
+  assert.equal(r.rows, 2);
+  assert.ok([...r.codes].every((c) => c === 0xff), 'all dots on');
+  assert.ok([...r.colors].every((c) => c === 2), 'GRB red everywhere');
+});
+
+test('semivideo: black frame → dark cells; gray → dithered density', async () => {
+  const { rgbaToSemigraphic } = await import('./semivideo.js');
+  const W = 16, H = 16;
+  const black = rgbaToSemigraphic(new Uint8Array(W * H * 4), W, H);
+  assert.ok([...black.codes].every((c) => c === 0));
+  const gray = new Uint8Array(W * H * 4).fill(128);
+  const g = rgbaToSemigraphic(gray, W, H);
+  let lit = 0, total = 0;
+  for (const code of g.codes) for (let b = 0; b < 8; b++) { total++; lit += (code >> b) & 1; }
+  const density = lit / total;
+  assert.ok(density > 0.3 && density < 0.7, `~50% dither density (${density})`);
+  assert.ok([...g.colors].every((c) => c === 7), 'gray dithers as white dots');
+  const g2 = rgbaToSemigraphic(gray, W, H);
+  assert.deepEqual(g.codes, g2.codes, 'ordered dither is deterministic');
+});

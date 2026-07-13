@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>μPD3301 video — 動画をセミグラフィックで観る</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#101014; color:#ccd; font-family:ui-monospace,monospace; margin:24px; }
+  h1 { font-size:18px; color:#8fd; }
+  canvas { image-rendering:pixelated; border:12px solid #222; border-radius:8px; background:#000; max-width:100%; }
+  .row { margin:10px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .row .lbl { color:#778; }
+  button, input[type=file]::file-selector-button { background:#223; color:#cde; border:1px solid #446; border-radius:4px; padding:6px 12px; cursor:pointer; }
+  button.on { background:#265; border-color:#4a8; }
+  #guts { font-size:12px; color:#889; white-space:pre; }
+  .note { color:#778; font-size:12px; max-width:700px; }
+  video { display:none; }
+</style>
+</head>
+<body>
+<h1>動画 → セミグラフィック（失われた技術で映像を観る）</h1>
+<p class="note">▶ <a href="./index.html" style="color:#8fd">CRT物理デモ</a> · <a href="./terminal.html" style="color:#8fd">ターミナルデモ</a></p>
+<canvas id="crt" width="1280" height="800"></canvas>
+<div class="row">
+  <input type="file" id="file" accept="video/*">
+  <button id="bcam">Webカメラ</button>
+  <button id="bplay">⏯</button>
+</div>
+<div class="row"><span class="lbl">モード:</span>
+  <button id="gex" class="on">EX 160×50 (セル毎8色 = 320×200ドット)</button>
+  <button id="gorig">ORIGINAL 80×25 (色は1行20回まで)</button>
+  <label><input type="range" id="kgain" min="0.5" max="3" step="0.1" value="1.3"> GAIN</label>
+</div>
+<div id="guts"></div>
+<p class="note">
+  ルマはセミグラのドット格子（セルあたり2×4）、クロマはセル格子（1セル1色）
+  — PC-8001 / ZX Spectrum / MSX1 系譜のアトリビュートクラッシュ美学。
+  各ドットは Bayer 4×4 の順序ディザで GRB 3bit に量子化され、セル色は
+  点灯ドットの最頻色。EXモードは架空拡張でセル毎に色が変えられる。
+  ORIGINALモードは実機の「アトリビュート20ペア/行」制約つき —
+  溢れた行は後半の色が脱落する（overflowRows が回るのを見て）。
+</p>
+<script type="module">
+import { Terminal } from '../term.js';
+import { rgbaToSemigraphic } from '../semivideo.js';
+import { ATTR } from '../pc8001.js';
+
+const PALETTE = [
+  [0,0,0],[40,60,255],[255,60,50],[235,70,255],
+  [50,230,60],[60,235,235],[245,235,60],[240,240,240],
+];
+const canvas = document.getElementById('crt');
+const ctx = canvas.getContext('2d');
+const guts = document.getElementById('guts');
+const video = document.createElement('video');
+video.muted = true; video.loop = true; video.playsInline = true;
+document.body.appendChild(video);
+
+let geometry = 'ex'; // 'ex' | 'orig'
+let term = null, img = null, grab = null, gain = 1.3;
+
+function boot() {
+  term = geometry === 'ex'
+    ? new Terminal({ cols: 160, rows: 50, ex: true, showCursor: false })
+    : new Terminal({ cols: 80, rows: 25, ex: false, showCursor: false });
+  const w = term.cols * 8, h = term.rows * 8;
+  canvas.width = w; canvas.height = h * 2;
+  img = ctx.createImageData(w, h * 2);
+  grab = new OffscreenCanvas(term.dotWidth, term.dotHeight).getContext('2d', { willReadFrequently: true });
+  term.write('\x1b[2J\x1b[H\x1b[36m  LOAD A VIDEO OR START THE WEBCAM\x1b[0m');
+  term.flush();
+}
+boot();
+
+function frameToCells() {
+  const dw = term.dotWidth, dh = term.dotHeight;
+  grab.drawImage(video, 0, 0, dw, dh);
+  const rgba = grab.getImageData(0, 0, dw, dh).data;
+  const { codes, colors } = rgbaToSemigraphic(rgba, dw, dh, { gain });
+  // pour straight into the terminal's cell model: chars = block bitmaps,
+  // colorA = per-cell semigraphic color spec
+  for (let i = 0; i < codes.length; i++) {
+    term.chars[i] = codes[i];
+    term.colorA[i] = (colors[i] << 5) | ATTR.SEMIGRAPHIC | ATTR.COLOR_FLAG;
+    term.funcA[i] = 0;
+  }
+  term.stats.overflowRows = 0; // measure per-frame overflow
+  term.flush();
+}
+
+function blit(frame) {
+  const d = img.data, W = frame.width;
+  for (let y = 0; y < frame.height; y++) {
+    for (let x = 0; x < W; x++) {
+      const [r, g, b] = PALETTE[frame.pixels[y * W + x]];
+      let o = (y * 2 * W + x) * 4;
+      d[o] = r; d[o + 1] = g; d[o + 2] = b; d[o + 3] = 255;
+      o += W * 4;
+      d[o] = r * .55; d[o + 1] = g * .55; d[o + 2] = b * .55; d[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+const cgromEmpty = new Uint8Array(256 * 16);
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  if (video.readyState >= 2 && !video.paused) frameToCells();
+  term.update(dt);
+  blit(term.render({ cgrom: cgromEmpty }));
+  guts.textContent =
+    `mode=${geometry}  ${term.cols}x${term.rows} cells = ${term.dotWidth}x${term.dotHeight} dots` +
+    `  attrSlots/row=${term.attrSlots}  overflowRows(this frame)=${term.stats.overflowRows}` +
+    `  gain=${gain.toFixed(1)}  video=${video.videoWidth}x${video.videoHeight}`;
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+const $ = (id) => document.getElementById(id);
+$('file').onchange = (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  video.srcObject = null;
+  video.src = URL.createObjectURL(f);
+  video.play();
+};
+$('bcam').onclick = async () => {
+  try {
+    video.src = '';
+    video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 400 } });
+    video.play();
+  } catch (err) { guts.textContent = 'webcam: ' + err.message; }
+};
+$('bplay').onclick = () => { video.paused ? video.play() : video.pause(); };
+$('gex').onclick = () => { geometry = 'ex'; boot(); $('gex').classList.add('on'); $('gorig').classList.remove('on'); };
+$('gorig').onclick = () => { geometry = 'orig'; boot(); $('gorig').classList.add('on'); $('gex').classList.remove('on'); };
+$('kgain').oninput = (e) => { gain = +e.target.value; };
+</script>
+</body>
+</html>

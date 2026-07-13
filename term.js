@@ -34,11 +34,12 @@ const DEFAULT_FUNC = 0x00;
 export class Terminal {
   constructor({
     cols = 80, rows = 25, ex = false, frameHz = 60,
-    sys = null, vramBase = null,
+    sys = null, vramBase = null, showCursor = true,
   } = {}) {
     this.cols = cols;
     this.rows = rows;
     this.ex = ex;
+    this.showCursor = showCursor;
     this.sys = sys ?? new Pc8001TextSystem({ frameHz });
     if (ex) {
       const geo = this.sys.initTextModeEx({ cols, rows, vramBase: vramBase ?? 0x4000 });
@@ -273,7 +274,7 @@ export class Terminal {
       if (overflowed) this.stats.overflowRows++;
     }
     // hardware cursor follows the terminal cursor
-    this.sys.out(0x51, 0x81);
+    this.sys.out(0x51, this.showCursor ? 0x81 : 0x80);
     this.sys.out(0x50, Math.min(this.x, cols - 1));
     this.sys.out(0x50, this.y);
     return this;
