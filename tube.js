@@ -204,9 +204,11 @@ export class CrtTube {
   apply(lum, out, { gamma = 2.2, scale = 1, tint = 0, contrast = 1 } = {}) {
     const n = this.outWidth * this.outHeight;
     const rgba = out && out.length === n * 4 ? out : new Uint8ClampedArray(n * 4);
+    // second blur stage is only reachable when per-pixel focus can exceed 1
+    const needB2 = Math.min(2, this.beamWidth + this.edgeDefocus * 2) > 1;
     for (let ch = 0; ch < 3; ch++) {
       this._blurPass(lum[ch], this._blur1[ch]);
-      this._blurPass(this._blur1[ch], this._blur2[ch]);
+      if (needB2) this._blurPass(this._blur1[ch], this._blur2[ch]);
     }
     const masks = [this.maskR, this.maskG, this.maskB];
     const w = this.srcWidth;

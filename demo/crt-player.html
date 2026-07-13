@@ -164,12 +164,16 @@ function vholdApply(src, dst) {
 }
 const power = { state: 'on', t: 0 };
 
-function beamPass() {
-  const parity = interlaced ? (frameNo & 1) : null;
+function grabFrame() { // once per displayed frame — 4K decode+downscale is the
+  // expensive part, so never do it more than once per rAF
   if (video.readyState >= 2) {
     grab.drawImage(video, 0, 0, SW, SH);
     frameBuf.set(grab.getImageData(0, 0, SW, SH).data);
   }
+}
+
+function beamPass() {
+  const parity = interlaced ? (frameNo & 1) : null;
   if (power.state === 'on') {
     phosphor.stepAnalog(vholdApply(frameBuf, rollBuf), FR, { fieldParity: parity });
     return;
@@ -208,14 +212,19 @@ function blit() {
 }
 
 const FR = 1 / 60;
-let last = performance.now(), acc = 0, frameNo = 0;
+let last = performance.now(), acc = 0, frameNo = 0, workMs = 0;
 function loop(now) {
   acc += Math.min(0.1, (now - last) / 1000);
   last = now;
+  const t0 = performance.now();
+  grabFrame();
   let steps = 0;
-  while (acc >= FR && steps < 4) { acc -= FR; steps++; frameNo++; beamPass(); }
+  while (acc >= FR && steps < 2) { acc -= FR; steps++; frameNo++; beamPass(); }
+  if (acc > FR) acc = 0; // can't keep up: drop the backlog instead of spiraling
   if (steps) blit();
+  workMs = workMs * 0.9 + (performance.now() - t0) * 0.1;
   guts.textContent =
+    `${workMs.toFixed(1)}ms/frame${workMs > 24 ? ' (重い: 物理OFFかFOCUS 0を試して)' : ''}  ` +
     `phosphor=${PHOSPHORS[phosName].name}  tube=${tubeMode}${interlaced ? '  interlaced' : ''}` +
     `${phosphor.burnRate ? '  burn-in!' : ''}  power=${power.state}` +
     `  video=${video.videoWidth}x${video.videoHeight} rs=${video.readyState}${video.paused ? ' paused' : ''}\n${status}`;
