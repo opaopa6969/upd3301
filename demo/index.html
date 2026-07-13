@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>μPD3301 emulator demo — 3301!</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#101014; color:#ccd; font-family:ui-monospace,monospace; margin:24px; }
+  h1 { font-size:18px; color:#8fd; }
+  canvas { image-rendering:pixelated; border:12px solid #222; border-radius:8px; background:#000; }
+  .row { margin:10px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  button { background:#223; color:#cde; border:1px solid #446; border-radius:4px; padding:6px 12px; cursor:pointer; }
+  button.on { background:#265; border-color:#4a8; }
+  #guts { font-size:12px; color:#889; white-space:pre; }
+  .note { color:#778; font-size:12px; max-width:660px; }
+</style>
+</head>
+<body>
+<h1>μPD3301 CRTC + μPD8257 DMAC — PC-8001 text pipeline emulator</h1>
+<canvas id="crt" width="640" height="400"></canvas>
+<div class="row">
+  <button id="b80" class="on">80桁</button>
+  <button id="b40">40桁</button>
+  <button id="bcolor" class="on">カラー</button>
+  <button id="brev">画面反転 (RVV)</button>
+  <button id="b27">27色モード (DMAカウント2倍)</button>
+</div>
+<div id="guts"></div>
+<p class="note">
+  下のレイヤはチップそのもの：VRAM (F3C8h) → μPD8257 ch2 が1行120バイト
+  (80文字+アトリビュート20ペア) をバースト転送 → μPD3301 が行バッファから描画。
+  27色モードはベーマガ1990年7月号の技の再現 — port 65h に 8000h+5999 を書くと
+  autoload で2画面が交互表示になり、ちらつき混色で中間色が見える。
+</p>
+<script type="module">
+import { Pc8001TextSystem, PC8001 } from '../pc8001.js';
+
+// ---- 5x7 font → CGROM ------------------------------------------------
+const G = {
+A:'01110 10001 10001 11111 10001 10001 10001',B:'11110 10001 10001 11110 10001 10001 11110',
+C:'01110 10001 10000 10000 10000 10001 01110',D:'11100 10010 10001 10001 10001 10010 11100',
+E:'11111 10000 10000 11110 10000 10000 11111',F:'11111 10000 10000 11110 10000 10000 10000',
+G:'01110 10001 10000 10111 10001 10001 01111',H:'10001 10001 10001 11111 10001 10001 10001',
+I:'01110 00100 00100 00100 00100 00100 01110',J:'00111 00010 00010 00010 00010 10010 01100',
+K:'10001 10010 10100 11000 10100 10010 10001',L:'10000 10000 10000 10000 10000 10000 11111',
+M:'10001 11011 10101 10101 10001 10001 10001',N:'10001 11001 10101 10011 10001 10001 10001',
+O:'01110 10001 10001 10001 10001 10001 01110',P:'11110 10001 10001 11110 10000 10000 10000',
+Q:'01110 10001 10001 10001 10101 10010 01101',R:'11110 10001 10001 11110 10100 10010 10001',
+S:'01111 10000 10000 01110 00001 00001 11110',T:'11111 00100 00100 00100 00100 00100 00100',
+U:'10001 10001 10001 10001 10001 10001 01110',V:'10001 10001 10001 10001 10001 01010 00100',
+W:'10001 10001 10001 10101 10101 10101 01010',X:'10001 10001 01010 00100 01010 10001 10001',
+Y:'10001 10001 01010 00100 00100 00100 00100',Z:'11111 00001 00010 00100 01000 10000 11111',
+0:'01110 10001 10011 10101 11001 10001 01110',1:'00100 01100 00100 00100 00100 00100 01110',
+2:'01110 10001 00001 00010 00100 01000 11111',3:'11111 00010 00100 00010 00001 10001 01110',
+4:'00010 00110 01010 10010 11111 00010 00010',5:'11111 10000 11110 00001 00001 10001 01110',
+6:'00110 01000 10000 11110 10001 10001 01110',7:'11111 00001 00010 00100 01000 01000 01000',
+8:'01110 10001 10001 01110 10001 10001 01110',9:'01110 10001 10001 01111 00001 00010 01100',
+'!':'00100 00100 00100 00100 00100 00000 00100','.':'00000 00000 00000 00000 00000 01100 01100',
+'-':'00000 00000 00000 11111 00000 00000 00000','/':'00001 00010 00010 00100 01000 01000 10000',
+':':'00000 01100 01100 00000 01100 01100 00000','*':'00100 10101 01110 00100 01110 10101 00100',
+'=':'00000 00000 11111 00000 11111 00000 00000','+':'00000 00100 00100 11111 00100 00100 00000',
+'(':'00010 00100 01000 01000 01000 00100 00010',')':'01000 00100 00010 00010 00010 00100 01000',
+'?':'01110 10001 00001 00010 00100 00000 00100',
+};
+const cgrom = new Uint8Array(256 * 16);
+for (const [ch, rows] of Object.entries(G)) {
+  const code = ch.charCodeAt(0);
+  rows.trim().split(/\s+/).forEach((bits, line) => {
+    cgrom[code * 16 + line] = parseInt(bits, 2) << 3;
+  });
+}
+
+// ---- semigraphic art packer ------------------------------------------
+// dot rows ('0'/'1' strings, width even, height multiple of 4) → cell codes
+function packSemigraphic(dotRows) {
+  const w = dotRows[0].length / 2, h = dotRows.length / 4;
+  const cells = [];
+  for (let cy = 0; cy < h; cy++) {
+    const row = [];
+    for (let cx = 0; cx < w; cx++) {
+      let code = 0;
+      for (let band = 0; band < 4; band++) {
+        if (dotRows[cy * 4 + band][cx * 2] === '1') code |= 1 << band;
+        if (dotRows[cy * 4 + band][cx * 2 + 1] === '1') code |= 1 << (4 + band);
+      }
+      row.push(code);
+    }
+    cells.push(row);
+  }
+  return cells;
+}
+const MUG = packSemigraphic([
+  '0011111111111100', '0111111111111110', '0111111111111110', '0011111111111100',
+  '0111111111111000', '0111111111111110', '0111111111110110', '0111111111110011',
+  '0111111111110011', '0111111111110011', '0111111111110011', '0111111111110110',
+  '0111111111111110', '0111111111111000', '0111111111111000', '0111111111111000',
+  '0111111111111000', '0111111111111000', '0111111111111000', '0111111111111000',
+  '1111111111111100', '1111111111111100', '0000000000000000', '0000000000000000',
+]);
+
+// ---- scenes -----------------------------------------------------------
+const sys = new Pc8001TextSystem();
+const A = PC8001.TEXT_VRAM, B = PC8001.TEXT_VRAM + 3000;
+const CENTER = (s, w = 80) => Math.max(0, (w - s.length) >> 1);
+
+// color spec helper: color index + optional semigraphic
+const col = (c, sg = false) => (c << 5) | (sg ? 0x10 : 0) | 0x08;
+
+function writeScene(vramBase, variant) {
+  // variant 0: normal palette, variant 1: shifted palette (for 27-color mix)
+  const P = variant === 0
+    ? { title: 7, num: 6, sub: 5, mugFoam: 7, mugBody: 6, bar: [1,2,3,4,5,6,7] }
+    : { title: 5, num: 2, sub: 4, mugFoam: 6, mugBody: 2, bar: [4,1,5,2,6,3,7] };
+  const L = (y) => sys.line(y, { vramBase });
+  for (let y = 0; y < 25; y++) L(y).text(0, ' '.repeat(80)).attrs(0, 0xe8);
+
+  const title = ' UPD3301 CRTC EMULATOR ** MEMORIAL 3301 ';
+  L(0).text(CENTER(title), title)
+      .attrs(0, col(P.title), CENTER(title), 0x04, CENTER(title) + title.length, 0x00);
+
+  const chant = '3301 !  3301 !';
+  L(2).text(CENTER(chant), chant)
+      .attrs(0, col(P.num), CENTER(chant), 0x02, CENTER(chant) + chant.length, 0x00);
+  const sub = 'NANMO NEE ... DEMO 3301 WA ARU';
+  L(3).text(CENTER(sub), sub).attrs(0, col(P.sub));
+
+  // attribute showcase
+  L(5).text(10, 'REVERSE').text(24, 'BLINK').text(36, 'SECRET').text(50, 'UNDERLINE')
+      .attrs(0, 0xe8, 10, 0x04, 17, 0x00, 24, 0x02, 29, 0x00, 36, 0x01, 42, 0x00, 50, 0x20, 59, 0x00);
+
+  // semigraphic beer mug (cells at x=36..43, y=8..13)
+  for (let r = 0; r < MUG.length; r++) {
+    L(8 + r).code(36, ...MUG[r])
+      .attrs(0, 0xe8, 36, col(r === 0 ? P.mugFoam : P.mugBody, true), 44, 0xe8);
+  }
+  L(14).text(35, '( BEER )').attrs(0, col(P.num));
+
+  // color bar, one semigraphic full-block band
+  L(16).code(8, ...Array(64).fill(0xff));
+  const barAttrs = [0, 0xe8];
+  P.bar.forEach((c, i) => { barAttrs.push(8 + Math.floor(i * 64 / 7), col(c, true)); });
+  barAttrs.push(72, 0xe8);
+  L(16).attrs(...barAttrs);
+
+  const lore = 'CICADA 3301 / SAIZERIYA 3301 = BEER / NEC UPD3301 = THIS CHIP';
+  L(19).text(CENTER(lore), lore).attrs(0, col(7));
+  const lore2 = 'IT ALL COMES BACK TO 3301.';
+  L(20).text(CENTER(lore2), lore2).attrs(0, col(P.sub));
+
+  L(23).text(0, 'READY').attrs(0, col(7));
+}
+
+function writeScene40(vramBase) {
+  const L = (y) => sys.line(y, { cols: 40, vramBase });
+  for (let y = 0; y < 25; y++) L(y).text(0, ' '.repeat(40)).attrs(0, 0xe8);
+  const t = ' 3301 WIDE MODE (40) ';
+  L(1).text(CENTER(t, 40), t).attrs(0, col(6), CENTER(t, 40), 0x04, CENTER(t, 40) + t.length, 0);
+  L(3).text(4, 'WIDTH 40 : DOUBLE-WIDE DOTS').attrs(0, col(5));
+  for (let r = 0; r < MUG.length; r++) {
+    L(6 + r).code(16, ...MUG[r]).attrs(0, 0xe8, 16, col(r === 0 ? 7 : 6, true), 24, 0xe8);
+  }
+  L(14).text(15, '( BEER )').attrs(0, col(6));
+  L(23).text(0, 'READY').attrs(0, col(7));
+}
+
+// ---- machine setup ----------------------------------------------------
+let width80 = true, mode27 = false, reverse = false;
+
+function boot() {
+  const cols = width80 ? 80 : 40;
+  sys.initTextMode({ cols });
+  if (width80) { writeScene(A, 0); writeScene(B, 1); }
+  else writeScene40(A);
+  if (mode27 && width80) {
+    const tc = 0x8000 | (6000 - 1);
+    sys.out(0x64, A & 0xff); sys.out(0x64, A >> 8);
+    sys.out(0x65, tc & 0xff); sys.out(0x65, tc >> 8);
+  }
+  sys.out(0x51, 0x20 | (reverse ? 1 : 0));
+  sys.out(0x51, 0x81); sys.out(0x50, 6); sys.out(0x50, 23); // cursor after READY
+}
+boot();
+
+// ---- CRT rendering ----------------------------------------------------
+const canvas = document.getElementById('crt');
+const ctx = canvas.getContext('2d');
+const img = ctx.createImageData(640, 400);
+const PALETTE = [
+  [0,0,0],[40,60,255],[255,60,50],[235,70,255],
+  [50,230,60],[60,235,235],[245,235,60],[240,240,240],
+];
+
+function blit(frame) {
+  const d = img.data;
+  for (let y = 0; y < frame.height; y++) {
+    for (let x = 0; x < frame.width; x++) {
+      const [r, g, b] = PALETTE[frame.pixels[y * frame.width + x]];
+      let o = (y * 2 * 640 + x) * 4;
+      d[o] = r; d[o + 1] = g; d[o + 2] = b; d[o + 3] = 255;
+      o += 640 * 4; // scanline: darker second line
+      d[o] = r * .55; d[o + 1] = g * .55; d[o + 2] = b * .55; d[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+const guts = document.getElementById('guts');
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  sys.update(dt); // fixed 60Hz frames inside
+  blit(sys.render({ cgrom }));
+  const c = sys.dmac.channels[2];
+  const st = sys.in(0x51);
+  guts.textContent =
+    `frame=${String(sys.crtc.frame).padStart(6)}  status=${st.toString(2).padStart(8, '0')}b` +
+    `  DMA ch2 addr=${c.addr.toString(16).toUpperCase().padStart(4, '0')}h` +
+    ` count=${String(c.count).padStart(4)}  ${sys.crtc.cols}x${sys.crtc.rows}` +
+    ` attr=${sys.crtc.attrsPerRow}pairs/row`;
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// ---- controls ----------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+function setOn(el, on) { el.classList.toggle('on', on); }
+$('b80').onclick = () => { width80 = true; boot(); setOn($('b80'), true); setOn($('b40'), false); };
+$('b40').onclick = () => { width80 = false; boot(); setOn($('b80'), false); setOn($('b40'), true); };
+$('bcolor').onclick = () => {
+  sys.out(0x30, (width80 ? 1 : 0) | (sys.colorMode ? 2 : 0));
+  setOn($('bcolor'), sys.colorMode);
+};
+$('brev').onclick = () => { reverse = !reverse; sys.out(0x51, 0x20 | (reverse ? 1 : 0)); setOn($('brev'), reverse); };
+$('b27').onclick = () => { mode27 = !mode27; boot(); setOn($('b27'), mode27); };
+</script>
+</body>
+</html>

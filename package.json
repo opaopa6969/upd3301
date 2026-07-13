@@ -1,0 +1,12 @@
+{
+  "name": "upd3301",
+  "version": "0.1.0",
+  "description": "NEC uPD3301 CRT controller + uPD8257 DMA emulator core (PC-8001 text pipeline), pure JS, deterministic, headless",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "private": true
+}
