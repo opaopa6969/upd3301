@@ -92,8 +92,18 @@ export class CrtPanel {
   }
 
   plotOpts() {
+    // "flicker feel": a 60Hz raster shown on a 60Hz display cancels out, so
+    // what reads as CRT flicker is the ~10Hz beat you get filming one — a
+    // slow luminance throb. Deterministic (frame-counted), no randomness.
+    let flick = 1;
+    if (this.knobs.flickerOn) {
+      this._flickerPhase = (this._flickerPhase ?? 0) + 1;
+      const beat = Math.sin(this._flickerPhase * 2 * Math.PI * 10 / 60);
+      const hum = Math.sin(this._flickerPhase * 2 * Math.PI * 1.7 / 60); // mains drift
+      flick = 1 - 0.10 * (0.5 + 0.5 * beat) - 0.04 * (0.5 + 0.5 * hum);
+    }
     return {
-      scale: this.knobs.bright,
+      scale: this.knobs.bright * flick,
       tint: this.knobs.tintOn ? this.knobs.tint : 0,
       contrast: this.knobs.contrast,
     };
@@ -187,6 +197,7 @@ export class CrtPanel {
     };
     flag('インターレース', () => this.interlaced, (v) => { this.interlaced = v; });
     flag('400ライン', () => this.line400, (v) => { this.line400 = v; });
+    flag('フリッカー', () => !!this.knobs.flickerOn, (v) => { this.knobs.flickerOn = v; });
     const ghostLabel = document.createElement('label');
     ghostLabel.style.cssText = 'color:#778;font-size:12px';
     ghostLabel.textContent = t('ガラス反射');

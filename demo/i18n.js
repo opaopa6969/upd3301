@@ -103,6 +103,7 @@ const DICT = {
   // tour / help chrome (tour.js)
   '次へ': 'Next',
   '▶ サンプル': '▶ Sample',
+  'フリッカー': 'Flicker',
   '前へ': 'Back',
   '完了': 'Done',
   '？ツアー': '? Tour',

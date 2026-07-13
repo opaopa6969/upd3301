@@ -83,6 +83,7 @@
   <label>BARREL <input type="range" id="kbarrel" min="-0.12" max="0.25" step="0.01" value="0.06"></label>
   <label>CONTRAST <input type="range" id="kcontrast" min="0.5" max="1.8" step="0.05" value="1"></label>
   <label>TINT<input type="checkbox" id="ctint" style="margin:2px"> <input type="range" id="ktint" min="-60" max="60" step="1" value="0"></label>
+  <label>フリッカー<input type="checkbox" id="cflick" style="margin:2px"></label>
   <label>V-HOLD <input type="range" id="kvhold" min="-20" max="20" step="0.5" value="0"></label>
 </div>
 <div id="guts"></div>
@@ -296,7 +297,18 @@ const phosphor = new CrtPhosphor({ width: 640, height: 200, phosphor: PHOSPHORS.
 let phosName = 'P22';
 let tubeMode = 'aperture'; // 'off' | 'aperture' | 'shadow' | 'slot'
 let interlaced = false;
-const knobs = { focus: 1, hSize: 1, vSize: 1, bright: 1, pitch: 3, conv: 0.0035, barrel: 0.06, contrast: 1, tint: 0, tintOn: false, vhold: 0, ghost: 0.07 }; // 裏のノブ
+const knobs = { focus: 1, hSize: 1, vSize: 1, bright: 1, pitch: 3, conv: 0.0035, barrel: 0.06, contrast: 1, tint: 0, tintOn: false, vhold: 0, ghost: 0.07, flickerOn: false }; // 裏のノブ
+// flicker feel: ~10Hz camera-beat luminance throb (a 60Hz raster on a 60Hz
+// display cancels out; the beat is what reads as CRT flicker). Deterministic.
+let _flickPhase = 0;
+function flickScale(base) {
+  if (!knobs.flickerOn) return base;
+  _flickPhase++;
+  const beat = Math.sin(_flickPhase * 2 * Math.PI * 10 / 60);
+  const hum = Math.sin(_flickPhase * 2 * Math.PI * 1.7 / 60);
+  return base * (1 - 0.10 * (0.5 + 0.5 * beat) - 0.04 * (0.5 + 0.5 * hum));
+}
+
 const tubes = {};
 function getTube() {
   if (!tubes[tubeMode]) {
@@ -318,7 +330,7 @@ let rgbaBuf = null; // 640x200, physics-off path
 function blit() {
   const d = img.data;
   if (tubeMode === 'off') {
-    rgbaBuf = phosphor.toRGBA(rgbaBuf, { scale: knobs.bright, tint: knobs.tintOn ? knobs.tint : 0, contrast: knobs.contrast });
+    rgbaBuf = phosphor.toRGBA(rgbaBuf, { scale: flickScale(knobs.bright), tint: knobs.tintOn ? knobs.tint : 0, contrast: knobs.contrast });
     for (let y = 0; y < 200; y++) {
       for (let x = 0; x < 640; x++) {
         const s = (y * 640 + x) * 4;
@@ -329,7 +341,7 @@ function blit() {
       }
     }
   } else {
-    getTube().apply(phosphor.composite(), d, { scale: knobs.bright, tint: knobs.tintOn ? knobs.tint : 0, contrast: knobs.contrast }); // writes into the ImageData
+    getTube().apply(phosphor.composite(), d, { scale: flickScale(knobs.bright), tint: knobs.tintOn ? knobs.tint : 0, contrast: knobs.contrast }); // writes into the ImageData
   }
   ctx.putImageData(img, 0, 0);
 }
@@ -590,6 +602,7 @@ $('kbarrel').oninput = (e) => { knobs.barrel = +e.target.value; regeo(); };
 $('kcontrast').oninput = (e) => { knobs.contrast = +e.target.value; };
 $('ktint').oninput = (e) => { knobs.tint = (+e.target.value) * Math.PI / 180; }; // 度→rad、NTSCのTINTつまみ
 $('ctint').onchange = (e) => { knobs.tintOn = e.target.checked; };
+$('cflick').onchange = (e) => { knobs.flickerOn = e.target.checked; };
 $('kvhold').oninput = (e) => { knobs.vhold = +e.target.value; };
 $('cghost').onchange = (e) => {
   knobs.ghost = e.target.checked ? 0.07 : 0; // inner-glass reflection off = modern AR-coated fantasy
