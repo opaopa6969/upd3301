@@ -65,7 +65,7 @@ const DICT = {
   'D3-D2ショート': 'Short D3-D2',
   '隣接全ショート (ボールド)': 'Short all adjacent (bold)',
   'P22 (青が先に死ぬ)': 'P22 (blue dies first)',
-  '長残光カラー (仮想)': 'Long color (hypothetical)',
+  '長残光カラー': 'Long color',
   'P39 緑モノクロ': 'P39 green mono',
   'P7 レーダー管': 'P7 radar',
   // player

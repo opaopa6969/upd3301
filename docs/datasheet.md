@@ -271,7 +271,11 @@ Notes worth keeping:
 - **P39** is the easy-on-the-eyes long green of terminal-era monitors —
   "P39 tube inside" was a spec-sheet bullet in the early 80s.
 - The constants in `crt.js` are order-of-magnitude honest and tuned to be
-  visible at 60 Hz frame granularity; they are not colorimetric data. The
-  "LONG color" preset is a hypothetical — long-persistence *color* tubes
-  effectively did not exist (the closest real thing was P7's two-layer
-  trick, which is monochrome-ish).
+  visible at 60 Hz frame granularity; they are not colorimetric data.
+- **Long-persistence color tubes really existed** (the first edition claimed
+  they didn't — and was corrected by an author who actually used one). The
+  canonical example is the color monitor for NEC's hi-res machines such as
+  the PC-9801XL, which used long-persistence phosphors to tame interlace
+  flicker at high resolution — at the price of anything moving leaving a
+  glorious smear. Read the "LONG color" preset as aiming at that kind
+  of tube.
