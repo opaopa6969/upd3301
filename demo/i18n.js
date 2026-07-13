@@ -26,6 +26,9 @@ const DICT = {
   'インターレース': 'Interlace',
   '15kHz 音鳴り': '15 kHz whine',
   '400ライン': '400-line',
+  'アンバー': 'Amber',
+  'プラズマ橙': 'Plasma orange',
+  'プラズマ格子': 'Plasma grid',
   '焼き付き (加速)': 'Burn-in (accelerated)',
   '焼き付き': 'Burn-in',
   // nav

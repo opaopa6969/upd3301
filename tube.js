@@ -30,7 +30,7 @@ import { tintMatrix } from './crt.js';
 
 export const SCHEMA_VERSION = 2;
 
-export const MASKS = Object.freeze(['none', 'aperture', 'shadow', 'slot']);
+export const MASKS = Object.freeze(['none', 'aperture', 'shadow', 'slot', 'plasma']);
 
 export class CrtTube {
   constructor({
@@ -167,6 +167,15 @@ export class CrtTube {
             const colStagger = (Math.floor(x / maskPitch) % 2) * ((maskPitch * 2) >> 1);
             if ((y + colStagger) % (maskPitch * 2) === 0) { mr *= 0.35; mg *= 0.35; mb *= 0.35; }
           }
+        } else if (mask === 'plasma') {
+          // gas-plasma panel: square pixel cells with thin dark ribs between
+          // them, identical for all channels (it's monochrome light)
+          const cell = Math.max(2, maskPitch);
+          const fx2 = ((x % cell) + cell) % cell, fy2 = ((y % cell) + cell) % cell;
+          const rib = (fx2 < 1 || fy2 < 1) ? 0.25 : 1;
+          mr = mg = mb = rib;
+          const fill = ((cell - 1) / cell) ** 2;
+          g2 = Math.min(1.8, 1 / (fill + 0.25 * (1 - fill)));
         } else if (mask === 'shadow') {
           // the real shadow mask: round-dot triads in delta (∵) arrangement
           // on a hex lattice — per gun, transmission is a soft circular

@@ -57,6 +57,8 @@
   <button id="pLONG">長残光カラー (仮想)</button>
   <button id="pP39">P39 緑モノクロ</button>
   <button id="pP7">P7 レーダー管</button>
+  <button id="pAMBER">アンバー</button>
+  <button id="pPLASMA">プラズマ橙</button>
   <button id="bburn">焼き付き (加速)</button>
 </div>
 <div class="row"><span class="lbl">管:</span>
@@ -64,6 +66,7 @@
   <button id="taperture" class="on">アパーチャグリル</button>
   <button id="tshadow">シャドウマスク</button>
   <button id="tslot">スロットマスク</button>
+  <button id="tplasma">プラズマ格子</button>
   <button id="binterlace">インターレース</button>
   <button id="baudio">15kHz 音鳴り</button>
   <button id="bpower" class="on">POWER</button>
@@ -527,7 +530,7 @@ $('bcolor').onclick = () => {
   sys.out(0x30, (mode === 'text40' ? 0 : 1) | (sys.colorMode ? 2 : 0));
   $('bcolor').classList.toggle('on', sys.colorMode);
 };
-const phosBtns = { P22: $('pP22'), LONG: $('pLONG'), P39: $('pP39'), P7: $('pP7') };
+const phosBtns = { P22: $('pP22'), LONG: $('pLONG'), P39: $('pP39'), P7: $('pP7'), AMBER: $('pAMBER'), PLASMA: $('pPLASMA') };
 function setPhosphor(name) {
   phosName = name;
   phosphor.setPhosphor(PHOSPHORS[name]);
@@ -538,7 +541,7 @@ $('bburn').onclick = () => {
   phosphor.setBurnRate(phosphor.burnRate ? 0 : 1.5);
   $('bburn').classList.toggle('on', phosphor.burnRate > 0);
 };
-const tubeBtns = { off: $('tnone'), aperture: $('taperture'), shadow: $('tshadow'), slot: $('tslot') };
+const tubeBtns = { off: $('tnone'), aperture: $('taperture'), shadow: $('tshadow'), slot: $('tslot'), plasma: $('tplasma') };
 function setTube(m) {
   tubeMode = m;
   for (const [k, el] of Object.entries(tubeBtns)) el.classList.toggle('on', k === m);

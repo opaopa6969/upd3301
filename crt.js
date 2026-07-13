@@ -52,6 +52,24 @@ export const PHOSPHORS = Object.freeze({
     // every gun lands on the same green phosphor, weighted like luma
     primaries: [[0.09, 0.3, 0.05], [0.16, 0.55, 0.09], [0.04, 0.15, 0.02]],
   },
+  AMBER: {
+    name: 'amber mono CRT (Apple II era)',
+    tau: [0.045, 0.045, 0.045],
+    tailTau: [0.18, 0.18, 0.18],
+    tailFrac: [0.03, 0.03, 0.03],
+    // one amber phosphor, all guns land on it (luma-weighted)
+    primaries: [[0.35, 0.22, 0.02], [0.55, 0.34, 0.03], [0.15, 0.09, 0.01]],
+  },
+  PLASMA: {
+    name: 'neon gas plasma (orange)',
+    // gas discharge, not phosphor: light stops almost instantly when the
+    // cell stops firing — but AC plasma cells latch (memory), so a lit
+    // pixel refreshes every frame and never flickers. Neon glow ~585nm.
+    tau: [0.002, 0.002, 0.002],
+    tailTau: [0.01, 0.01, 0.01],
+    tailFrac: [0.0, 0.0, 0.0],
+    primaries: [[0.35, 0.16, 0.01], [0.55, 0.25, 0.02], [0.15, 0.07, 0.005]],
+  },
   P7: {
     name: 'P7 (radar: blue flash, yellow afterglow)',
     tau: [0.004, 0.004, 0.004],

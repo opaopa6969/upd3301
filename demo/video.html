@@ -73,12 +73,15 @@
   <button id="pLONG">長残光</button>
   <button id="pP39">P39緑</button>
   <button id="pP7">P7レーダー</button>
+  <button id="pAMBER">アンバー</button>
+  <button id="pPLASMA">プラズマ橙</button>
 </div>
 <div class="row"><span class="lbl">管:</span>
   <button id="tnone" class="on">物理OFF</button>
   <button id="taperture">グリル</button>
   <button id="tshadow">シャドウ</button>
   <button id="tslot">スロット</button>
+  <button id="tplasma">プラズマ格子</button>
   <button id="b400">400ライン</button>
 </div>
 <div class="row knobs"><span class="lbl">ノブ:</span>
@@ -351,7 +354,7 @@ $('b27').onclick = () => {
 $('kgain').oninput = (e) => { gain = +e.target.value; };
 
 // CRT
-const phosBtns = { P22: $('pP22'), LONG: $('pLONG'), P39: $('pP39'), P7: $('pP7') };
+const phosBtns = { P22: $('pP22'), LONG: $('pLONG'), P39: $('pP39'), P7: $('pP7'), AMBER: $('pAMBER'), PLASMA: $('pPLASMA') };
 for (const [k, el] of Object.entries(phosBtns)) {
   el.onclick = () => {
     phosName = k;
@@ -359,7 +362,7 @@ for (const [k, el] of Object.entries(phosBtns)) {
     for (const [k2, el2] of Object.entries(phosBtns)) el2.classList.toggle('on', k2 === k);
   };
 }
-const tubeBtns = { none: $('tnone'), aperture: $('taperture'), shadow: $('tshadow'), slot: $('tslot') };
+const tubeBtns = { none: $('tnone'), aperture: $('taperture'), shadow: $('tshadow'), slot: $('tslot'), plasma: $('tplasma') };
 for (const [k, el] of Object.entries(tubeBtns)) {
   el.onclick = () => { tubeMode = k; for (const [k2, el2] of Object.entries(tubeBtns)) el2.classList.toggle('on', k2 === k); };
 }

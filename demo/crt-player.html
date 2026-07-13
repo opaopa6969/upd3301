@@ -62,6 +62,8 @@
   <button id="pLONG">長残光</button>
   <button id="pP39">P39緑</button>
   <button id="pP7">P7レーダー</button>
+  <button id="pAMBER">アンバー</button>
+  <button id="pPLASMA">プラズマ橙</button>
   <button id="bburn">焼き付き</button>
 </div>
 <div class="row"><span class="lbl">管:</span>
@@ -69,6 +71,7 @@
   <button id="taperture" class="on">グリル</button>
   <button id="tshadow">シャドウ</button>
   <button id="tslot">スロット</button>
+  <button id="tplasma">プラズマ格子</button>
   <button id="binterlace">インターレース</button>
   <button id="b400">400ライン</button>
 </div>
@@ -313,7 +316,7 @@ $('bpower').onclick = () => {
   if (power.state === 'on' || power.state === 'opening') { power.state = 'closing'; power.t = 0; $('bpower').classList.remove('on'); }
   else { power.state = 'opening'; power.t = 0; $('bpower').classList.add('on'); }
 };
-const phosBtns = { P22: $('pP22'), LONG: $('pLONG'), P39: $('pP39'), P7: $('pP7') };
+const phosBtns = { P22: $('pP22'), LONG: $('pLONG'), P39: $('pP39'), P7: $('pP7'), AMBER: $('pAMBER'), PLASMA: $('pPLASMA') };
 for (const [k, el] of Object.entries(phosBtns)) {
   el.onclick = () => {
     phosName = k;
@@ -322,7 +325,7 @@ for (const [k, el] of Object.entries(phosBtns)) {
   };
 }
 $('bburn').onclick = () => { phosphor.setBurnRate(phosphor.burnRate ? 0 : 1.5); $('bburn').classList.toggle('on', phosphor.burnRate > 0); };
-const tubeBtns = { none: $('tnone'), aperture: $('taperture'), shadow: $('tshadow'), slot: $('tslot') };
+const tubeBtns = { none: $('tnone'), aperture: $('taperture'), shadow: $('tshadow'), slot: $('tslot'), plasma: $('tplasma') };
 for (const [k, el] of Object.entries(tubeBtns)) {
   el.onclick = () => { tubeMode = k; for (const [k2, el2] of Object.entries(tubeBtns)) el2.classList.toggle('on', k2 === k); };
 }

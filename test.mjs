@@ -874,3 +874,35 @@ test('shadow mask: round delta-dot triads (∵), not stripes', async () => {
   const mean = (r + g + bl) / 3;
   for (const v of [r, g, bl]) assert.ok(Math.abs(v - mean) / mean < 0.08, `balanced (${r},${g},${bl})`);
 });
+
+test('amber and plasma: mono displays lean orange, plasma barely persists', () => {
+  const amber = new CrtPhosphor({ width: 1, height: 1, phosphor: PHOSPHORS.AMBER });
+  amber.step(Uint8Array.from([7]), 1 / 60);
+  let [R, G, B] = amber.composite();
+  assert.ok(R[0] > G[0] && G[0] > B[0] * 5, `amber spectrum (${R[0]}, ${G[0]}, ${B[0]})`);
+  const plasma = new CrtPhosphor({ width: 1, height: 1, phosphor: PHOSPHORS.PLASMA });
+  plasma.step(Uint8Array.from([7]), 1 / 60);
+  plasma.step(Uint8Array.from([0]), 1 / 60); // one dark frame: discharge is gone
+  const s = plasma.sample(0, 0);
+  assert.ok(s.r < 0.001, `gas discharge leaves no afterglow (${s.r})`);
+});
+
+test('plasma grid mask: mono square ribs, identical across channels', async () => {
+  const { CrtTube } = await import('./tube.js');
+  const W = 24, H = 24;
+  const tube = new CrtTube({
+    srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
+    mask: 'plasma', maskPitch: 4,
+    barrel: 0, ghost: 0, vignette: 0, beamWidth: 0, edgeDefocus: 0, convergence: 0, scanlineDepth: 0,
+  });
+  const flat = new Float32Array(W * H).fill(0.5);
+  const rgba = tube.apply([flat, flat, flat], null, { gamma: 1 });
+  let ribSeen = false;
+  for (let y = 2; y < 20; y++) for (let x = 2; x < 20; x++) {
+    const o = (y * W + x) * 4;
+    assert.equal(rgba[o], rgba[o + 1], 'no RGB substructure');
+    assert.equal(rgba[o + 1], rgba[o + 2]);
+    if (rgba[o] < 100) ribSeen = true;
+  }
+  assert.ok(ribSeen, 'dark ribs between cells');
+});
