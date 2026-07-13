@@ -17,16 +17,35 @@
   .knobs label { display:flex; flex-direction:column; align-items:center; font-size:11px; color:#9ab; }
   .knobs input[type=range] { width:100px; accent-color:#4a8; }
   video { display:none; }
+  #stage { position:relative; display:inline-block; max-width:100%; }
+  #vbar { display:flex; gap:10px; align-items:center; margin-top:6px; font-size:12px; color:#9ab; }
+  #seek { flex:1; min-width:200px; accent-color:#4a8; }
+  #kvol { width:70px; accent-color:#4a8; }
+  #stage:fullscreen { display:flex; align-items:center; justify-content:center; width:100%; height:100%; background:#000; }
+  #stage:fullscreen canvas { width:min(100vw, calc(100vh * 4 / 3)); height:auto; border:none; border-radius:0; }
+  #stage:fullscreen #vbar { position:absolute; left:0; right:0; bottom:0; margin:0; padding:12px 18px;
+    background:linear-gradient(transparent, rgba(0,0,0,.75)); transition:opacity .3s; }
+  #stage.idle:fullscreen #vbar { opacity:0; }
+  #stage.idle:fullscreen { cursor:none; }
 </style>
 </head>
 <body>
 <h1>CRT VIDEO PLAYER — 手持ちの動画をブラウン管で観る</h1>
 <p class="note">▶ <a href="./index.html" style="color:#8fd">CRT物理デモ</a> · <a href="./video.html" style="color:#8fd">動画セミグラ</a> · <a href="./terminal.html" style="color:#8fd">ターミナル</a> · <a href="./rhythm.html" style="color:#8fd">ドラムマシン</a></p>
-<canvas id="crt" width="640" height="480"></canvas>
+<div id="stage">
+  <canvas id="crt" width="640" height="480"></canvas>
+  <div id="vbar">
+    <button id="bplay">⏯</button>
+    <input type="range" id="seek" min="0" max="1000" value="0">
+    <span id="vtime">--:-- / --:--</span>
+    <button id="bmute">🔇</button>
+    <input type="range" id="kvol" min="0" max="1" step="0.05" value="0.8">
+    <button id="bfull">⛶ 全画面</button>
+  </div>
+</div>
 <div class="row">
   <input type="file" id="file" accept="video/*">
   <button id="bcam">Webカメラ</button>
-  <button id="bplay">⏯</button>
   <button id="bpower" class="on">POWER</button>
 </div>
 <div class="row"><span class="lbl">蛍光体:</span>
@@ -211,6 +230,41 @@ $('bcam').onclick = async () => {
   } catch (err) { say('webcam: ' + err.message); }
 };
 $('bplay').onclick = () => { video.paused ? tryPlay() : video.pause(); };
+
+// ---- video bar -----------------------------------------------------------
+const fmt = (s) => (Number.isFinite(s)
+  ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '--:--');
+let seeking = false;
+video.addEventListener('timeupdate', () => {
+  if (!seeking && Number.isFinite(video.duration) && video.duration > 0) {
+    $('seek').value = String(video.currentTime / video.duration * 1000);
+  }
+  $('vtime').textContent = `${fmt(video.currentTime)} / ${fmt(video.duration)}`;
+});
+$('seek').oninput = () => { seeking = true; };
+$('seek').onchange = () => {
+  if (Number.isFinite(video.duration) && video.duration > 0) {
+    video.currentTime = (+$('seek').value) / 1000 * video.duration;
+  }
+  seeking = false;
+};
+function syncMute() { $('bmute').textContent = video.muted || video.volume === 0 ? '🔇' : '🔊'; }
+$('bmute').onclick = () => { video.muted = !video.muted; syncMute(); };
+$('kvol').oninput = (e) => { video.volume = +e.target.value; video.muted = video.volume === 0; syncMute(); };
+
+// ---- fullscreen ------------------------------------------------------------
+const stage = $('stage');
+$('bfull').onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else stage.requestFullscreen?.();
+};
+let idleTimer = null;
+stage.addEventListener('mousemove', () => {
+  stage.classList.remove('idle');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => stage.classList.add('idle'), 2500);
+});
+
 $('bpower').onclick = () => {
   if (power.state === 'on' || power.state === 'opening') { power.state = 'closing'; power.t = 0; $('bpower').classList.remove('on'); }
   else { power.state = 'opening'; power.t = 0; $('bpower').classList.add('on'); }
