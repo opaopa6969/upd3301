@@ -26,6 +26,8 @@
 // (per gun, because of convergence); apply() is a gather loop. No
 // Math.random, no DOM.
 
+import { tintMatrix } from './crt.js';
+
 export const SCHEMA_VERSION = 2;
 
 export const MASKS = Object.freeze(['none', 'aperture', 'shadow', 'slot']);
@@ -197,7 +199,9 @@ export class CrtTube {
 
   // lum: [R, G, B] Float32Arrays of srcWidth*srcHeight (phosphor output).
   // Returns RGBA Uint8ClampedArray of outWidth*outHeight.
-  apply(lum, out, { gamma = 2.2, scale = 1 } = {}) {
+  // tint: NTSC chroma phase error in radians (see crt.js tintMatrix);
+  // contrast: gain around mid after gamma encoding (the front-panel knob).
+  apply(lum, out, { gamma = 2.2, scale = 1, tint = 0, contrast = 1 } = {}) {
     const n = this.outWidth * this.outHeight;
     const rgba = out && out.length === n * 4 ? out : new Uint8ClampedArray(n * 4);
     for (let ch = 0; ch < 3; ch++) {
@@ -209,6 +213,8 @@ export class CrtTube {
     const inv = 1 / gamma;
     const ghost = this.ghost;
     const beam = this.beamWidth, edge = this.edgeDefocus;
+    const M = tint !== 0 ? tintMatrix(tint) : null;
+    const vals = [0, 0, 0];
     for (let i = 0; i < n; i++) {
       // per-pixel focus: nominal beam width plus oblique-landing falloff
       const f = Math.max(0, Math.min(2, beam + edge * this.lutR2[i]));
@@ -216,7 +222,7 @@ export class CrtTube {
       const gi = this.lutGhostIdx[i];
       for (let ch = 0; ch < 3; ch++) {
         const idx = this.lutIdx[ch][i];
-        if (idx < 0) { rgba[i * 4 + ch] = 0; continue; }
+        if (idx < 0) { vals[ch] = 0; continue; }
         const fx = this.lutFx[ch][i], fy = this.lutFy[ch][i];
         const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy);
         const w01 = (1 - fx) * fy, w11 = fx * fy;
@@ -234,9 +240,24 @@ export class CrtTube {
           val = b + (b2 - b) * (f - 1);
         }
         if (ghost > 0) val += B1[gi] * ghost;
-        val *= masks[ch][i] * vig * scale;
-        rgba[i * 4 + ch] = 255 * Math.min(1, val) ** inv;
+        vals[ch] = val * masks[ch][i] * vig * scale;
       }
+      let r = vals[0], g = vals[1], b = vals[2];
+      if (M) {
+        const r2 = M[0] * r + M[1] * g + M[2] * b;
+        const g2 = M[3] * r + M[4] * g + M[5] * b;
+        const b2 = M[6] * r + M[7] * g + M[8] * b;
+        r = Math.max(0, r2); g = Math.max(0, g2); b = Math.max(0, b2);
+      }
+      r = Math.min(1, r) ** inv; g = Math.min(1, g) ** inv; b = Math.min(1, b) ** inv;
+      if (contrast !== 1) {
+        r = (r - 0.5) * contrast + 0.5;
+        g = (g - 0.5) * contrast + 0.5;
+        b = (b - 0.5) * contrast + 0.5;
+      }
+      rgba[i * 4] = 255 * r;
+      rgba[i * 4 + 1] = 255 * g;
+      rgba[i * 4 + 2] = 255 * b;
       rgba[i * 4 + 3] = 255;
     }
     return rgba;

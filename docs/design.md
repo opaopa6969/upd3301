@@ -29,7 +29,8 @@ demo/    (browser demo, injects a hand-made CGROM)
 
 The logical stack (index/upd8257/pc8001) and the physical stack (crt/tube)
 never import each other; they meet only at the demo/test level, connected by
-plain data (indexed pixels → luminance planes → RGBA).
+plain data (indexed pixels → luminance planes → RGBA). Within the physical
+stack, tube.js imports only pure helpers from crt.js (tintMatrix).
 
 `index.js` and `upd8257.js` never import siblings. The coordinator that
 closes the loop (DRQ → DMA pull → row bytes) is `Pc8001TextSystem`.

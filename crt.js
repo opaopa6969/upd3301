@@ -172,15 +172,29 @@ export class CrtPhosphor {
     return this._comp;
   }
 
-  toRGBA(out, { gamma = 2.2, scale = 1 } = {}) {
+  toRGBA(out, { gamma = 2.2, scale = 1, tint = 0, contrast = 1 } = {}) {
     const n = this.width * this.height;
     const rgba = out && out.length === n * 4 ? out : new Uint8ClampedArray(n * 4);
     const [R, G, B] = this.composite();
     const inv = 1 / gamma;
+    const M = tint !== 0 ? tintMatrix(tint) : null;
     for (let i = 0; i < n; i++) {
-      rgba[i * 4] = 255 * Math.min(1, R[i] * scale) ** inv;
-      rgba[i * 4 + 1] = 255 * Math.min(1, G[i] * scale) ** inv;
-      rgba[i * 4 + 2] = 255 * Math.min(1, B[i] * scale) ** inv;
+      let r = R[i] * scale, g = G[i] * scale, b = B[i] * scale;
+      if (M) {
+        const r2 = M[0] * r + M[1] * g + M[2] * b;
+        const g2 = M[3] * r + M[4] * g + M[5] * b;
+        const b2 = M[6] * r + M[7] * g + M[8] * b;
+        r = Math.max(0, r2); g = Math.max(0, g2); b = Math.max(0, b2);
+      }
+      r = Math.min(1, r) ** inv; g = Math.min(1, g) ** inv; b = Math.min(1, b) ** inv;
+      if (contrast !== 1) {
+        r = (r - 0.5) * contrast + 0.5;
+        g = (g - 0.5) * contrast + 0.5;
+        b = (b - 0.5) * contrast + 0.5;
+      }
+      rgba[i * 4] = 255 * r;
+      rgba[i * 4 + 1] = 255 * g;
+      rgba[i * 4 + 2] = 255 * b;
       rgba[i * 4 + 3] = 255;
     }
     return rgba;
@@ -263,3 +277,30 @@ CrtPhosphor.prototype.stepAnalog = function stepAnalog(rgba, dt, { fieldParity =
   }
   return this;
 };
+
+// NTSC tint: a chroma phase error rotates every hue at once — the reason
+// American TVs shipped with a TINT knob. RGB → YIQ, rotate (I,Q) by rad,
+// back to RGB, precombined into one 3x3 matrix (row-major, length 9).
+export function tintMatrix(rad) {
+  const A = [ // RGB → YIQ
+    [0.299, 0.587, 0.114],
+    [0.596, -0.274, -0.322],
+    [0.211, -0.523, 0.312],
+  ];
+  // YIQ → RGB: exact numeric inverse of A, so tint 0 is exactly identity
+  const inv3 = (m) => {
+    const [a, b, c0, d, e, f, g, h, i] = m.flat();
+    const det = a * (e * i - f * h) - b * (d * i - f * g) + c0 * (d * h - e * g);
+    return [
+      [(e * i - f * h) / det, (c0 * h - b * i) / det, (b * f - c0 * e) / det],
+      [(f * g - d * i) / det, (a * i - c0 * g) / det, (c0 * d - a * f) / det],
+      [(d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det],
+    ];
+  };
+  const B = inv3(A);
+  const c = Math.cos(rad), s = Math.sin(rad);
+  const R = [[1, 0, 0], [0, c, -s], [0, s, c]];
+  const mul = (X, Y) => X.map((row, i) => Y[0].map((_, j) =>
+    row.reduce((acc, v, k) => acc + v * Y[k][j], 0)));
+  return mul(B, mul(R, A)).flat();
+}

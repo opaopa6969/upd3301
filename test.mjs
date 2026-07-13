@@ -721,3 +721,27 @@ test('analog drive: RGB levels excite the guns through degamma', () => {
   const expected = Math.exp(-(1 / 60) / 0.05);
   assert.ok(Math.abs(crt.sample(0, 0).r - expected) < 1e-6, 'decays like the bit-driven path');
 });
+
+test('TINT: phase 0 is exact identity, rotation shifts hue deterministically', async () => {
+  const { tintMatrix } = await import('./crt.js');
+  const id = tintMatrix(0);
+  [1, 0, 0, 0, 1, 0, 0, 0, 1].forEach((v, i) => assert.ok(Math.abs(id[i] - v) < 1e-9, `id[${i}]`));
+  const M = tintMatrix(0.5);
+  // rotate pure red: luma is preserved, chroma moves off the red axis
+  const r = [M[0], M[3], M[6]];
+  const y = 0.299 * r[0] + 0.587 * r[1] + 0.114 * r[2];
+  assert.ok(Math.abs(y - 0.299) < 1e-6, 'luma unchanged by tint');
+  assert.ok(Math.abs(r[1]) > 0.01 || Math.abs(r[2]) > 0.01, 'hue actually rotated');
+  assert.deepEqual(tintMatrix(0.5), M, 'deterministic');
+});
+
+test('CONTRAST: mid gray is the pivot, extremes stretch', () => {
+  const crt = new CrtPhosphor({ width: 2, height: 1, tau: [0.05, 0.05, 0.05] });
+  // pixel 0 bright, pixel 1 dark-ish via decay
+  crt.step(Uint8Array.from([7, 7]), 1 / 60);
+  for (let i = 0; i < 3; i++) crt.step(Uint8Array.from([7, 0]), 1 / 60); // pixel 1 decays below mid
+  const flat = crt.toRGBA(null, { gamma: 1, contrast: 1 });
+  const punchy = crt.toRGBA(null, { gamma: 1, contrast: 1.5 });
+  assert.equal(punchy[0], 255, 'bright stays clipped high');
+  assert.ok(punchy[4] < flat[4], 'darker pixel pushed further down');
+});

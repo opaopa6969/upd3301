@@ -70,6 +70,8 @@
   <label>PITCH <input type="range" id="kpitch" min="2" max="9" step="1" value="3"></label>
   <label>CONV <input type="range" id="kconv" min="0" max="0.02" step="0.001" value="0.004"></label>
   <label>BARREL <input type="range" id="kbarrel" min="-0.12" max="0.25" step="0.01" value="0.07"></label>
+  <label>CONTRAST <input type="range" id="kcontrast" min="0.5" max="1.8" step="0.05" value="1"></label>
+  <label>TINT <input type="range" id="ktint" min="-60" max="60" step="1" value="0"></label>
 </div>
 <div id="guts"></div>
 <p class="note">
@@ -112,7 +114,7 @@ const grab = makeGrab(SW, SH);
 
 const phosphor = new CrtPhosphor({ width: SW, height: SH, phosphor: PHOSPHORS.P22 });
 let phosName = 'P22';
-const knobs = { focus: 0.8, hSize: 1, vSize: 1, bright: 1.2, pitch: 3, conv: 0.004, barrel: 0.07 };
+const knobs = { focus: 0.8, hSize: 1, vSize: 1, bright: 1.2, pitch: 3, conv: 0.004, barrel: 0.07, contrast: 1, tint: 0 };
 let tubeMode = 'aperture', interlaced = false;
 const tubes = {};
 function getTube() {
@@ -176,7 +178,7 @@ function beamPass() {
 function blit() {
   const d = img.data;
   if (tubeMode === 'none') {
-    rgbaSmall = phosphor.toRGBA(rgbaSmall, { scale: knobs.bright });
+    rgbaSmall = phosphor.toRGBA(rgbaSmall, { scale: knobs.bright, tint: knobs.tint, contrast: knobs.contrast });
     for (let y = 0; y < SH; y++) {
       for (let x = 0; x < SW; x++) {
         const s = (y * SW + x) * 4;
@@ -187,7 +189,7 @@ function blit() {
       }
     }
   } else {
-    getTube().apply(phosphor.composite(), d, { scale: knobs.bright });
+    getTube().apply(phosphor.composite(), d, { scale: knobs.bright, tint: knobs.tint, contrast: knobs.contrast });
   }
   ctx.putImageData(img, 0, 0);
 }
@@ -295,6 +297,8 @@ $('kbright').oninput = (e) => { knobs.bright = +e.target.value; };
 $('kpitch').oninput = (e) => { knobs.pitch = +e.target.value; regeo(); };
 $('kconv').oninput = (e) => { knobs.conv = +e.target.value; regeo(); };
 $('kbarrel').oninput = (e) => { knobs.barrel = +e.target.value; regeo(); };
+$('kcontrast').oninput = (e) => { knobs.contrast = +e.target.value; };
+$('ktint').oninput = (e) => { knobs.tint = (+e.target.value) * Math.PI / 180; }; // 度→rad、NTSCのTINTつまみ
 </script>
 </body>
 </html>

@@ -29,7 +29,8 @@ demo/    （ブラウザデモ。手描きCGROMを注入）
 
 論理スタック（index/upd8257/pc8001）と物理スタック（crt/tube）は互いに
 import しない。demo/テストの層でだけ、plain data（インデックス画素→
-輝度プレーン→RGBA）で接続される。
+輝度プレーン→RGBA）で接続される。物理スタック内では tube.js が crt.js の
+純関数ヘルパ（tintMatrix）のみを import する。
 
 `index.js` と `upd8257.js` は sibling を import しない。ループを閉じる
 コーディネータ（DRQ → DMA pull → 行バイト）は `Pc8001TextSystem`。
