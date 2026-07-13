@@ -34,7 +34,17 @@ export class Pc8001Machine {
     // behind it" is a legitimate move, and enabling several write bits
     // broadcasts one LD into every selected board at once. The PC-8801
     // inherited this exact protocol for its expansion RAM.
-    this.extRam = Array.from({ length: Math.min(8, extRamBanks) }, () => null);
+    //
+    // Real boards top out at 8 (the bitmap is 8 bits). Ask for more and the
+    // machine grows an EX bank-number register instead: OUT E0h/E1h = bank
+    // index low/high, E2h/E3h bit0 still gate read/write. 65536 banks × 32KB
+    // = 2 GiB on a Z80 — storage is lazy (a bank costs nothing until
+    // touched), which is more than can be said for the 4MHz CPU: filling it
+    // by LDIR at 21 T-states/byte would take about three hours.
+    this.exMode = extRamBanks > 8;
+    this.extRam = this.exMode ? new Map() : Array.from({ length: extRamBanks }, () => null);
+    this.extBankCount = Math.min(this.exMode ? 0x10000 : 8, extRamBanks);
+    this.bankIndex = 0;
     this.readEn = 0;
     this.writeEn = 0;
 
@@ -43,6 +53,7 @@ export class Pc8001Machine {
     this.cpu = new Z80({
       read: (a) => {
         if (a < 0x8000 && this.readEn) {
+          if (this.exMode) return this._bank(this.bankIndex)[a];
           const bank = this._lowestBank(this.readEn);
           if (bank >= 0) return this._bank(bank)[a];
         }
@@ -50,6 +61,7 @@ export class Pc8001Machine {
       },
       write: (a, v) => {
         if (a < 0x8000 && this.writeEn) {
+          if (this.exMode) { this._bank(this.bankIndex)[a] = v; return; }
           for (let b = 0; b < this.extRam.length; b++) {
             if (this.writeEn & (1 << b)) this._bank(b)[a] = v;
           }
@@ -63,7 +75,14 @@ export class Pc8001Machine {
     this.cpu.pc = 0;
   }
 
-  _bank(b) { return this.extRam[b] ?? (this.extRam[b] = new Uint8Array(0x8000)); }
+  _bank(b) {
+    if (this.exMode) {
+      let ram = this.extRam.get(b);
+      if (!ram) this.extRam.set(b, ram = new Uint8Array(0x8000));
+      return ram;
+    }
+    return this.extRam[b] ?? (this.extRam[b] = new Uint8Array(0x8000));
+  }
 
   _lowestBank(mask) {
     for (let b = 0; b < this.extRam.length; b++) if (mask & (1 << b)) return b;
@@ -71,8 +90,17 @@ export class Pc8001Machine {
   }
 
   _out(port, v) {
-    if (port === 0xe2) { this.readEn = v & ((1 << this.extRam.length) - 1); return; }
-    if (port === 0xe3) { this.writeEn = v & ((1 << this.extRam.length) - 1); return; }
+    if (this.exMode && port === 0xe0) {
+      this.bankIndex = ((this.bankIndex & 0xff00) | v) % this.extBankCount;
+      return;
+    }
+    if (this.exMode && port === 0xe1) {
+      this.bankIndex = ((this.bankIndex & 0x00ff) | (v << 8)) % this.extBankCount;
+      return;
+    }
+    const mask = this.exMode ? 1 : (1 << this.extRam.length) - 1;
+    if (port === 0xe2) { this.readEn = v & mask; return; }
+    if (port === 0xe3) { this.writeEn = v & mask; return; }
     this.sys.out(port, v);
   }
 

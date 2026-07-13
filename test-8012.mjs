@@ -70,3 +70,35 @@ test('pc8012: E2/E3 read back, unused bits masked', async (t) => {
   assert.equal(m._in(0xe2), 0x0f); // only 4 banks fitted
   assert.equal(m._in(0xe3), 0x05);
 });
+
+test('pc8012 EX: 65536 banks, storage stays lazy', async (t) => {
+  const rom = await loadRom();
+  if (!rom) return t.skip('no ROM (bring your own)');
+  const { Pc8001Machine } = await import('./machine.js');
+  const m = new Pc8001Machine({ rom, extRamBanks: 65536 });
+  assert.equal(m.exMode, true);
+
+  // write one byte into bank 0xBEEF: select via E0/E1, enable, poke, read back
+  m._out(0xe0, 0xef); m._out(0xe1, 0xbe);
+  m._out(0xe3, 1);
+  const prog = [0x3e, 0x33, 0x32, 0x00, 0x10, 0x76]; // LD A,33; LD (1000),A; HALT
+  m.sys.memory.set(prog, 0x9000);
+  m.cpu.pc = 0x9000;
+  while (!m.cpu.halted) m.cpu.step();
+
+  m._out(0xe2, 1);
+  const prog2 = [0x3a, 0x00, 0x10, 0x76]; // LD A,(1000); HALT
+  m.sys.memory.set(prog2, 0x9100);
+  m.cpu.halted = false; m.cpu.pc = 0x9100;
+  while (!m.cpu.halted) m.cpu.step();
+  assert.equal(m.cpu.a, 0x33);
+
+  // a different bank shows different (empty) memory
+  m._out(0xe1, 0x00);
+  m.cpu.halted = false; m.cpu.pc = 0x9100;
+  while (!m.cpu.halted) m.cpu.step();
+  assert.equal(m.cpu.a, 0x00);
+
+  // 2 GiB address space, but only the banks we touched exist
+  assert.equal(m.extRam.size, 2);
+});
