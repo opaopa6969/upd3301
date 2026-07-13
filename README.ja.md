@@ -67,6 +67,10 @@ NEC PC-8001（1979）の画面に文字を出していた張本人、μPD3301 CR
   統合テストはキーボードマトリクス経由で `PRINT 3301` を打って答えを
   検証する。ROMはBYO（gitignore済み）— NECの著作権は2049年まで。
 
+ICE設計 — デバッガ・時間旅行・アセンブラ・リバース用「石器一式」
+（ラベル・ソース書き出し・検証付きリロケート）:
+[docs/ice-design.ja.md](./docs/ice-design.ja.md)。
+
 各部品をライブラリとして使う（CRTレンダラー・ターミナル・マシン）:
 [docs/library.ja.md](./docs/library.ja.md)。
 

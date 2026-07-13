@@ -73,6 +73,10 @@ on a long-persistence tube. Which is why there's a physical layer:
   assert the answer. ROMs are BYO (gitignored) — NEC's copyright runs to
   2049.
 
+ICE design — debugger, time travel, assembler, and the reverse-engineering
+"stone tools" (labels, source export, verified relocation):
+[docs/ice-design.md](./docs/ice-design.md).
+
 Using the pieces as libraries (CRT renderer, terminal, machines):
 [docs/library.md](./docs/library.md).
 
