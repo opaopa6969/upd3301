@@ -1012,3 +1012,38 @@ test('PC-98 mode: 16-color palette fill inside detected regions, black outlines'
   const a2 = analyzePc98(rgba, W, H, { autoLevels: false });
   assert.deepEqual(a.palDot, a2.palDot, 'deterministic');
 });
+
+test('full-color dither: 512-cube per dot, selectable screening patterns', async () => {
+  const { analyzeFullColor, renderFullColorPhase } = await import('./semivideo.js');
+  const W = 32, H = 16;
+  const rgba = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = (y * W + x) * 4;
+    rgba[o] = 160; rgba[o + 1] = 96; rgba[o + 2] = 32; rgba[o + 3] = 255; // one full color
+  }
+  for (const pattern of ['bayer', 'halftone', 'line']) {
+    const a = analyzeFullColor(rgba, W, H, { autoLevels: false, pattern });
+    // duty over 7 phases ≈ channel value
+    const lit = [0, 0, 0];
+    for (let ph = 0; ph < 7; ph++) {
+      const idx = renderFullColorPhase(a, ph);
+      for (let i = 0; i < W * H; i++) {
+        if (idx[i] & 2) lit[0]++;
+        if (idx[i] & 4) lit[1]++;
+        if (idx[i] & 1) lit[2]++;
+      }
+    }
+    const total = 7 * W * H;
+    assert.ok(Math.abs(lit[0] / total - 160 / 255) < 0.1, `${pattern}: R duty (${lit[0] / total})`);
+    assert.ok(Math.abs(lit[1] / total - 96 / 255) < 0.1, `${pattern}: G duty (${lit[1] / total})`);
+    assert.ok(Math.abs(lit[2] / total - 32 / 255) < 0.12, `${pattern}: B duty (${lit[2] / total})`);
+    const a2 = analyzeFullColor(rgba, W, H, { autoLevels: false, pattern });
+    assert.deepEqual(a.levels, a2.levels, `${pattern} deterministic`);
+  }
+  // halftone must differ spatially from bayer (clustered vs dispersed)
+  const b = analyzeFullColor(rgba, W, H, { autoLevels: false, pattern: 'bayer' });
+  const h = analyzeFullColor(rgba, W, H, { autoLevels: false, pattern: 'halftone' });
+  let diff = 0;
+  for (let i = 0; i < b.levels.length; i++) if (b.levels[i] !== h.levels[i]) diff++;
+  assert.ok(diff > 20, `patterns produce different screens (${diff} dots differ)`);
+});

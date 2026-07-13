@@ -302,3 +302,85 @@ export function renderPc98Phase(analysis, phase, out = null) {
   }
   return idx;
 }
+
+// Full-color mode: no palette, no cells — every dot quantizes each gun to
+// 8 duty levels through a selectable screening pattern, then FRC displays
+// the 512-cube color. This is the same math you look at every day: LCD
+// frame-rate control, print halftones, newspaper photos.
+//
+// Patterns:
+//  'bayer'    — dispersed-dot ordered dither (the computer classic)
+//  'halftone' — clustered-dot screens, rotated per gun (15°/75°/0°) the way
+//               print separations avoid moiré — gradients grow round dots
+//               and the overlaps make the offset-print rosette
+//  'line'     — line screen, per-gun angles
+const _thCache = { key: '', data: null };
+function screenThresholds(dotW, dotH, pattern) {
+  const key = `${dotW}x${dotH}:${pattern}`;
+  if (_thCache.key === key) return _thCache.data;
+  const n = dotW * dotH;
+  const th = new Float32Array(n * 3);
+  const BAYER = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+  const angles = [15, 75, 0].map((a) => a * Math.PI / 180);
+  const P = 4; // screen pitch in dots
+  for (let y = 0; y < dotH; y++) {
+    for (let x = 0; x < dotW; x++) {
+      for (let c = 0; c < 3; c++) {
+        let t;
+        if (pattern === 'halftone') {
+          const u = (x * Math.cos(angles[c]) + y * Math.sin(angles[c])) / P;
+          const v = (-x * Math.sin(angles[c]) + y * Math.cos(angles[c])) / P;
+          t = 0.5 + 0.25 * (Math.cos(2 * Math.PI * u) + Math.cos(2 * Math.PI * v));
+        } else if (pattern === 'line') {
+          const u = (x * Math.sin(angles[c]) + y * Math.cos(angles[c])) / P;
+          t = 0.5 + 0.5 * Math.sin(2 * Math.PI * u);
+        } else {
+          t = (BAYER[y & 3][x & 3] + 0.5) / 16;
+        }
+        th[(y * dotW + x) * 3 + c] = Math.min(0.98, Math.max(0.02, t));
+      }
+    }
+  }
+  _thCache.key = key;
+  _thCache.data = th;
+  return th;
+}
+
+// → per-dot per-gun duty levels 0..7 (Uint8Array n*3)
+export function analyzeFullColor(rgba, dotW, dotH, { gain = 1.0, autoLevels = true, pattern = 'bayer' } = {}) {
+  const n = dotW * dotH;
+  let lo = 0, scale = 1;
+  if (autoLevels) ({ lo, scale } = computeLevels(rgba, n));
+  const NLUT = new Float32Array(256);
+  for (let v = 0; v < 256; v++) NLUT[v] = Math.min(1, Math.max(0, (v - lo) * scale / 255 * gain));
+  const th = screenThresholds(dotW, dotH, pattern);
+  const levels = new Uint8Array(n * 3);
+  const ordBase = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4;
+    for (let c = 0; c < 3; c++) {
+      const lv = NLUT[rgba[o + c]] * 7;
+      const base = Math.floor(lv);
+      levels[i * 3 + c] = Math.min(7, base + ((lv - base) > th[i * 3 + c] ? 1 : 0));
+    }
+    ordBase[i] = ((i % dotW) * 3 + Math.floor(i / dotW) * 5) % 7;
+  }
+  return { schemaVersion: SCHEMA_VERSION, dotW, dotH, levels, ordBase };
+}
+
+export function renderFullColorPhase(analysis, phase, out = null) {
+  const { dotW, dotH, levels, ordBase } = analysis;
+  const n = dotW * dotH;
+  const idx = out && out.length === n ? out : new Uint8Array(n);
+  const SPREAD = [0, 3, 6, 2, 5, 1, 4];
+  const ph = phase % 7;
+  for (let i = 0; i < n; i++) {
+    let o = ordBase[i] + ph;
+    if (o >= 7) o -= 7;
+    const ord = SPREAD[o];
+    idx[i] = (ord < levels[i * 3] ? 2 : 0)
+      | (ord < levels[i * 3 + 1] ? 4 : 0)
+      | (ord < levels[i * 3 + 2] ? 1 : 0);
+  }
+  return idx;
+}
