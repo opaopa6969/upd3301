@@ -944,3 +944,39 @@ test('512-color mode: 8 duty levels per gun over a 7-frame cycle', async () => {
   const low = duty(64), high = duty(192);
   assert.ok(low < mid && mid < high, `duty is monotone (${low} < ${mid} < ${high})`);
 });
+
+test('empty cells carry color: line art survives ORIGINAL 20-pair rows', async () => {
+  const { rgbaToLineArt } = await import('./semivideo.js');
+  const { Terminal } = await import('./term.js');
+  const { ATTR } = await import('./pc8001.js');
+  // vertical white 1px lines every 4 dots: lit/empty cells alternate hard —
+  // the pathological case for run-length attribute encoding
+  const W = 160, H = 100;
+  const rgba = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x += 4) {
+    const o = (y * W + x) * 4;
+    rgba[o] = rgba[o + 1] = rgba[o + 2] = 255; rgba[o + 3] = 255;
+  }
+  const r = rgbaToLineArt(rgba, W, H, { autoLevels: false });
+  // carried colors → runs merge; count distinct color runs on a middle row
+  let runs = 1;
+  for (let cx = 1; cx < r.cols; cx++) {
+    if (r.colors[10 * r.cols + cx] !== r.colors[10 * r.cols + cx - 1]) runs++;
+  }
+  assert.ok(runs <= 20, `attribute runs per row collapse (${runs})`);
+  // pour into an ORIGINAL-mode terminal like the video page does
+  const t = new Terminal({ cols: 80, rows: 25, ex: false, showCursor: false });
+  for (let i = 0; i < r.codes.length; i++) {
+    t.chars[i] = r.codes[i];
+    t.colorA[i] = (r.colors[i] << 5) | ATTR.SEMIGRAPHIC | ATTR.COLOR_FLAG;
+    t.funcA[i] = 0;
+  }
+  t.stats.overflowRows = 0;
+  t.flush().update(1 / 60);
+  assert.equal(t.stats.overflowRows, 0, 'no pair overflow');
+  const img = t.render({ cgrom: new Uint8Array(256 * 16) });
+  // rightmost lit cell column must actually show its dots (was black-on-black)
+  const rightCell = 76; // dot x=304 → cell 76
+  const px = img.pixels[4 * 640 + rightCell * 8];
+  assert.ok(px > 0, `right-half dots visible (${px})`);
+});

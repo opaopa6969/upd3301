@@ -19,6 +19,23 @@ const BAYER4 = [
   [15, 7, 13, 5],
 ];
 
+// Empty cells (no lit dots) carry the previous cell's color: their color is
+// invisible anyway, and merging runs keeps the (position, value) pair count
+// per row tiny. Without this, line art alternating lit/empty cells emits a
+// pair per cell — ORIGINAL mode's 20 pairs/row run out halfway and the rest
+// of the row inherits a black attribute: dots render black-on-black and the
+// right half of rows "disappears".
+function carryEmptyCellColors(codes, colors, cols, rows) {
+  for (let cy = 0; cy < rows; cy++) {
+    let carry = 0;
+    for (let cx = 0; cx < cols; cx++) {
+      const i = cy * cols + cx;
+      if (codes[i] === 0) colors[i] = carry;
+      else carry = colors[i];
+    }
+  }
+}
+
 // rgba: Uint8ClampedArray/Uint8Array of dotW*dotH*4 (straight RGBA).
 // dotW must be even, dotH a multiple of 4.
 // Returns { cols, rows, codes, colors }: semigraphic cell codes and
@@ -99,6 +116,7 @@ export function rgbaToSemigraphic(rgba, dotW, dotH, { gain = 1.0, autoLevels = f
       colors[cy * cols + cx] = best;
     }
   }
+  carryEmptyCellColors(codes, colors, cols, rows);
   return { schemaVersion: SCHEMA_VERSION, cols, rows, codes, colors };
 }
 
@@ -163,5 +181,6 @@ export function rgbaToLineArt(rgba, dotW, dotH, { edgeGain = 1.0, autoLevels = t
       colors[cy * cols + cx] = code ? best : 0;
     }
   }
+  carryEmptyCellColors(codes, colors, cols, rows);
   return { schemaVersion: SCHEMA_VERSION, cols, rows, codes, colors };
 }
