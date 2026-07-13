@@ -32,6 +32,12 @@
   <button id="bglitch">OUT &amp;H51 (事故)</button>
   <label style="color:#778;font-size:12px">FONT.ROM(2KB): <input type="file" id="ffont" style="font-size:11px"></label>
 </div>
+<div class="row"><span class="lbl">FONT改造:</span>
+  <button id="fmnone" class="on">無改造</button>
+  <button id="fm54">D5-D4ショート</button>
+  <button id="fm32">D3-D2ショート</button>
+  <button id="fmbold">隣接全ショート (ボールド)</button>
+</div>
 <div class="row"><span class="lbl">蛍光体:</span>
   <button id="pP22" class="on">P22 (青が先に死ぬ)</button>
   <button id="pLONG">長残光カラー (仮想)</button>
@@ -430,12 +436,37 @@ $('bglitch').onclick = () => {
 };
 // drop in a dumped 2KB FONT.ROM and every glyph — including the accident
 // garbage — becomes the real PC-8001 character set
+let baseCgrom = cgrom.slice(); // pristine copy: pin mods apply on top
 $('ffont').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   const bytes = new Uint8Array(await f.arrayBuffer());
   applyFontRom(cgrom, bytes);
+  baseCgrom = cgrom.slice();
+  applyPinMod();
 };
+
+// CGROM data-pin shorting: tying two output pins together reads as a
+// wired-OR of the bit columns — vertical strokes fatten where either
+// column is lit. The classic screwdriver-era font mod.
+let pinMod = 'none';
+function applyPinMod() {
+  for (let i = 0; i < cgrom.length; i++) {
+    let b = baseCgrom[i];
+    if (pinMod === 'p54') { const m = ((b >> 5) | (b >> 4)) & 1; b = (b & ~0x30) | (m ? 0x30 : 0); }
+    else if (pinMod === 'p32') { const m = ((b >> 3) | (b >> 2)) & 1; b = (b & ~0x0c) | (m ? 0x0c : 0); }
+    else if (pinMod === 'bold') { b = (b | (b >> 1)) & 0xff; }
+    cgrom[i] = b;
+  }
+}
+const fontModBtns = { none: $('fmnone'), p54: $('fm54'), p32: $('fm32'), bold: $('fmbold') };
+for (const [k, el] of Object.entries(fontModBtns)) {
+  el.onclick = () => {
+    pinMod = k;
+    applyPinMod();
+    for (const [k2, el2] of Object.entries(fontModBtns)) el2.classList.toggle('on', k2 === k);
+  };
+}
 $('bcolor').onclick = () => {
   sys.out(0x30, (mode === 'text40' ? 0 : 1) | (sys.colorMode ? 2 : 0));
   $('bcolor').classList.toggle('on', sys.colorMode);
