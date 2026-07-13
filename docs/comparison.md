@@ -5,23 +5,25 @@
 Two questions deserved evidence, not claims: *is the hardware actually
 emulated at chip level?* and *does programming the DMA for two screens
 produce the 27-color trick?* We read the actual source of QUASI88 (libretro
-mirror), MAME (master) and M88 (rururutan mirror).
+mirror), MAME (master) and M88 (rururutan mirror), plus j80 (Java, closed
+source — judged from its bundled docs and demos) and vavi-apps-emu88 (Java,
+open source).
 
 ## Summary
 
-| | QUASI88 | MAME | M88 | **this repo** |
-|---|---|---|---|---|
-| Where the picture comes from | **direct VRAM read** (uses the DMAC's ch2 *address* as a base, re-reads the same memory every frame) | 8257 → dack_w → 3301 row FIFO | PD8257::RequestRead → CRTC row buffer | DRQ → DMA pull → row buffer |
-| DMA terminal count | **not implemented** (register written, never read) | yes | yes | yes |
-| Autoload (ch3 → ch2) | **not implemented** | yes | yes | yes |
-| **27-color trick: the mechanism** | **impossible by construction** | **reproduced** | **reproduced** | **reproduced** |
-| **27-color trick: the color mixing** | — | **no** (bitmap cleared every frame, no persistence) | unverified | **yes** (phosphor integrates over time) |
-| Attribute (pos, value) pair expansion | yes | yes | yes | yes |
-| 20-pairs-per-row limit | yes | yes | **no** | yes |
-| DMA underrun | **not implemented** | **not implemented** (TODO) | yes | yes |
-| Intra-frame DMA timing | none | **none** (TODO: whole screen at frame end) | **per-row** (scheduler) | none (frame-granular) |
-| FDD / games | works | works | works | **does not work** |
-| Phosphor & tube physics | none | none | unverified | **yes** |
+| | QUASI88 | MAME | M88 | j80 | **this repo** |
+|---|---|---|---|---|---|
+| Where the picture comes from | **direct VRAM read** (uses the DMAC's ch2 *address* as a base, re-reads the same memory every frame) | 8257 → dack_w → 3301 row FIFO | PD8257::RequestRead → CRTC row buffer | via DMA (closed source; judged from docs) | DRQ → DMA pull → row buffer |
+| DMA terminal count | **not implemented** (register written, never read) | yes | yes | yes (changelog: TC write-bit bugfix) | yes |
+| Autoload (ch3 → ch2) | **not implemented** | yes | yes | yes (bundled demo uses `out &h68,&hc4`) | yes |
+| **27-color trick: the mechanism** | **impossible by construction** | **reproduced** | **reproduced** | **reproduced** (author explicitly supports "Twenty-7", demo bundled) | **reproduced** |
+| **27-color trick: the color mixing** | — | **no** (bitmap cleared every frame, no persistence) | unverified | unverified | **yes** (phosphor integrates over time) |
+| Attribute (pos, value) pair expansion | yes | yes | yes | yes (variable pair counts, cross-row blink/secret carry) | yes |
+| 20-pairs-per-row limit | yes | yes | **no** | variable pair counts (per changelog) | yes |
+| DMA underrun | **not implemented** | **not implemented** (TODO) | yes | **yes** (TRACE ON warns) | yes |
+| Intra-frame DMA timing | none | **none** (TODO: whole screen at frame end) | **per-row** (scheduler) | unverified | none (frame-granular) |
+| FDD / games | works | works | works | works | **does not work** |
+| Phosphor & tube physics | none | none | unverified | none | **yes** |
 
 **The headline: MAME and M88 are chip-level too.** Any claim that "only this
 repo emulates the real hardware" would be false. What is genuinely unique
@@ -92,6 +94,39 @@ than MAME's (per-row vs per-frame) and finer than ours. `pd8257.cpp`
 implements ch2 autoinit, so the two-screen trick reproduces here as well.
 It does *not* model the 20-pairs-per-row limit.
 
+## j80 (Java) — closed source, but the author documents 27-color support
+
+j80 (by HAL8999, "OUT of STANDARD") ships only an obfuscated jar, so no code
+can be quoted. Its bundled files are decisive anyway. `util/27view/tool/
+27view.txt` is an N-BASIC demo that performs the exact trick:
+
+```basic
+230 out &h65,&h6f:out &h65,&h97   ' ch2 TC = 976Fh = 8000h + 5999 — two screens!
+240 out &h68,&hc4                 ' autoload + TC stop + ch2 enable
+```
+
+and `doc/history.txt` (the author's changelog) says outright:
+
+```
+- variable VRAM size (port 0x65 implemented)
+    -> supports Twenty-7 (PiO '84), a two-screen compositing paint tool
+- TRACE ON now warns when a DMA underrun occurs
+- attribute pair counts other than 0/20 now supported
+```
+
+So **j80 explicitly supports the 27-color trick** (real software:
+"Twenty-7", PiO 1984) — the only pre-existing emulator we found that does.
+Its credits thank a provider of the *uPD3301A CRTC User's Manual*, i.e. it
+was written against real chip documentation. Tokihiro Naitou (author of
+Hydlide) is said to have called j80 the best PC-8001 emulator; our findings
+are consistent with that.
+
+The other Java emulator, `vavi-apps-emu88` (umjammer, open source), is the
+opposite: the 5 CRTC RESET parameter bytes are parsed into **local variables
+and discarded**, drawing is hard-coded 80×25, DMA is a single memcpy on mode
+write — and writing TC=5999 indexes `tvram[49]` (only 26 rows exist) and
+**throws ArrayIndexOutOfBoundsException**.
+
 ## This repo — same chip level, plus the physics
 
 ```
@@ -117,6 +152,9 @@ a color** — the step MAME and M88 leave to your eyes.
 - **QUASI88 is the exception** (direct VRAM read, no TC, no autoload) — the
   trick cannot work there. That is a legitimate design choice: its goal is
   running software correctly and fast.
+- **j80 is the only pre-existing emulator that documents 27-color support**,
+  demo included. The source is unreadable, but the changelog's granularity
+  (underrun tracing, variable attribute counts) marks it as chip-level.
 - **Play games on the others.** Our FDD does not work at all.
 - What is ours alone is not "chip level" but what lies *below* it:
   1. **The physical layer** — phosphor (P22's blue dies first, P7's
