@@ -1,12 +1,47 @@
 {
   "name": "upd3301",
-  "version": "0.1.0",
-  "description": "NEC uPD3301 CRT controller + uPD8257 DMA emulator core (PC-8001 text pipeline), pure JS, deterministic, headless",
+  "version": "0.2.0",
+  "description": "NEC uPD3301 CRT controller + uPD8257 DMA emulator, CRT glass physics (phosphor/shadow mask), PC-8001/8801 machines - pure JS, zero deps, deterministic, headless",
   "type": "module",
   "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./upd8257": "./upd8257.js",
+    "./pc8001": "./pc8001.js",
+    "./term": "./term.js",
+    "./semivideo": "./semivideo.js",
+    "./crt": "./crt.js",
+    "./tube": "./tube.js",
+    "./z80": "./z80.js",
+    "./z80dis": "./z80dis.js",
+    "./machine": "./machine.js",
+    "./machine88": "./machine88.js",
+    "./pc80s31": "./pc80s31.js",
+    "./upd765": "./upd765.js",
+    "./i8255": "./i8255.js",
+    "./d88": "./d88.js"
+  },
+  "files": [
+    "*.js",
+    "README.md",
+    "README.ja.md",
+    "docs/"
+  ],
   "scripts": {
     "test": "node --test"
   },
+  "keywords": [
+    "upd3301",
+    "pc-8001",
+    "pc-8801",
+    "crt",
+    "phosphor",
+    "shadow-mask",
+    "z80",
+    "emulator",
+    "terminal",
+    "renderer"
+  ],
   "license": "MIT",
   "private": true
 }
