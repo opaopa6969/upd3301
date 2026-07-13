@@ -87,6 +87,7 @@ const DICT = {
   'ライン': 'Line screen',
   '27色ちらつき': '27-color flicker',
   '512色ちらつき': '512-color flicker',
+  'は短残光: 時間ディザがちらつく（長残光推奨）': ' is short-persistence: temporal dither will flicker (try a long-persistence tube)',
   '⏺ 録画': '⏺ REC',
   '■ 停止': '■ Stop',
   '録画中…': 'recording…',

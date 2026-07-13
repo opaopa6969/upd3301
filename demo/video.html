@@ -340,7 +340,7 @@ function loop(now) {
   guts.textContent =
     `${workMs.toFixed(1)}ms/frame${workMs > 24 ? ' (' + t('重い: 物理OFF/ORIGINALを試して') + ')' : ''}  ` +
     `mode=${geometry}/${convMode}${convMode === 'full' ? '/' + screenPat : ''}${flickerLevels ? `/${flickerLevels === 3 ? 27 : 512}c` : ''}  ${term.cols}x${term.rows} cells` +
-    `  autoLevels=${autoLevels ? 'on' : 'off'} gain=${gain.toFixed(1)}` +
+    `  autoLevels=${autoLevels ? 'on' : 'off'} gain=${gain.toFixed(1)}` + frcAdvice() +
     `  phosphor=${phosName} tube=${tubeMode}` +
     `  video=${video.videoWidth}x${video.videoHeight} rs=${video.readyState}${video.paused ? ' paused' : ''}\n${status}`;
   requestAnimationFrame(loop);
@@ -492,12 +492,6 @@ const convBtns = { dither: $('mdither'), line: $('mline'), pc98: $('m98'), full:
 function setConv(m) {
   convMode = m;
   for (const [k, el] of Object.entries(convBtns)) el.classList.toggle('on', k === m);
-  if ((m === 'pc98' || m === 'full') && phosName === 'P22') { // FRC needs afterglow to read
-    phosName = 'LONG';
-    phosphor.setPhosphor(PHOSPHORS.LONG);
-    phosphor98.setPhosphor(PHOSPHORS.LONG);
-    for (const [k2, el2] of Object.entries(phosBtns)) el2.classList.toggle('on', k2 === 'LONG');
-  }
 }
 $('mdither').onclick = () => setConv('dither');
 $('mline').onclick = () => setConv('line');
@@ -516,15 +510,18 @@ $('b400').onclick = () => {
   line2 = on ? 1.0 : 0.55;
   for (const tb of Object.values(tubes)) tb.setGeometry({ scanlineDepth: on ? 0.05 : 0.35 });
 };
+// The phosphor is a property of the *tube*, not of the content — a mode
+// must never swap it behind your back. Temporal-dither modes just say so.
+const SHORT_PHOSPHORS = new Set(['P22', 'PLASMA']);
+function frcAdvice() {
+  const needsGlow = flickerLevels > 0 || convMode === 'pc98' || convMode === 'full';
+  return needsGlow && SHORT_PHOSPHORS.has(phosName)
+    ? `  ⚠ ${phosName}${t('は短残光: 時間ディザがちらつく（長残光推奨）')}` : '';
+}
 function setFlicker(levels) {
   flickerLevels = flickerLevels === levels ? 0 : levels;
   $('b27').classList.toggle('on', flickerLevels === 3);
   $('b512').classList.toggle('on', flickerLevels === 8);
-  if (flickerLevels && phosName === 'P22') { // the trick needs afterglow to read
-    phosName = 'LONG';
-    phosphor.setPhosphor(PHOSPHORS.LONG);
-    for (const [k2, el2] of Object.entries(phosBtns)) el2.classList.toggle('on', k2 === 'LONG');
-  }
 }
 $('b27').onclick = () => setFlicker(3);
 $('b512').onclick = () => setFlicker(8);
