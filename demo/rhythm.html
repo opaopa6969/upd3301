@@ -245,6 +245,11 @@ mountTourButton(document.getElementById('bclear').parentElement, [
     body: {
       ja: 'マスをクリックで打ち込み。4トラックの正体は上から <b>FDDシーク</b>（ステッパーの連打＝ガガガッ）、<b>ヘッドロード</b>（ゴトッ）、<b>MOTORリレー</b>（カチッ）、<b>BEEP</b>（2400Hz矩形波）。キック・スネア・ハット・アクセントに聞こえてくるから不思議。',
       en: 'Click cells to program. The four tracks, top to bottom: <b>FDD seek</b> (stepper pulse train — the grind), <b>head load</b> (thunk), <b>MOTOR relay</b> (click), <b>BEEP</b> (2400 Hz square). Kick, snare, hat, accent — it just works.' } },
+  { el: '#grid',
+    title: { ja: '正直な注意書き：これは本物の音じゃない', en: 'Honest disclaimer: not the real sounds' },
+    body: {
+      ja: '音は全部WebAudioの<b>想像による合成</b>で、実機のサンプリングじゃない。そもそも本物のヘッドロード機構はソレノイドが物理で上下するだけだから、16分連打なんてテンポでは動けない（実機の上下はせいぜい1Hzかそこら）。実際の「カンカン」いう金属音とも違う。実機は倉庫に眠っていて録りに行けないので、当面は記憶を頼りに想像で鳴らしてる。<b>CRTがもう出せないからエミュレータを作った</b>——それの音版だと思ってほしい。いつか実機をサンプリングできたら差し替えるよ。',
+      en: 'Every sound is <b>imagined WebAudio synthesis</b>, not a recording. The real head-load mechanism is a solenoid that physically cannot cycle at 16th-note speed — maybe 1 Hz on a good day — and the real metallic clank sounds different too. The real unit sleeps in a warehouse, out of sampling reach, so this is played from memory for now. Think of it as the audio counterpart of the repo itself: <b>we built the emulator because the real CRT can no longer come out</b>. If the real unit ever gets sampled, these sounds get replaced.' } },
   { el: '#bplay',
     title: { ja: 'PLAYとBPM', en: 'PLAY & BPM' },
     body: {
