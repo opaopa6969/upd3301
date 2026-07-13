@@ -59,7 +59,8 @@ export class Pc8801Machine {
     // 'n80' = the machine's N-BASIC mode (the DIP switch / mode selector).
     // It needs no disk sub-system, so it boots on a bare emulated machine.
     this.n80mode = mode === 'n80';
-    this.extBank = -1; // -1 = main ROM at 6000-7FFF; 0..3 = extension bank
+    this.extMapped = false; // port 71h bit0=0 → ext ROM at 6000-7FFF
+    this._port32 = 0; // bits 0-1 = EROMSL (which ext bank)
     this.gvramWindow = -1; // -1 = RAM at C000-FFFF; 0..2 = plane B/R/G
     this.gvramOn = false; // port 31h bit3
     this.mono = false;
@@ -118,8 +119,9 @@ export class Pc8801Machine {
   readMem(a) {
     a &= 0xffff;
     if (a < 0x8000 && this.romEnabled) {
-      if (a >= 0x6000 && this.extBank >= 0 && this.romExt) {
-        return this.romExt[this.extBank * 0x2000 + (a - 0x6000)] ?? 0xff;
+      if (a >= 0x6000 && this.extMapped && this.romExt && !this.n80mode) {
+        const bank = this._port32 & 3; // EROMSL
+        return this.romExt[bank * 0x2000 + (a - 0x6000)] ?? 0xff;
       }
       const rom = this.n80mode && this.romN80 ? this.romN80 : this.romMain;
       return rom[a] ?? 0xff;
@@ -145,7 +147,7 @@ export class Pc8801Machine {
     if (port <= 0x0f) return this.keys[port]; // keyboard matrix
     if (port === 0x30) return this.dipsw[0];
     if (port === 0x31) return this.dipsw[1];
-    if (port === 0x32) return 0xff;
+    if (port === 0x32) return this._port32; // readable on mkII SR and later
     if (port === 0x40) {
       // d5 = VRTC (high during retrace), d1 = CMT carrier etc.
       const vrtc = this.tInFrame > this.frameT * 0.86;
@@ -194,10 +196,11 @@ export class Pc8801Machine {
       case 0x5f: this.gvramWindow = -1; return; // main RAM back
       case 0x50: this.crtc.writeParam(v); return;
       case 0x51: this.crtc.writeCommand(v); return;
-      case 0x71: // extension ROM bank — one *cleared* bit selects the bank
-        // (FEh = bank 0, FDh = 1, FBh = 2, F7h = 3; FFh = back to main ROM)
-        this.extBank = v === 0xff ? -1
-          : !(v & 1) ? 0 : !(v & 2) ? 1 : !(v & 4) ? 2 : !(v & 8) ? 3 : -1;
+      case 0x71: // extension ROM select — bit0 = 0 maps the ext ROM at
+        // 6000-7FFF; WHICH of the 4 banks comes from port 32h bits 0-1
+        // (EROMSL). Getting this split wrong sends every cross-bank call
+        // in the N88 ROM into the wrong bank and the machine into the weeds.
+        this.extMapped = (v & 1) === 0;
         return;
       case 0xe4: this.intLevels = (v & 8) ? 7 : (v & 7); return; // 8214 threshold
       case 0xe6: // per-source enable; disabling a source drops its pending flag
