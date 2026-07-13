@@ -620,3 +620,36 @@ test('terminal: EX mode runs arbitrary geometry (100x30)', async () => {
   assert.equal(img.height, 240);
   assert.equal(img.pixels[(29 * 8) * 800 + 99 * 8], 3, 'magenta @ in the corner');
 });
+
+// ---- power-off collapse ---------------------------------------------------
+
+test('power-off: collapsing scan piles the raster onto the center', async () => {
+  const { collapseScan } = await import('./crt.js');
+  const W = 8, H = 8;
+  const src = new Uint8Array(W * H);
+  src.fill(2); // red everywhere
+  src[0] = 4; // one green pixel in the corner
+  const dst = new Uint8Array(W * H);
+  collapseScan(src, dst, W, H, 1, 0.01); // vertical collapse
+  // outer rows dark, center band holds the OR of everything above/below
+  assert.equal(dst[0], 0);
+  assert.equal(dst[7 * W + 4], 0);
+  const centerRow = 3 * W; // round(3.5 + (y-3.5)*0.01) → 3 or 4
+  assert.equal(dst[centerRow + 0] & 4, 4, 'green OR-ed into the center line');
+  assert.ok(dst[centerRow + 4] & 2, 'red present on the center line');
+  const dst2 = new Uint8Array(W * H);
+  collapseScan(src, dst2, W, H, 1, 0.01);
+  assert.deepEqual(dst, dst2, 'deterministic');
+});
+
+test('power-off: density-boosted drive leaves a longer afterglow', () => {
+  const glowAfter = (drive, frames) => {
+    const crt = new CrtPhosphor({ width: 1, height: 1, tau: [0.06, 0.06, 0.06], drive });
+    crt.step(Uint8Array.from([7]), 1 / 60);
+    for (let i = 0; i < frames; i++) crt.step(Uint8Array.from([0]), 1 / 60);
+    return crt.sample(0, 0).g;
+  };
+  const dim = glowAfter(1, 8);
+  const hot = glowAfter(6, 8); // collapsed raster: same spot hit 6× harder
+  assert.ok(hot > dim * 5.5, `hot spot lingers (${hot} vs ${dim})`);
+});

@@ -43,6 +43,7 @@
   <button id="tslot">スロットマスク</button>
   <button id="binterlace">インターレース</button>
   <button id="baudio">15kHz 音鳴り</button>
+  <button id="bpower" class="on">POWER</button>
 </div>
 <div class="row knobs"><span class="lbl">裏のノブ:</span>
   <label>FOCUS <input type="range" id="kfocus" min="0" max="2" step="0.05" value="1"></label>
@@ -61,7 +62,7 @@
 </p>
 <script type="module">
 import { Pc8001TextSystem, PC8001 } from '../pc8001.js';
-import { CrtPhosphor, PHOSPHORS } from '../crt.js';
+import { CrtPhosphor, PHOSPHORS, collapseScan } from '../crt.js';
 import { CrtTube } from '../tube.js';
 
 // ---- 5x7 font → CGROM ------------------------------------------------
@@ -297,8 +298,9 @@ function blit() {
 }
 
 // 15 kHz horizontal-deflection whine — the flyback transformer's song
-let audioCtx = null, osc = null, oscGain = null;
+let audioCtx = null, osc = null, oscGain = null, audioWanted = false;
 function setAudio(on) {
+  audioWanted = on;
   if (on) {
     audioCtx ??= new AudioContext();
     osc = audioCtx.createOscillator();
@@ -313,6 +315,68 @@ function setAudio(on) {
   }
 }
 
+// power-off: the flyback spins down — pitch glides off a cliff and dies
+function audioPowerDown() {
+  if (!osc || !audioCtx) return;
+  const t = audioCtx.currentTime;
+  osc.frequency.setValueAtTime(sys.crtc.hsyncHz(), t);
+  osc.frequency.exponentialRampToValueAtTime(60, t + 0.45);
+  oscGain.gain.setValueAtTime(oscGain.gain.value, t);
+  oscGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+  const dying = osc;
+  setTimeout(() => { if (dying === osc) { osc.stop(); osc.disconnect(); osc = null; } }, 600);
+}
+
+// power-on: it climbs back up to pitch with a little settle
+function audioPowerUp() {
+  if (!audioWanted || !audioCtx) return;
+  if (osc) { osc.stop(); osc.disconnect(); }
+  osc = audioCtx.createOscillator();
+  oscGain = audioCtx.createGain();
+  osc.type = 'sine';
+  const t = audioCtx.currentTime;
+  osc.frequency.setValueAtTime(120, t);
+  osc.frequency.exponentialRampToValueAtTime(sys.crtc.hsyncHz(), t + 0.25);
+  oscGain.gain.setValueAtTime(0.0001, t);
+  oscGain.gain.exponentialRampToValueAtTime(0.025, t + 0.25);
+  osc.connect(oscGain).connect(audioCtx.destination);
+  osc.start();
+}
+
+// POWER: deflection collapse on the way down, quick bloom on the way up.
+// The raster shrinks (vertical first → bright line → dot) while the beam
+// energy concentrates; then the beam dies and only afterglow remains.
+const power = { state: 'on', t: 0 }; // on | closing | off | opening
+const collapseBuf = new Uint8Array(640 * 200);
+const darkBuf = new Uint8Array(640 * 200);
+
+function beamPass() {
+  sys.crtc.stepFrame();
+  const parity = interlaced ? sys.crtc.frame & 1 : null;
+  if (power.state === 'on') {
+    sys.render({ cgrom, out: idxBuf });
+    phosphor.step(idxBuf, FR, { fieldParity: parity });
+    return;
+  }
+  if (power.state === 'off') {
+    phosphor.step(darkBuf, FR); // beam dead: pure afterglow decay
+    return;
+  }
+  power.t += FR;
+  const closing = power.state === 'closing';
+  const T = closing ? 0.55 : 0.18;
+  const k = Math.min(1, power.t / T);
+  const c = closing ? k : 1 - k; // collapse amount 0..1
+  const vS = Math.max(0.008, Math.pow(1 - c, 2.6)); // vertical deflection dies fast
+  const hS = Math.max(0.01, 1 - c * c * 0.99); // horizontal lingers → line, then dot
+  sys.render({ cgrom, out: idxBuf });
+  collapseScan(idxBuf, collapseBuf, 640, 200, hS, vS);
+  phosphor.drive = Math.min(8, 1 / Math.max(hS * vS, 1 / 8));
+  phosphor.step(collapseBuf, FR);
+  phosphor.drive = 1;
+  if (k >= 1) power.state = closing ? 'off' : 'on';
+}
+
 const guts = document.getElementById('guts');
 const FR = 1 / 60;
 let last = performance.now(), acc = 0;
@@ -322,9 +386,7 @@ function loop(now) {
   let steps = 0;
   while (acc >= FR && steps < 6) { // one beam pass per CRTC frame
     acc -= FR; steps++;
-    sys.crtc.stepFrame();
-    sys.render({ cgrom, out: idxBuf });
-    phosphor.step(idxBuf, FR, { fieldParity: interlaced ? sys.crtc.frame & 1 : null });
+    beamPass();
   }
   if (steps) blit();
   const c = sys.dmac.channels[2];
@@ -372,6 +434,17 @@ function setTube(m) {
 for (const k of Object.keys(tubeBtns)) tubeBtns[k].onclick = () => setTube(k);
 $('binterlace').onclick = () => { interlaced = !interlaced; $('binterlace').classList.toggle('on', interlaced); };
 $('baudio').onclick = () => { setAudio(!osc); $('baudio').classList.toggle('on', !!osc); };
+$('bpower').onclick = () => {
+  if (power.state === 'on' || power.state === 'opening') {
+    power.state = 'closing'; power.t = 0;
+    audioPowerDown();
+    $('bpower').classList.remove('on');
+  } else {
+    power.state = 'opening'; power.t = 0;
+    audioPowerUp();
+    $('bpower').classList.add('on');
+  }
+};
 
 // 裏のノブ（ドライバー不要）
 $('kfocus').oninput = (e) => {

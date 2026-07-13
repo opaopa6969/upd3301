@@ -200,3 +200,27 @@ export class CrtPhosphor {
 export function createCrtPhosphor(opts) {
   return new CrtPhosphor(opts);
 }
+
+// Power-off: the deflection amplitude collapses, so the whole raster lands
+// on a shrinking band — vertical dies first (bright horizontal line), then
+// horizontal (a dot), while the beam energy concentrates: same electrons,
+// less phosphor area. Model: remap every lit source pixel toward the
+// center by (hScale, vScale), OR-ing gun bits where they pile up; the
+// caller raises `drive` by the density factor 1/(hScale·vScale) so the
+// piled-up phosphor is excited past 1.0 and its afterglow lingers.
+export function collapseScan(src, dst, width, height, hScale, vScale) {
+  dst.fill(0);
+  const cx = (width - 1) / 2, cy = (height - 1) / 2;
+  for (let y = 0; y < height; y++) {
+    const ty = Math.round(cy + (y - cy) * vScale);
+    const rowOff = ty * width;
+    const o = y * width;
+    for (let x = 0; x < width; x++) {
+      const v = src[o + x];
+      if (!v) continue;
+      const tx = Math.round(cx + (x - cx) * hScale);
+      dst[rowOff + tx] |= v;
+    }
+  }
+  return dst;
+}
