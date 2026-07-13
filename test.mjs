@@ -845,10 +845,17 @@ test('27-color flicker: middle levels alternate between phases', async () => {
     for (const c of r.codes) for (let b = 0; b < 8; b++) { total++; lit += (c >> b) & 1; }
     return lit / total;
   };
-  const p0 = density(rgbaToSemigraphic(rgba, W, H, { temporalPhase: 0 }));
-  const p1 = density(rgbaToSemigraphic(rgba, W, H, { temporalPhase: 1 }));
-  assert.ok(p0 > 0.9, `half level lit on phase 0 (${p0})`);
-  assert.ok(p1 < 0.1, `dark on phase 1 (${p1})`);
+  const r0 = rgbaToSemigraphic(rgba, W, H, { temporalPhase: 0 });
+  const r1 = rgbaToSemigraphic(rgba, W, H, { temporalPhase: 1 });
+  const p0 = density(r0), p1 = density(r1);
+  // FRC stagger: each phase lights ~half the dots (checkerboard), and the
+  // two phases are complementary — no whole-screen flash
+  assert.ok(Math.abs(p0 - 0.5) < 0.1, `phase 0 ≈ half the dots (${p0})`);
+  assert.ok(Math.abs(p1 - 0.5) < 0.1, `phase 1 ≈ half the dots (${p1})`);
+  for (let i = 0; i < r0.codes.length; i++) {
+    assert.equal(r0.codes[i] & r1.codes[i], 0, 'phases do not overlap at half level');
+    assert.equal(r0.codes[i] | r1.codes[i], 0xff, 'phases cover every dot together');
+  }
   rgba.fill(255); // full white
   for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
   const f0 = density(rgbaToSemigraphic(rgba, W, H, { temporalPhase: 0 }));

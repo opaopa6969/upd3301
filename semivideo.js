@@ -74,7 +74,12 @@ export function rgbaToSemigraphic(rgba, dotW, dotH, { gain = 1.0, autoLevels = f
           if ((rgba[o + 2] - lo) * scale / 255 * gain > th) d |= 1; // B
         } else {
           const N = temporalLevels - 1; // frames per cycle
-          const ord = (temporalPhase * (N === 2 ? 1 : 3)) % N; // stride-spread
+          // FRC-style spatial phase stagger: neighbours flash at different
+          // times, so any frame's spatial average equals the target level —
+          // shimmer instead of whole-screen strobing. (N=2 degenerates to
+          // the classic checkerboard alternation.)
+          const off = (x * 3 + y * 5) % N;
+          const ord = (((temporalPhase + off) % N) * (N === 2 ? 1 : 3)) % N;
           for (let c = 0; c < 3; c++) {
             const v = Math.min(1, Math.max(0, (rgba[o + c] - lo) * scale / 255 * gain));
             const lv = v * N, q = Math.min(N, Math.floor(lv) + ((lv - Math.floor(lv)) > th ? 1 : 0));
