@@ -22,6 +22,8 @@ import { Z80 } from './z80.js';
 import { Upd3301 } from './index.js';
 import { Upd8257 } from './upd8257.js';
 import { renderScreen } from './pc8001.js';
+import { I8255, crossWire } from './i8255.js';
+import { Pc80s31 } from './pc80s31.js';
 
 export const SCHEMA_VERSION = 1;
 
@@ -29,7 +31,7 @@ const GVRAM_SIZE = 0x4000; // 16KB per plane, window at C000-FFFF
 
 export class Pc8801Machine {
   constructor({
-    main, ext = null, n80 = null, mode = 'n88',
+    main, ext = null, n80 = null, sub = null, mode = 'n88',
     frameHz = 60, clockHz = 3_993_600, dmaSteal = 0.3,
   } = {}) {
     if (!main || main.length < 0x8000) throw new Error('need a 32KB N88 main ROM');
@@ -37,7 +39,19 @@ export class Pc8801Machine {
     this.romExt = ext; // 4 x 8KB banks (6000-7FFF)
     this.romN80 = n80;
 
-    this.ram = new Uint8Array(0x10000);
+    // disk sub-system: a second Z80 running disk.rom, reached only through
+    // the crossed 8255 pair at FCh-FFh. Without a sub ROM the ports float
+    // high and the boot ROM times out into BASIC, same as a drive-less 88.
+    this.sub = sub ? new Pc80s31({ rom: sub, clockHz }) : null;
+    this.pio = this.sub ? new I8255() : null;
+    if (this.sub) crossWire(this.pio, this.sub.pio);
+
+    // power-on DRAM reads mostly-high on the real board, and the boot ROM
+    // *depends* on it: the drive-presence tables at EF2D/EF35 are only
+    // written by an option ROM's hook — absent one, bit4 of the power-on
+    // garbage must read 1 ("no drive") or the ROM invents phantom drives
+    // and boots from them instead of the sub-system.
+    this.ram = new Uint8Array(0x10000).fill(0xff);
     this.gvram = [new Uint8Array(GVRAM_SIZE), new Uint8Array(GVRAM_SIZE), new Uint8Array(GVRAM_SIZE)];
 
     // bank state
@@ -61,20 +75,33 @@ export class Pc8801Machine {
     this._palLatch = 0;
 
     // interrupts (μPD8214 priority controller)
-    // E4h: how many priority levels are enabled (level < intLevels passes)
-    // E6h: per-source mask, 1 = enabled — bit0 timer, bit1 VRTC, bit2 8251
+    // E4h: acceptance threshold — source n is delivered while its level ≤
+    //      threshold (SIO=1, VSYNC=2, RTC=3, SOUND=5); bit3 = open all.
+    //      Accepting an interrupt RESETS the threshold to 0: every handler
+    //      re-arms via OUT E4h. (This is why 8801 BASIC writes E4h a lot.)
+    // E6h: per-source enable — bit0 RTC (1/600s), bit1 VSYNC, bit2 SIO.
+    // IM2 vector low byte = source number × 2 (SIO=0, VSYNC=1, RTC=2, SND=4).
     this.intLevels = 0;
     this.intMaskBits = 0;
-    this.intPending = 0;
+    this.intPending = 0; // bit per source number
 
+    this._pioLast = -1;
+    this._pioPoll = 0;
     this.keys = new Uint8Array(16).fill(0xff);
-    this.dipsw = [0xff, 0xff]; // 30h/31h reads (all switches "off" = boot N88)
+    // 30h/31h DIP reads. N88 V2 mode: 30h bit0=1 (N88), upper bits pulled
+    // high; 31h bit7=0 (V2), bit6=1 (H). All-FF here *looks* harmless but
+    // means "V1 + every terminal option on" — the boot ROM then wanders off
+    // into terminal-mode setup instead of booting the disk.
+    this.dipsw = [0xdb, 0x79];
 
     this.crtc = new Upd3301({ frameHz, drq: (buf) => this.dmac.drqPull(2, buf) });
     this.dmac = new Upd8257({ readMemory: (a) => this.ram[a & 0xffff] });
     this.width80 = true;
 
     this.frameT = Math.round(clockHz / frameHz * (1 - dmaSteal));
+    // the sub board has its own bus — no DMA steal there. Per T-state of
+    // main CPU progress, the sub runs this many:
+    this.subRatio = (clockHz / frameHz) / this.frameT;
     this.tInFrame = 0;
     this.frame = 0;
 
@@ -129,15 +156,20 @@ export class Pc8801Machine {
     if (port >= 0x60 && port <= 0x68) return this.dmac.readPort(port - 0x60);
     if (port === 0x44 || port === 0x45) return 0x00; // YM2203 stub
     if (port === 0xe2 || port === 0xe3) return 0xff; // EMM
-    // FCh-FFh: 8255 to the FDD sub-CPU. Boot polls port FEh for the
-    // handshake: it wants (v & 6) == 2 — sub-system alive, nothing to
-    // boot from — otherwise it spins forever waiting for a disk.
-    // FCh-FFh: 8255 to the FDD sub-CPU. With no drive unit the port C inputs
-    // float high (FFh) — and that is exactly what the boot ROM expects to
-    // see: each handshake poll is wrapped in a BC×D timeout (LD BC,0; LD D,4
-    // → ~262k spins). When it expires the ROM concludes "no disk system" and
-    // falls into BASIC. So: no fake handshake, just let it time out.
-    if (port >= 0xfc && port <= 0xff) return 0xff;
+    // FCh-FFh: the main half of the 8255 pair to the disk sub-system. With
+    // no sub board the inputs float high and the boot ROM's BC×D timeout
+    // loop expires into BASIC; with one, the two ROMs do the real handshake.
+    if (port >= 0xfc && port <= 0xff) {
+      if (!this.pio) return 0xff;
+      const v = this.pio.read(port - 0xfc);
+      // main spinning on an unchanged answer = it is waiting for the sub.
+      // Count it so stepFrame can lend the sub extra time (same trick
+      // QUASI88 uses: on continuous PIO reads, switch to the sub CPU) —
+      // otherwise the boot ROM's timeout beats the sub ROM's motor delay.
+      if (v === this._pioLast) this._pioPoll++;
+      else { this._pioLast = v; this._pioPoll = 0; }
+      return v;
+    }
     return 0xff;
   }
 
@@ -162,11 +194,18 @@ export class Pc8801Machine {
       case 0x5f: this.gvramWindow = -1; return; // main RAM back
       case 0x50: this.crtc.writeParam(v); return;
       case 0x51: this.crtc.writeCommand(v); return;
-      case 0x71: // extension ROM bank (FF = main ROM)
-        this.extBank = v === 0xff ? -1 : (v & 3);
+      case 0x71: // extension ROM bank — one *cleared* bit selects the bank
+        // (FEh = bank 0, FDh = 1, FBh = 2, F7h = 3; FFh = back to main ROM)
+        this.extBank = v === 0xff ? -1
+          : !(v & 1) ? 0 : !(v & 2) ? 1 : !(v & 4) ? 2 : !(v & 8) ? 3 : -1;
         return;
-      case 0xe4: this.intLevels = v & 7; return; // 8214: number of levels enabled
-      case 0xe6: this.intMaskBits = v; return; // per-source mask (1 = enabled)
+      case 0xe4: this.intLevels = (v & 8) ? 7 : (v & 7); return; // 8214 threshold
+      case 0xe6: // per-source enable; disabling a source drops its pending flag
+        this.intMaskBits = v;
+        if (!(v & 1)) this.intPending &= ~(1 << 2); // RTC
+        if (!(v & 2)) this.intPending &= ~(1 << 1); // VSYNC
+        if (!(v & 4)) this.intPending &= ~(1 << 0); // SIO
+        return;
       default:
         break;
     }
@@ -180,35 +219,65 @@ export class Pc8801Machine {
       return;
     }
     if (port >= 0x60 && port <= 0x68) { this.dmac.writePort(port - 0x60, v); return; }
+    if (port >= 0xfc && port <= 0xff && this.pio) { this.pio.write(port - 0xfc, v); return; }
   }
 
   // ---- interrupts ---------------------------------------------------------
+  // sources by number n (vector = n*2) and 8214 level: SIO n=0 lv1,
+  // VSYNC n=1 lv2, RTC n=2 lv3, SOUND n=4 lv5.
   _serviceInterrupts() {
-    if (!this.intPending) return;
-    for (let level = 0; level < 8; level++) {
-      const bit = 1 << level;
-      if (!(this.intPending & bit)) continue;
-      if (level >= this.intLevels) continue; // 8214 priority gate
-      if (!(this.intMaskBits & bit)) continue; // source masked off
-      // IM2: the 8214 supplies the vector's low byte = level * 2
-      const t = this.cpu.intRequest(level * 2);
-      if (t > 0) this.intPending &= ~bit;
-      return;
+    if (!this.intPending || !this.intLevels) return;
+    let no = -1;
+    if (this.intLevels >= 1 && (this.intPending & 1)) no = 0;
+    else if (this.intLevels >= 2 && (this.intPending & 2)) no = 1;
+    else if (this.intLevels >= 3 && (this.intPending & 4)) no = 2;
+    else if (this.intLevels >= 5 && (this.intPending & 16)) no = 4;
+    if (no < 0) return;
+    const t = this.cpu.intRequest(no * 2);
+    if (t > 0) {
+      this.intPending &= ~(1 << no);
+      this.intLevels = 0; // 8214: acceptance closes the gate until re-armed
     }
   }
 
   // ---- run ----------------------------------------------------------------
+  // Main and sub CPUs interleave in ~100 T-state slices. The 8255 handshake
+  // is level-polled on both sides, so slice granularity only paces the
+  // transfer, it cannot break the protocol.
   stepFrame() {
+    const SLICE = 100;
+    // the 1/600s interval timer (level 0) — disk BASIC sleeps on it (EI/HALT),
+    // so without these 10 ticks per frame the machine halts forever
+    const timerPeriod = this.frameT / 10;
+    let subDebt = 0;
+    let nextTimer = this.tInFrame + timerPeriod;
     while (this.tInFrame < this.frameT) {
-      this.tInFrame += this.cpu.step();
-      this._serviceInterrupts();
+      const target = Math.min(this.frameT, this.tInFrame + SLICE);
+      const before = this.tInFrame;
+      while (this.tInFrame < target) {
+        this.tInFrame += this.cpu.step();
+        if (this.tInFrame >= nextTimer) {
+          if (this.intMaskBits & 1) this.intPending |= 1 << 2; // RTC, source 2
+          nextTimer += timerPeriod;
+        }
+        this._serviceInterrupts();
+      }
+      if (this.sub) {
+        // polling main donates its wasted bus time to the sub (×16)
+        const boost = this._pioPoll > 32 ? 16 : 1;
+        subDebt += (this.tInFrame - before) * this.subRatio * boost;
+        if (subDebt >= SLICE) subDebt -= this.sub.run(Math.floor(subDebt));
+      }
     }
     this.tInFrame -= this.frameT;
     this.crtc.stepFrame();
-    this.intPending |= 0x02; // VRTC = level 1
+    if (this.intMaskBits & 2) this.intPending |= 1 << 1; // VSYNC, source 1
     this.frame++;
     return this;
   }
+
+  insertDisk(unit, disk) { this.sub?.insertDisk(unit, disk); return this; }
+  ejectDisk(unit) { this.sub?.ejectDisk(unit); return this; }
 
   update(dt) {
     this._acc = (this._acc ?? 0) + dt;
