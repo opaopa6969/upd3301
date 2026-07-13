@@ -131,24 +131,32 @@ export class CrtTube {
         }
         this.lutVig[i] = Math.max(0, 1 - vignette * r2 * r2);
 
-        // mask pattern
+        // mask pattern — area-sampled, not point-sampled: one output pixel
+        // spans [a, b) in stripe units (period 3, one unit per gun), and
+        // each gun's transmission comes from how much of the pixel lies on
+        // its stripe. Point sampling skips whole stripes when pitch < 3
+        // (a 2px pitch never lands on phase 2 → blue dies → yellow cast).
         let mr = 1, mg = 1, mb = 1;
         if (mask === 'aperture' || mask === 'slot' || mask === 'shadow') {
-          let phase;
-          if (mask === 'shadow') {
-            // delta triads: odd triad rows offset by half a period
-            const rowBand = Math.floor(y / maskPitch);
-            phase = Math.floor((x + (rowBand % 2) * (maskPitch / 2)) / (maskPitch / 3)) % 3;
-          } else {
-            phase = Math.floor(x / (maskPitch / 3)) % 3;
+          const stagger = mask === 'shadow'
+            ? (Math.floor(y / maskPitch) % 2) * (maskPitch / 2) : 0;
+          const a = (x + stagger) * 3 / maskPitch;
+          const b = (x + stagger + 1) * 3 / maskPitch;
+          const cov = [0, 0, 0];
+          for (let k = Math.floor(a / 3) - 1; k * 3 < b; k++) {
+            for (let c = 0; c < 3; c++) {
+              const lo = Math.max(a, k * 3 + c), hi = Math.min(b, k * 3 + c + 1);
+              if (hi > lo) cov[c] += hi - lo;
+            }
           }
-          mr = phase === 0 ? 1 : maskLeak;
-          mg = phase === 1 ? 1 : maskLeak;
-          mb = phase === 2 ? 1 : maskLeak;
+          const len = b - a;
+          mr = maskLeak + (1 - maskLeak) * cov[0] / len;
+          mg = maskLeak + (1 - maskLeak) * cov[1] / len;
+          mb = maskLeak + (1 - maskLeak) * cov[2] / len;
           if (mask === 'slot' || mask === 'shadow') {
             // dark horizontal gaps between slots/dots, staggered by column
-            const stagger = (Math.floor(x / maskPitch) % 2) * ((maskPitch * 2) >> 1);
-            if ((y + stagger) % (maskPitch * 2) === 0) { mr *= 0.35; mg *= 0.35; mb *= 0.35; }
+            const colStagger = (Math.floor(x / maskPitch) % 2) * ((maskPitch * 2) >> 1);
+            if ((y + colStagger) % (maskPitch * 2) === 0) { mr *= 0.35; mg *= 0.35; mb *= 0.35; }
           }
         }
         this.maskR[i] = mr * gain;

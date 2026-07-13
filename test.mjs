@@ -683,3 +683,27 @@ test('semivideo: black frame → dark cells; gray → dithered density', async (
   const g2 = rgbaToSemigraphic(gray, W, H);
   assert.deepEqual(g.codes, g2.codes, 'ordered dither is deterministic');
 });
+
+test('mask: any pitch keeps color balance (no yellow cast at pitch 2)', async () => {
+  const { CrtTube } = await import('./tube.js');
+  const W = 60, H = 6;
+  for (const pitch of [2, 3, 4, 5, 7]) {
+    const tube = new CrtTube({
+      srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
+      mask: 'aperture', maskPitch: pitch, maskLeak: 0.1,
+      barrel: 0, ghost: 0, vignette: 0, beamWidth: 0, edgeDefocus: 0, convergence: 0,
+    });
+    const flat = new Float32Array(W * H).fill(0.4);
+    const rgba = tube.apply([flat, flat, flat], null, { gamma: 1 });
+    let r = 0, g = 0, b = 0;
+    for (let x = 0; x < W; x++) {
+      const o = (3 * W + x) * 4;
+      r += rgba[o]; g += rgba[o + 1]; b += rgba[o + 2];
+    }
+    const mean = (r + g + b) / 3;
+    for (const [name, v] of [['R', r], ['G', g], ['B', b]]) {
+      assert.ok(Math.abs(v - mean) / mean < 0.06,
+        `pitch ${pitch}: ${name} balanced (${r}, ${g}, ${b})`);
+    }
+  }
+});
