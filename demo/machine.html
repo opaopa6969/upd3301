@@ -68,26 +68,30 @@ let machine = null, romBytes = null, tubeOn = true;
 // public site none is present (NEC copyright → BYO), so this 404s quietly
 // and the file picker stays. Serve locally with your dump in roms/ to boot
 // on page load.
-const ROM_CANDIDATES = ['../roms/N80.ROM', '../roms/N80_2.ROM', '../roms/8801-N80.ROM', '../roms/N88.ROM'];
-const FONT_CANDIDATES = ['../roms/FONT.ROM', '../roms/FONT80.ROM', '../roms/FONT88.ROM'];
+// roms/manifest.json decides — one request, so a ROM-less deploy (the public
+// site: NEC copyright) doesn't spray 404s across the console.
+// manifest: {"rom": "N80_2.ROM", "font": "FONT88.ROM"}
 async function autoLoad() {
-  for (const url of FONT_CANDIDATES) {
+  let man;
+  try {
+    const r = await fetch('../roms/manifest.json');
+    if (!r.ok) return;
+    man = await r.json();
+  } catch { return; }
+  if (man.font) {
     try {
-      const r = await fetch(url);
-      if (r.ok) { applyFontRom(cgrom, new Uint8Array(await r.arrayBuffer())); break; }
+      const r = await fetch('../roms/' + man.font);
+      if (r.ok) applyFontRom(cgrom, new Uint8Array(await r.arrayBuffer()));
     } catch {}
   }
-  for (const url of ROM_CANDIDATES) {
-    try {
-      const r = await fetch(url);
-      if (r.ok) {
-        romBytes = new Uint8Array(await r.arrayBuffer());
-        guts.textContent = 'auto-loaded ' + url.split('/').pop();
-        boot();
-        return;
-      }
-    } catch {}
-  }
+  if (!man.rom) return;
+  try {
+    const r = await fetch('../roms/' + man.rom);
+    if (!r.ok) return;
+    romBytes = new Uint8Array(await r.arrayBuffer());
+    guts.textContent = 'auto-loaded ' + man.rom;
+    boot();
+  } catch {}
 }
 const phosphor = new CrtPhosphor({ width: 640, height: 200, phosphor: PHOSPHORS.P22 });
 const tube = new CrtTube({ srcWidth: 640, srcHeight: 200, outWidth: 640, outHeight: 400, mask: 'aperture' });
