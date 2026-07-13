@@ -766,3 +766,27 @@ test('V-HOLD: rolling remaps rows and sweeps a dark blanking band', async () => 
   rollScan(src, dst2, W, H, 7, BLANK);
   assert.deepEqual(dst, dst2, 'deterministic');
 });
+
+test('semivideo autoLevels: dark footage stretches to usable density', async () => {
+  const { rgbaToSemigraphic } = await import('./semivideo.js');
+  const W = 32, H = 16;
+  const rgba = new Uint8Array(W * H * 4);
+  // dark gradient: values only span 10..70
+  for (let i = 0; i < W * H; i++) {
+    const v = 10 + ((i % W) / W) * 60;
+    rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = v;
+    rgba[i * 4 + 3] = 255;
+  }
+  const density = (r) => {
+    let lit = 0, total = 0;
+    for (const c of r.codes) for (let b = 0; b < 8; b++) { total++; lit += (c >> b) & 1; }
+    return lit / total;
+  };
+  const flat = density(rgbaToSemigraphic(rgba, W, H));
+  const auto = density(rgbaToSemigraphic(rgba, W, H, { autoLevels: true }));
+  assert.ok(flat < 0.25, `without levels the dark frame is dim (${flat})`);
+  assert.ok(auto > flat * 1.8, `auto levels lift density substantially (${flat} → ${auto})`);
+  assert.ok(auto < 0.75, `but not blown out (${auto})`);
+  const auto2 = density(rgbaToSemigraphic(rgba, W, H, { autoLevels: true }));
+  assert.equal(auto, auto2, 'deterministic');
+});
