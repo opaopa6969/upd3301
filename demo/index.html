@@ -69,6 +69,7 @@
   <label>BARREL <input type="range" id="kbarrel" min="-0.12" max="0.25" step="0.01" value="0.06"></label>
   <label>CONTRAST <input type="range" id="kcontrast" min="0.5" max="1.8" step="0.05" value="1"></label>
   <label>TINT <input type="range" id="ktint" min="-60" max="60" step="1" value="0"></label>
+  <label>V-HOLD <input type="range" id="kvhold" min="-8" max="8" step="0.5" value="0"></label>
 </div>
 <div id="guts"></div>
 <p class="note">
@@ -81,7 +82,7 @@
 </p>
 <script type="module">
 import { Pc8001TextSystem, PC8001 } from '../pc8001.js';
-import { CrtPhosphor, PHOSPHORS, collapseScan } from '../crt.js';
+import { CrtPhosphor, PHOSPHORS, collapseScan, rollScan } from '../crt.js';
 import { CrtTube } from '../tube.js';
 
 // ---- 5x7 font → CGROM ------------------------------------------------
@@ -279,7 +280,7 @@ const phosphor = new CrtPhosphor({ width: 640, height: 200, phosphor: PHOSPHORS.
 let phosName = 'P22';
 let tubeMode = 'aperture'; // 'off' | 'aperture' | 'shadow' | 'slot'
 let interlaced = false;
-const knobs = { focus: 1, hSize: 1, vSize: 1, bright: 1, pitch: 3, conv: 0.0035, barrel: 0.06, contrast: 1, tint: 0 }; // 裏のノブ
+const knobs = { focus: 1, hSize: 1, vSize: 1, bright: 1, pitch: 3, conv: 0.0035, barrel: 0.06, contrast: 1, tint: 0, vhold: 0 }; // 裏のノブ
 const tubes = {};
 function getTube() {
   if (!tubes[tubeMode]) {
@@ -369,13 +370,28 @@ function audioPowerUp() {
 const power = { state: 'on', t: 0 }; // on | closing | off | opening
 const collapseBuf = new Uint8Array(640 * 200);
 const darkBuf = new Uint8Array(640 * 200);
+const rollBuf = new Uint8Array(640 * 200);
+
+// V-HOLD: vertical oscillator detuning → the picture rolls with the VBI
+// band sweeping through; knob back to 0 → sync pulls the frame back in.
+let rollPos = 0;
+function vholdApply(src, dst, height, blank, bpp) {
+  const total = height + blank;
+  if (knobs.vhold !== 0) rollPos = (rollPos + knobs.vhold + total) % total;
+  else if (rollPos !== 0) { // pull-in: ease to the nearest lock point
+    rollPos = rollPos < total / 2 ? rollPos * 0.8 : total - (total - rollPos) * 0.8;
+    if (rollPos < 0.6 || rollPos > total - 0.6) rollPos = 0;
+  }
+  if (rollPos === 0) return src;
+  return rollScan(src, dst, 640, height, Math.round(rollPos) % total, blank, bpp);
+}
 
 function beamPass() {
   sys.crtc.stepFrame();
   const parity = interlaced ? sys.crtc.frame & 1 : null;
   if (power.state === 'on') {
     sys.render({ cgrom, out: idxBuf });
-    phosphor.step(idxBuf, FR, { fieldParity: parity });
+    phosphor.step(vholdApply(idxBuf, rollBuf, 200, 24, 1), FR, { fieldParity: parity });
     return;
   }
   if (power.state === 'off') {
@@ -543,6 +559,7 @@ $('kconv').oninput = (e) => { knobs.conv = +e.target.value; regeo(); };
 $('kbarrel').oninput = (e) => { knobs.barrel = +e.target.value; regeo(); };
 $('kcontrast').oninput = (e) => { knobs.contrast = +e.target.value; };
 $('ktint').oninput = (e) => { knobs.tint = (+e.target.value) * Math.PI / 180; }; // 度→rad、NTSCのTINTつまみ
+$('kvhold').oninput = (e) => { knobs.vhold = +e.target.value; };
 </script>
 </body>
 </html>

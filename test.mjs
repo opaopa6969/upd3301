@@ -745,3 +745,24 @@ test('CONTRAST: mid gray is the pivot, extremes stretch', () => {
   assert.equal(punchy[0], 255, 'bright stays clipped high');
   assert.ok(punchy[4] < flat[4], 'darker pixel pushed further down');
 });
+
+test('V-HOLD: rolling remaps rows and sweeps a dark blanking band', async () => {
+  const { rollScan } = await import('./crt.js');
+  const W = 4, H = 6, BLANK = 2;
+  const src = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) src.fill(y + 1, y * W, (y + 1) * W);
+  const dst = new Uint8Array(W * H);
+  rollScan(src, dst, W, H, 0, BLANK);
+  assert.deepEqual(dst, src, 'offset 0 = locked = identity');
+  rollScan(src, dst, W, H, 2, BLANK);
+  assert.equal(dst[0], 3, 'row 0 shows source row 2');
+  assert.equal(dst[3 * W], 6, 'row 3 shows source row 5');
+  assert.equal(dst[4 * W], 0, 'row 4 is in the blanking band');
+  assert.equal(dst[5 * W], 0, 'row 5 too');
+  rollScan(src, dst, W, H, 7, BLANK); // wraps: 7 % 8 → src row 7 = blank, row1→0...
+  assert.equal(dst[0], 0, 'blank line wrapped to the top');
+  assert.equal(dst[1 * W], 1, 'then the frame starts over');
+  const dst2 = new Uint8Array(W * H);
+  rollScan(src, dst2, W, H, 7, BLANK);
+  assert.deepEqual(dst, dst2, 'deterministic');
+});

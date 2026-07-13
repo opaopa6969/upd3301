@@ -72,6 +72,7 @@
   <label>BARREL <input type="range" id="kbarrel" min="-0.12" max="0.25" step="0.01" value="0.07"></label>
   <label>CONTRAST <input type="range" id="kcontrast" min="0.5" max="1.8" step="0.05" value="1"></label>
   <label>TINT <input type="range" id="ktint" min="-60" max="60" step="1" value="0"></label>
+  <label>V-HOLD <input type="range" id="kvhold" min="-10" max="10" step="0.5" value="0"></label>
 </div>
 <div id="guts"></div>
 <p class="note">
@@ -81,7 +82,7 @@
   P7レーダー管で観る動画、最高だから試して。POWERで偏向崩壊も動く。
 </p>
 <script type="module">
-import { CrtPhosphor, PHOSPHORS } from '../crt.js';
+import { CrtPhosphor, PHOSPHORS, rollScan } from '../crt.js';
 import { CrtTube } from '../tube.js';
 
 const SW = 640, SH = 240;
@@ -114,7 +115,7 @@ const grab = makeGrab(SW, SH);
 
 const phosphor = new CrtPhosphor({ width: SW, height: SH, phosphor: PHOSPHORS.P22 });
 let phosName = 'P22';
-const knobs = { focus: 0.8, hSize: 1, vSize: 1, bright: 1.2, pitch: 3, conv: 0.004, barrel: 0.07, contrast: 1, tint: 0 };
+const knobs = { focus: 0.8, hSize: 1, vSize: 1, bright: 1.2, pitch: 3, conv: 0.004, barrel: 0.07, contrast: 1, tint: 0, vhold: 0 };
 let tubeMode = 'aperture', interlaced = false;
 const tubes = {};
 function getTube() {
@@ -149,6 +150,18 @@ function collapseRGBA(src, dst, hS, vS) {
   }
 }
 const collapseBuf = new Uint8ClampedArray(SW * SH * 4);
+const rollBuf = new Uint8ClampedArray(SW * SH * 4);
+let rollPos = 0;
+function vholdApply(src, dst) {
+  const blank = 28, total = SH + blank;
+  if (knobs.vhold !== 0) rollPos = (rollPos + knobs.vhold + total) % total;
+  else if (rollPos !== 0) {
+    rollPos = rollPos < total / 2 ? rollPos * 0.8 : total - (total - rollPos) * 0.8;
+    if (rollPos < 0.6 || rollPos > total - 0.6) rollPos = 0;
+  }
+  if (rollPos === 0) return src;
+  return rollScan(src, dst, SW, SH, Math.round(rollPos) % total, blank, 4);
+}
 const power = { state: 'on', t: 0 };
 
 function beamPass() {
@@ -158,7 +171,7 @@ function beamPass() {
     frameBuf.set(grab.getImageData(0, 0, SW, SH).data);
   }
   if (power.state === 'on') {
-    phosphor.stepAnalog(frameBuf, FR, { fieldParity: parity });
+    phosphor.stepAnalog(vholdApply(frameBuf, rollBuf), FR, { fieldParity: parity });
     return;
   }
   if (power.state === 'off') { phosphor.stepAnalog(darkBuf, FR); return; }
@@ -299,6 +312,7 @@ $('kconv').oninput = (e) => { knobs.conv = +e.target.value; regeo(); };
 $('kbarrel').oninput = (e) => { knobs.barrel = +e.target.value; regeo(); };
 $('kcontrast').oninput = (e) => { knobs.contrast = +e.target.value; };
 $('ktint').oninput = (e) => { knobs.tint = (+e.target.value) * Math.PI / 180; }; // 度→rad、NTSCのTINTつまみ
+$('kvhold').oninput = (e) => { knobs.vhold = +e.target.value; };
 </script>
 </body>
 </html>
