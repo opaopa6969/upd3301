@@ -180,6 +180,41 @@ for (const [k, el] of Object.entries(geoBtns)) {
   };
 }
 $('brainbow').onclick = () => rainbowTest();
+
+// ---- guided tour -----------------------------------------------------------
+import { mountTourButton } from './tour.js';
+mountTourButton($('gex').parentElement, [
+  { el: null,
+    title: { ja: 'ANSI → 1979年のシリコン', en: 'ANSI → 1979 silicon' },
+    body: {
+      ja: 'このページは「ANSIエスケープシーケンス」を、μPD3301が本当に食べる形式 — 行ごとの<b>(位置, 値)アトリビュートペア</b> — にコンパイルする変換層のデモ。モダンな端末の色付けが、45年前のチップの上で動く。\nツアーはESC・✕・外側クリックでいつでも抜けられるよ。',
+      en: 'This page demos a compiler layer: ANSI escape sequences are compiled into what the μPD3301 actually eats — per-row <b>(position, value) attribute pairs</b>. Modern terminal colors, running on a 45-year-old chip.\nESC, ✕, or an outside click exits any time.' } },
+  { el: '#crt',
+    title: { ja: 'クリックして打つ', en: 'Click & type' },
+    body: {
+      ja: 'キャンバスをクリックしてから打つと入力できる（1979年なので全部大文字になるｗ）。コマンドは <b>help / beer / 3301 / clear</b>。SGR色・反転・点滅・下線・カーソル移動・消去、ひととおりのESCシーケンスが通るよ。',
+      en: 'Click the canvas, then type (it\'s 1979, so everything comes out uppercase). Commands: <b>help / beer / 3301 / clear</b>. SGR colors, reverse, blink, underline, cursor addressing and erase all work.' } },
+  { el: '#gorig',
+    title: { ja: 'ORIGINAL＝実機の制約', en: 'ORIGINAL = the real limit' },
+    body: {
+      ja: '実機のμPD3301は1行に<b>アトリビュート20ペアまで</b>。ORIGINALモードはその制約を忠実に守る。80×25で色を使いすぎると…どうなるかは次のステップで。',
+      en: 'The real μPD3301 allows only <b>20 attribute pairs per row</b>. ORIGINAL mode enforces it faithfully. Overuse color on the 80×25 screen and… see the next step.' } },
+  { el: '#brainbow',
+    title: { ja: '虹テスト＝ペア溢れ実験', en: 'Rainbow test = pair overflow' },
+    body: {
+      ja: 'これを押すと1行に色替えを詰め込みまくる。ORIGINALモードだと21個目以降のペアが<b>脱落して後半の色が消える</b>のが見える — 実機でカラフルにしすぎた画面が右端で色を失う、あの現象の再現だよ。',
+      en: 'This crams color changes into one row. In ORIGINAL mode, pairs beyond the 20th <b>drop and the tail loses its colors</b> — the real-hardware phenomenon where an over-colorful line goes monochrome at the right edge.' } },
+  { el: '#gex',
+    title: { ja: 'EX＝架空のシリコン改版', en: 'EX = fantasy silicon rev' },
+    body: {
+      ja: 'EXモードは「もしNECが改版してたら」の妄想シリコン（resetEx/setChannelEx）。任意の桁×行、全セル独立アトリビュート。100×30や132×40で同じ虹テストを流すと、制約が消えてるのが分かる。',
+      en: 'EX mode is the what-if silicon rev (resetEx / setChannelEx): arbitrary geometry, per-cell attributes. Run the same rainbow test on 100×30 or 132×40 and watch the limit vanish.' } },
+  { el: '#guts',
+    title: { ja: '統計行', en: 'The stats line' },
+    body: {
+      ja: '<b>attrSlots/row</b>＝1行のペア上限、<b>overflowRows</b>＝溢れた行数、scrolls、カーソル位置、フレーム番号。溢れ実験のときはoverflowRowsが増えるのを見て。ちなみに下のサイン波はセミグラAPI（setDot）で描いてある。',
+      en: '<b>attrSlots/row</b> = the per-row pair budget, <b>overflowRows</b> = rows that blew it, scrolls, cursor, frame. Watch overflowRows tick during the rainbow experiment. The sine wave below is drawn via the semigraphic API (setDot), by the way.' } },
+], { storageKey: 'tour-terminal' });
 </script>
 </body>
 </html>

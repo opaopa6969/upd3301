@@ -55,6 +55,7 @@
 </div>
 <div class="row">
   <input type="file" id="file" accept="video/*">
+  <button id="bsample">▶ サンプル</button>
   <button id="bcam">Webカメラ</button>
   <button id="brec">⏺ 録画</button>
 </div>
@@ -362,6 +363,15 @@ $('file').onchange = (e) => {
   video.load();
   tryPlay();
 };
+// self-made test clip served next to the page (no upload needed). A YouTube
+// URL cannot be used directly: the browser blocks cross-origin media reads.
+$('bsample').onclick = () => {
+  say('loading sample.mp4 ...');
+  video.srcObject = null;
+  video.src = 'sample.mp4';
+  video.load();
+  tryPlay();
+};
 $('bcam').onclick = async () => {
   try {
     video.removeAttribute('src');
@@ -564,6 +574,71 @@ $('cghost').onchange = (e) => {
   knobs.ghost = e.target.checked ? 0.07 : 0; // inner-glass reflection off = modern AR-coated fantasy
   for (const tb of [...Object.values(tubes), ...Object.values(tubes98)]) tb.ghost = knobs.ghost;
 };
+
+// ---- guided tour -----------------------------------------------------------
+import { mountTourButton } from './tour.js';
+mountTourButton($('brec').parentElement, [
+  { el: null,
+    title: { ja: '動画 → セミグラフィック', en: 'Video → semigraphics' },
+    body: {
+      ja: '1979年のPC-8001には「セミグラフィック」＝文字セルを<b>2×4のドット</b>に割る疑似グラフィックがあった。ルマ（明るさ）はそのドット格子、クロマ（色）は<b>1セル1色</b> — この制約で現代の動画を観るのがこのページ。ZX SpectrumやMSX1と同じ「アトリビュートクラッシュ」の美学だよ。\nESC・✕・外側クリックでいつでも抜けられる。',
+      en: 'The 1979 PC-8001 had "semigraphics": each text cell splits into a <b>2×4 dot grid</b>. Luma lives on the dots, chroma is <b>one color per cell</b> — and this page watches modern video through that constraint. The same attribute-clash aesthetic as the ZX Spectrum and MSX1.\nESC, ✕, or an outside click exits any time.' } },
+  { el: '#file',
+    title: { ja: '動画を入れる', en: 'Feed it video' },
+    body: {
+      ja: '手持ちの動画ファイルを選ぶか、隣の「Webカメラ」で自分をセミグラ化。データはどこにも送られない、全部ブラウザ内で変換してるよ。',
+      en: 'Pick a local video file, or hit "Webcam" and semigraphic yourself. Nothing is uploaded — the conversion is all in-browser.' } },
+  { el: '#gex',
+    title: { ja: '画面ジオメトリ3種', en: 'Three geometries' },
+    body: {
+      ja: '<b>ORIGINAL 80×25</b>＝実機。1行に色替え20回まで、という3301の制約が効く。<b>EX 160×50</b>＝架空のシリコン改版で全セルに色が置ける。<b>UEX 320×100</b>＝640×400ドット、64KBを超える架空RAM＋DMAC拡張が要る大画面（管ONだと重い）。',
+      en: '<b>ORIGINAL 80×25</b> = the real machine, with the 3301\'s 20-color-changes-per-row limit biting. <b>EX 160×50</b> = a fantasy silicon rev with per-cell color. <b>UEX 320×100</b> = 640×400 dots, needing fantasy RAM beyond 64KB (heavy with the tube on).' } },
+  { el: '#mdither',
+    title: { ja: 'ディザ変換', en: 'Dither mode' },
+    body: {
+      ja: '基本形。輝度をBayer行列で2値化してドットに落とし、セルごとに支配色を1色選ぶ。新聞の網点写真と同じ原理を、電子ビームでやってる感じ。',
+      en: 'The baseline: luma is Bayer-dithered onto the dot grid, and each cell gets its one dominant color. Newspaper halftone logic, executed by an electron beam.' } },
+  { el: '#mline',
+    title: { ja: '線画（アニメ向け）', en: 'Line art (for anime)' },
+    body: {
+      ja: 'アニメはフラットな塗り＝<b>領域の境界がそのまま線</b>。チャネル別に領域境界を検出して線だけ描く。ベタ塗りの映像で試すと気持ちいいよ。GAINで線の拾い方が変わる。',
+      en: 'Anime is flat fills — <b>region boundaries ARE the lines</b>. This detects boundaries per channel and draws only them. Feed it cel-style footage. GAIN tunes edge pickup.' } },
+  { el: '#m98',
+    title: { ja: '98風とフルカラー', en: "'98-style & full color" },
+    body: {
+      ja: '<b>98風</b>＝PC-9801の「512色中16色」パレット感を時間ディザ（FRC）で再現。<b>フルカラーディザ</b>＝各ドットを512色キューブへ。どちらもセル制約を捨てた「if歴史」モード — 実機の枠と見比べるための対照実験だよ。',
+      en: "<b>'98-style</b> = the PC-9801's 16-of-512 palette feel via temporal dither (FRC). <b>Full-color dither</b> = every dot into the 512 cube. Both drop the cell constraint — alternate-history modes to contrast against the real limits." } },
+  { el: '#sbayer',
+    title: { ja: '紋様（スクリーン）', en: 'Screen patterns' },
+    body: {
+      ja: 'ディザの並べ方: <b>分散(Bayer)</b>＝均一でデジタルな質感、<b>網点</b>＝印刷のハーフトーン（雑誌のグラビア感）、<b>ライン</b>＝線スクリーン。同じ情報量でも紋様で全然違う絵になる。',
+      en: 'How the dither is arranged: <b>dispersed (Bayer)</b> = even, digital; <b>halftone</b> = print-style dots (magazine gravure vibes); <b>line screen</b>. Same information, wildly different texture.' } },
+  { el: '#bauto',
+    title: { ja: '動的2値化とGAIN', en: 'Dynamic binarization & GAIN' },
+    body: {
+      ja: '毎フレーム、輝度の2%〜98%パーセンタイルへレベルをストレッチしてからディザする自動レベル補正。暗いシーンでも潰れない。切ってGAINだけで追い込む手動派プレイも可。',
+      en: 'Every frame, levels are stretched to the 2%–98% luma percentiles before dithering — dark scenes survive. Turn it off and ride GAIN by hand if you prefer.' } },
+  { el: '#b27',
+    title: { ja: '27色/512色ちらつき', en: '27/512-color flicker' },
+    body: {
+      ja: '時間ディザ（FRC）: 各ガンを3値化して中間レベルを1フレーム交互に点滅させると、8色が<b>27色</b>に見える（512色版は8値）。短残光P22だとチカチカするから、<b>長残光</b>蛍光体と組み合わせて見るのが正解 — ステータス行にも警告が出るよ。',
+      en: 'Temporal dither (FRC): quantize each gun to 3 levels and blink the middle one on alternate frames — 8 colors read as <b>27</b> (the 512 version uses 8 levels). On short-persistence P22 it flickers; pair it with a <b>long-persistence</b> phosphor. The status line warns you.' } },
+  { el: '#pP22',
+    title: { ja: '蛍光体と管', en: 'Phosphor & tube' },
+    body: {
+      ja: '蛍光体は「管の属性」であって映像モードの属性じゃない、がこのスイートの流儀 — モードが勝手に差し替えたりしない。P39緑やアンバーのセミグラ動画、渋いよ。管マスクやノブは下の段で。',
+      en: 'House rule: the phosphor belongs to the TUBE, not to the content — no mode swaps it behind your back. Semigraphic video on P39 green or amber is deeply moody. Masks and knobs are on the rows below.' } },
+  { el: '#brec',
+    title: { ja: '録画とBEEP音声', en: 'Recording & BEEP audio' },
+    body: {
+      ja: '画面をそのままMP4/WebMに録画できる（動画の終端で自動停止）。再生バーの<b>BEEP</b>を入れると音声が1bit矩形波化 — サウンドトラックまるごと port <b>40h</b> のBEEPファミリーになるｗ',
+      en: 'Records the canvas straight to MP4/WebM (auto-stops at the video\'s end). Check <b>BEEP</b> on the playback bar and the soundtrack collapses to a 1-bit square wave — the whole score becomes the port <b>40h</b> BEEP family.' } },
+  { el: '#bfull',
+    title: { ja: '全画面と重さ', en: 'Fullscreen & cost' },
+    body: {
+      ja: '⛶で全画面。ステータス行の<b>ms/frame</b>が24を超えたら、物理OFF・ORIGINALモード・FOCUS 0あたりで軽くして。UEX＋管ONは正直重い。',
+      en: 'Go fullscreen with ⛶. If <b>ms/frame</b> on the status line passes 24, lighten up: physics OFF, ORIGINAL mode, or FOCUS 0. UEX with the tube on is honestly heavy.' } },
+], { storageKey: 'tour-video' });
 </script>
 </body>
 </html>

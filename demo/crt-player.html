@@ -55,6 +55,7 @@
 </div>
 <div class="row">
   <input type="file" id="file" accept="video/*">
+  <button id="bsample">▶ サンプル</button>
   <button id="bcam">Webカメラ</button>
   <button id="bpower" class="on">POWER</button>
   <button id="brec">⏺ 録画</button>
@@ -272,6 +273,13 @@ $('file').onchange = (e) => {
   video.load();
   tryPlay();
 };
+$('bsample').onclick = () => {
+  say('loading sample.mp4 ...');
+  video.srcObject = null;
+  video.src = 'sample.mp4';
+  video.load();
+  tryPlay();
+};
 $('bcam').onclick = async () => {
   try {
     video.removeAttribute('src');
@@ -433,6 +441,56 @@ $('cghost').onchange = (e) => {
   knobs.ghost = e.target.checked ? 0.07 : 0; // inner-glass reflection off = modern AR-coated fantasy
   for (const tb of Object.values(tubes)) tb.ghost = knobs.ghost;
 };
+
+// ---- guided tour -----------------------------------------------------------
+import { mountTourButton } from './tour.js';
+mountTourButton($('brec').parentElement, [
+  { el: null,
+    title: { ja: 'なんでもブラウン管', en: 'Anything on a cathode-ray tube' },
+    body: {
+      ja: 'このページ、実はμPD3301を<b>使ってない</b>ｗ 蛍光体物理（crt.js）と管物理（tube.js）だけを取り出して、手持ちの動画をアナログ駆動（sRGB→リニア化→励起）でブラウン管に映すプレイヤーだよ。\nツアーはESC・✕・外側クリックでいつでも抜けられる。',
+      en: 'Confession: this page uses <b>no μPD3301 at all</b>. It takes just the phosphor physics (crt.js) and tube physics (tube.js) and drives them with your video via analog drive (sRGB linearized into excitation).\nESC, ✕, or an outside click exits the tour any time.' } },
+  { el: '#file',
+    title: { ja: '動画を選ぶ', en: 'Pick a video' },
+    body: {
+      ja: '動画ファイルを選ぶか「Webカメラ」で自分をブラウン管に。全部ブラウザ内で処理されて、どこにも送信されないよ。',
+      en: 'Choose a video file, or "Webcam" to put yourself on the tube. Everything stays in the browser — nothing is uploaded.' } },
+  { el: '#vbar',
+    title: { ja: '再生バー', en: 'The playback bar' },
+    body: {
+      ja: '⏯・シーク・音量はふつうの動画プレイヤー。<b>BEEP</b>チェックが曲者で、音声をコンパレータで1bit矩形波化する — PC-8001の port <b>40h</b> BEEPしか鳴らない世界で映画を観る音になるｗ',
+      en: 'Play/seek/volume are a normal player. The <b>BEEP</b> checkbox is the fun one: it comparator-squashes the audio to a 1-bit square wave — the sound of watching a film in a world with only the PC-8001\'s port <b>40h</b> BEEP.' } },
+  { el: '#pP22',
+    title: { ja: '蛍光体を替える', en: 'Swap the phosphor' },
+    body: {
+      ja: '<b>P22</b>＝普通のカラーTV。<b>P39緑</b>・<b>アンバー</b>＝モノクロ端末。そして<b>P7</b> — レーダー用の2層蛍光体（青の閃光＋黄緑の長い残光）で観る動画は最高だから絶対試して。「焼き付き」を入れると映像が管に焼き込まれていくのも見える（加速してある）。',
+      en: '<b>P22</b> = ordinary color TV. <b>P39 green</b> / <b>amber</b> = mono terminals. And <b>P7</b> — the two-layer radar phosphor (blue flash + long yellow-green afterglow) is THE way to watch a movie here, trust me. Enable burn-in to watch the image etch itself into the glass (accelerated).' } },
+  { el: '#taperture',
+    title: { ja: 'マスクとインターレース', en: 'Masks & interlace' },
+    body: {
+      ja: '<b>グリル</b>（トリニトロン縦縞）/<b>シャドウ</b>（丸穴）/<b>スロット</b>（家庭用TV）でブラウン管の顔が変わる。<b>インターレース</b>は2フィールド1組で同じソースフレームを使う2:2プルダウン — 映画・アニメの正しい挙動。<b>400ライン</b>で走査線の隙間が詰まる。',
+      en: '<b>Grille</b> (Trinitron stripes) / <b>shadow</b> (dots) / <b>slot</b> (home TV) each give the tube a different face. <b>Interlace</b> does 2:2 pulldown — both fields of a pair from one source frame, the film/anime-correct behavior. <b>400-line</b> closes the scanline gaps.' } },
+  { el: '#kfocus',
+    title: { ja: 'ノブで壊す', en: 'Abuse the knobs' },
+    body: {
+      ja: '<b>FOCUS</b>を甘くするとVHS感、<b>V-HOLD</b>を回すと同期が外れて画面が暴れながら回る（0に戻すと引き込まれる）、<b>TINT</b>はNTSCの色相ずれ、<b>BARREL</b>で樽型歪み。実家のテレビの裏をいじってた、あの感覚。',
+      en: 'Soften <b>FOCUS</b> for VHS vibes; detune <b>V-HOLD</b> and the picture rolls violently until you re-center it and sync pulls it back; <b>TINT</b> is the NTSC hue error; <b>BARREL</b> bends the glass. Exactly like reaching behind the family TV.' } },
+  { el: '#bpower',
+    title: { ja: 'POWER', en: 'POWER' },
+    body: {
+      ja: '切ると偏向が崩壊して、縦潰れ→<b>輝線</b>→<b>輝点</b>→残光だけ、という本物の消灯シーケンス。長残光蛍光体だと消したあともしばらく像が浮かんでる。',
+      en: 'Cut it and deflection collapses: vertical squash → <b>bright line</b> → <b>dot</b> → afterglow, the genuine shutdown ritual. On long-persistence phosphors the image ghosts on after the power is gone.' } },
+  { el: '#brec',
+    title: { ja: '録画して持ち帰る', en: 'Record & keep it' },
+    body: {
+      ja: 'このブラウン管ごとMP4（無理ならWebM）に録画。動画の終端で自動停止して保存される。BEEP音声も一緒に録れるよ。',
+      en: 'Record the whole tube to MP4 (WebM fallback). It auto-stops and saves at the video\'s end. The BEEP audio gets recorded too.' } },
+  { el: '#bfull',
+    title: { ja: '全画面で映画館', en: 'Fullscreen cinema' },
+    body: {
+      ja: '⛶で全画面 — バーは自動で隠れる。重かったら（ms/frame注意）物理OFFかFOCUS 0で軽くなる。P7レーダー管＋映画、ぜひ。',
+      en: '⛶ goes fullscreen; the bar auto-hides. If it chugs (watch ms/frame), physics OFF or FOCUS 0 lightens it. P7 radar tube + a film: highly recommended.' } },
+], { storageKey: 'tour-player' });
 </script>
 </body>
 </html>

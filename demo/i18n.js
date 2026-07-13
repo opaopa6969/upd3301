@@ -100,6 +100,13 @@ const DICT = {
   'MP4を保存した': 'saved MP4',
   'WebMを保存した（MP4化: ffmpeg -i in.webm out.mp4）': 'saved WebM (to MP4: ffmpeg -i in.webm out.mp4)',
   '録画非対応のブラウザ': 'this browser cannot record',
+  // tour / help chrome (tour.js)
+  '次へ': 'Next',
+  '▶ サンプル': '▶ Sample',
+  '前へ': 'Back',
+  '完了': 'Done',
+  '？ツアー': '? Tour',
+  '⌨ キー配置': '⌨ Key map',
   // rhythm
   'デモパターン': 'Demo pattern',
   'クリア': 'Clear',

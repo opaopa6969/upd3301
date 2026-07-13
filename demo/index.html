@@ -595,6 +595,76 @@ $('cghost').onchange = (e) => {
   knobs.ghost = e.target.checked ? 0.07 : 0; // inner-glass reflection off = modern AR-coated fantasy
   for (const tb of Object.values(tubes)) tb.ghost = knobs.ghost;
 };
+
+// ---- guided tour ---------------------------------------------------------
+import { mountTourButton } from './tour.js';
+mountTourButton(document.querySelector('.row'), [
+  { el: null,
+    title: { ja: 'ようこそ、μPD3301デモへ', en: 'Welcome to the μPD3301 demo' },
+    body: {
+      ja: 'これは NEC <b>μPD3301</b>（CRTコントローラ）＋<b>μPD8257</b>（DMAコントローラ）のチップエミュレータ。PC-8001が文字を画面に出す道筋 — VRAM→DMA→CRTC→蛍光体→ブラウン管 — を丸ごと再現してるよ。\nツアーは <b>ESC</b>・✕・外側クリックのどれでもすぐ抜けられるから安心して。',
+      en: 'This is a chip-level emulator of the NEC <b>μPD3301</b> (CRT controller) + <b>μPD8257</b> (DMA controller) — the whole path the PC-8001 uses to put text on glass: VRAM → DMA → CRTC → phosphor → tube.\nYou can bail out any time: <b>ESC</b>, the ✕, or a click outside.' } },
+  { el: '#crt',
+    title: { ja: 'この画面が最終出力', en: 'The screen itself' },
+    body: {
+      ja: '毎フレーム、μPD8257がVRAMから約3000バイトを運び、μPD3301が文字コードとアトリビュートを展開する。その電子ビームの結果がこれ。下のステータス行にDMAのアドレスとカウントがリアルタイムで出てるよ。',
+      en: 'Every frame the μPD8257 hauls ~3000 bytes out of VRAM and the μPD3301 expands character codes + attributes. This is the resulting electron beam. The status line below shows the live DMA address and count.' } },
+  { el: '#mtext',
+    title: { ja: 'デモ切替とアトリビュート', en: 'Demo modes & attributes' },
+    body: {
+      ja: 'テキスト80桁/40桁がベース。画面の色・反転・点滅・下線・秘匿は「アトリビュート」＝行ごとの<b>(位置, 値)ペア</b>で持つのが3301流。1行に20ペアまで、という実機の制約がPC-8001の画づくりを決めてた。',
+      en: '80/40-column text is the baseline. Color, reverse, blink, underline, secret are "attributes" — per-row <b>(position, value) pairs</b>, the 3301 way. The real chip allows only 20 pairs per row, and that limit shaped every PC-8001 screen.' } },
+  { el: '#m27',
+    title: { ja: '27色 — DMA 2画面の技', en: '27 colors — the two-screen DMA trick' },
+    body: {
+      ja: '8色しか出ないはずのマシンで27色。port <b>65h</b> に2画面分（8000h+5999）のDMAを仕込み、2画面を毎フレーム交互表示 → 目の中で混ざって 3×3×3=27色に見える。ベーマガ1990年7月号に載った実機の技だよ。',
+      en: '27 colors on an 8-color machine: program port <b>65h</b> with a two-screen DMA block (8000h+5999) so two screens alternate every frame — your eye mixes them into 3×3×3 = 27 colors. A real trick from Bemaga 1990-07.' } },
+  { el: '#mplanes',
+    title: { ja: 'RGB 3プレーン — DMA 3画面', en: 'RGB 3-plane — three screens by DMA' },
+    body: {
+      ja: 'さらに欲張って3画面をR・G・Bプレーンとして1フレームずつ回すと、論理的にはドット単位フルカラー。ただし各色のデューティは1/3で暗い。短残光P22だとフリッカー地獄、<b>長残光</b>蛍光体なら残光が暗いフレームを橋渡しして安定する — 物理層の出番。',
+      en: 'Greedier still: cycle three screens as R/G/B planes, one per frame — logically full per-dot color, but each gun only gets 1/3 duty. On short-persistence P22 it is flicker hell; a <b>long-persistence</b> phosphor bridges the dark frames. That is the physics layer earning its keep.' } },
+  { el: '#bglitch',
+    title: { ja: 'OUT &H51 の事故', en: 'The OUT &H51 accident' },
+    body: {
+      ja: '表示中にCRTCへコマンドを撃つとDMAの行フレーミングがズレて、文字がアトリビュートに化ける伝説の事故。ASCIIを色として読むとGRBの1〜3にしかならないから、化けた画面は必ず<b>青・紫・赤</b>系になる — あの色には理由があったんだよ。もう一回押すとさらにズレる。',
+      en: 'Fire a CRTC command mid-display and the DMA row framing slips — characters get read as attributes. ASCII interpreted as color can only yield GRB 1–3, which is why the legendary garbage is always <b>blue/magenta/red</b>. Press again to slip further.' } },
+  { el: '#fmnone',
+    title: { ja: 'FONT改造（ピンショート）', en: 'Font mods (pin shorts)' },
+    body: {
+      ja: 'CGROM（フォントROM）の出力ピン2本をハンダでショートさせると、ビット列がwired-ORになって縦線が太る — ドライバー時代の実在フォント改造ごっこ。実機から吸い出した<b>FONT.ROM</b>（2KB）を読ませれば本物の字形にもなるよ。',
+      en: 'Short two output pins of the CGROM and the bit columns wire-OR together — vertical strokes fatten. A real screwdriver-era font mod. Drop in a dumped 2KB <b>FONT.ROM</b> to get the genuine glyphs.' } },
+  { el: '#pP22',
+    title: { ja: '蛍光体を選ぶ', en: 'Pick a phosphor' },
+    body: {
+      ja: '<b>P22</b>＝普通のカラーTV蛍光体（青が先に劣化する）。<b>P39</b>＝緑モノクロ長残光、<b>P7</b>＝レーダー用の2層蛍光体（青い閃光＋黄緑の長い残光）、<b>アンバー</b>＝端末の琥珀色。残光の減衰カーブはcrt.jsがガン別に物理計算してる。「焼き付き」は加速モードで見られるよ。',
+      en: '<b>P22</b> = ordinary color-TV phosphor (blue dies first). <b>P39</b> = long-persistence green mono, <b>P7</b> = the two-layer radar phosphor (blue flash + long yellow-green glow), <b>Amber</b> = terminal amber. crt.js computes per-gun decay physically. "Burn-in" is accelerated so you can watch it happen.' } },
+  { el: '#taperture',
+    title: { ja: 'マスク3種と管', en: 'Three masks & the tube' },
+    body: {
+      ja: '色を分けるシャドウ構造の違い: <b>アパーチャグリル</b>＝トリニトロンの縦縞、<b>シャドウマスク</b>＝丸穴の千鳥、<b>スロットマスク</b>＝家庭用TVの縦長穴。「物理OFF」にすると管を通す前の素の画が見えるから比較してみて。インターレースと15kHzの音鳴り（フライバックトランスの歌）もここ。',
+      en: 'How the tube separates colors: <b>aperture grille</b> = Trinitron stripes, <b>shadow mask</b> = staggered dots, <b>slot mask</b> = home-TV slots. "Physics OFF" shows the raw image before the tube — compare! Interlace and the 15 kHz whine (the flyback transformer\'s song) live here too.' } },
+  { el: '#bpower',
+    title: { ja: 'POWER — 偏向崩壊', en: 'POWER — deflection collapse' },
+    body: {
+      ja: '切ると偏向コイルの磁界が抜けて、画面がまず縦に潰れて<b>輝線</b>→<b>輝点</b>→残光だけ、という実物の消え方をする。音鳴りONならフライバックの音程も一緒に落ちていくよ。もちろん点け直せば復活。',
+      en: 'Power off and the deflection field dies: the raster collapses vertically into a <b>bright line</b>, then a <b>dot</b>, then just afterglow — exactly how a real tube dies. With the whine on, the flyback pitch slides off a cliff too.' } },
+  { el: '#kfocus',
+    title: { ja: '裏のノブ', en: 'The rear knobs' },
+    body: {
+      ja: '実機の裏にあった調整穴たち。<b>FOCUS</b>＝ビームスポット径、<b>V-HOLD</b>＝垂直同期（回すと画面がぐるぐる回る！戻すと引き込まれて止まる）、<b>CONV</b>＝RGB収束ずれ、<b>BARREL</b>＝樽型歪み、<b>PITCH</b>＝マスクの目の細かさ、<b>TINT</b>＝NTSCの色相つまみ。全部触って壊れないから遊んで。',
+      en: 'The adjustment holes on the back of a real set. <b>FOCUS</b> = beam spot size, <b>V-HOLD</b> = vertical sync (detune it and the picture rolls! center it and sync pulls it back), <b>CONV</b> = RGB convergence error, <b>BARREL</b> = barrel distortion, <b>PITCH</b> = mask pitch, <b>TINT</b> = the NTSC hue knob. Nothing breaks — play.' } },
+  { el: '#b400',
+    title: { ja: '200ライン / 400ライン', en: '200 vs 400 lines' },
+    body: {
+      ja: 'PC-8001は200ライン＝走査線の間に黒いガラスが見える時代。<b>400ライン</b>にすると線が詰まって隙間が消える（PC-8801 mkII SR以降の高解像度感）。水平同期も15kHz→24kHzに上がるから、音鳴りONだと音程が変わるのが聞こえるよ。',
+      en: 'The PC-8001 was a 200-line machine — real black glass between scanlines. <b>400-line</b> packs the traces solid (the PC-8801mkIISR-era hi-res look). Horizontal sync rises 15 kHz → 24 kHz; with the whine on you can hear the pitch change.' } },
+  { el: null,
+    title: { ja: 'ここから先は', en: 'Where to next' },
+    body: {
+      ja: '上のリンクから他のデモへ: ANSIエスケープを3301のペアにコンパイルする<b>ターミナル</b>、動画をセミグラで観る<b>動画セミグラ</b>、Z80＋ROMで本当に動く<b>PC-8001実機</b>、などなど。ツアーは「？ツアー」ボタンでいつでも再開できるよ。',
+      en: 'The links up top lead onward: the <b>terminal</b> that compiles ANSI escapes into 3301 pairs, <b>semigraphic video</b>, the <b>full PC-8001 machine</b> running a Z80 + ROM, and more. Restart this tour anytime with the "? Tour" button.' } },
+], { storageKey: 'tour-index' });
 </script>
 </body>
 </html>

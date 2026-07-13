@@ -221,6 +221,16 @@ const KEY = {
   Enter: [1, 7], ' ': [9, 6], Escape: [9, 0],
   Shift: [8, 6], Control: [8, 7],
   ArrowUp: [8, 1], ArrowRight: [8, 2], Backspace: [8, 3],
+  // row 8 は特殊キー段: bit0 CLR/HOME, bit1 ↑, bit2 →, bit3 DEL/INS,
+  // bit4 GRPH, bit5 カナ, bit6 SHIFT, bit7 CTRL。既存の Shift[8,6] /
+  // Control[8,7] / ↑[8,1] / →[8,2] / Backspace(DEL)[8,3] の並びと実機の
+  // I/Oマップ(port 08h)が一致するので、残る bit4/bit5 が GRPH とカナ。
+  // GRPH はブラウザの Alt に割当（GRPH+英字で罫線などの図形文字が打てる）。
+  Alt: [8, 4], AltGraph: [8, 4],                 // GRPH
+  KanaMode: [8, 5], HiraganaKatakana: [8, 5],    // カナ（ブラウザ依存・実験的）
+  Home: [8, 0],                                  // CLR/HOME
+  // row 9: bit0 STOP（上の Escape がこれ）, bit1-5 F1-F5, bit6 SPACE, bit7 ESC
+  F1: [9, 1], F2: [9, 2], F3: [9, 3], F4: [9, 4], F5: [9, 5],
 };
 function matrixKey(e) {
   if (KEY[e.key] !== undefined) return KEY[e.key];
@@ -280,6 +290,134 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
+
+// ---- keyboard help (matrix nameplate × what this page actually maps) ------
+import { mountTourButton, showModal } from './tour.js';
+import { lang, t as tt } from './i18n.js';
+
+// the real PC-8001 matrix, row (port 00h-09h) × bit — what each crossing IS
+const MATRIX = [
+  ['0', '1', '2', '3', '4', '5', '6', '7'],            // row 0: tenkey
+  ['8', '9', '*', '+', '=', ',', '.', 'RET'],          // row 1: tenkey + RETURN
+  ['@', 'A', 'B', 'C', 'D', 'E', 'F', 'G'],
+  ['H', 'I', 'J', 'K', 'L', 'M', 'N', 'O'],
+  ['P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W'],
+  ['X', 'Y', 'Z', '[', '\\', ']', '^', '-'],
+  ['0', '1', '2', '3', '4', '5', '6', '7'],
+  ['8', '9', ':', ';', ',', '.', '/', '—'],
+  ['CLR', '↑', '→', 'DEL', 'GRPH', 'カナ', 'SHIFT', 'CTRL'],
+  ['STOP', 'F1', 'F2', 'F3', 'F4', 'F5', 'SPACE', 'ESC'],
+];
+const ROW_NOTE = ['テンキー', 'テンキー', '', '', '', '', '数字段', '記号段', '特殊', '特殊'];
+const ROW_NOTE_EN = ['numpad', 'numpad', '', '', '', '', 'digits', 'symbols', 'special', 'special'];
+function keyHelpHtml() {
+  // invert KEY: [row][bit] → the physical (browser) keys that press it
+  const PHYS = { ' ': 'Space', Escape: 'Esc', Control: 'Ctrl', ArrowUp: '↑', ArrowRight: '→',
+    Backspace: 'BS', AltGraph: 'AltGr', KanaMode: 'かなkey', HiraganaKatakana: 'かなkey', Home: 'Home' };
+  const phys = Array.from({ length: 10 }, () => Array.from({ length: 8 }, () => []));
+  for (const [k, [r, b]] of Object.entries(KEY)) {
+    if (r < 10) phys[r][b].push(PHYS[k] ?? (k.length === 1 ? k.toUpperCase() : k));
+  }
+  const ja = lang === 'ja';
+  let h = `<p style="color:#9ab;font-size:12px;margin:0 0 8px">${ja
+    ? 'ROMは port <b>00h-09h</b> を読んでこのマトリクスを走査する（負論理）。各マスは「実機の刻印」＋下段がこのページで割り当てたPCのキー。'
+    : 'The ROM scans this matrix through ports <b>00h-09h</b> (active low). Each cell: the machine\'s legend + (below, dim) the PC key this page maps to it.'}</p>`;
+  h += '<div style="overflow-x:auto"><table style="border-collapse:collapse;font-size:12px">';
+  h += '<tr><th style="padding:3px 8px;color:#778">row</th>';
+  for (let b = 0; b < 8; b++) h += `<th style="padding:3px 8px;color:#778">bit${b}</th>`;
+  h += '<th></th></tr>';
+  for (let r = 0; r < 10; r++) {
+    h += `<tr><td style="padding:3px 8px;color:#778">${r}</td>`;
+    for (let b = 0; b < 8; b++) {
+      const legend = MATRIX[r][b];
+      const p = phys[r][b].join('/');
+      h += `<td style="padding:3px 8px;border:1px solid #2a3140;text-align:center">` +
+        `<span style="color:${p ? '#8fd' : '#556'}">${legend}</span>` +
+        `<br><span style="color:#667;font-size:10px">${p || '·'}</span></td>`;
+    }
+    h += `<td style="padding:3px 8px;color:#556;font-size:11px">${ja ? ROW_NOTE[r] : ROW_NOTE_EN[r]}</td></tr>`;
+  }
+  h += '</table></div>';
+  h += `<p style="color:#9ab;font-size:12px;line-height:1.7;margin:10px 0 0">${ja
+    ? '<b>GRPH</b> は <b>Alt</b> に割当 — 実機では GRPH+英字で罫線などの図形文字が直接打てる遊びがあった（row 8 bit 4。Shift[8,6]/CTRL[8,7]/矢印[8,1-2]と同じ特殊キー段の実機I/Oマップから推定）。' +
+      '<b>STOP</b> は <b>Esc</b>、<b>CLR/HOME</b> は <b>Home</b>、<b>F1-F5</b> はそのままファンクションキー。' +
+      '<b>カナ</b>(row 8 bit 5) はブラウザが KanaMode イベントをくれる環境のみ動く実験的マップ。テンキー段 (row 0-1) は未割当。'
+    : '<b>GRPH</b> is mapped to <b>Alt</b> — on the real machine GRPH+letter typed box-drawing glyphs directly (row 8 bit 4, inferred from the special-key row that already holds Shift[8,6]/CTRL[8,7]/arrows[8,1-2] per the machine\'s I/O map). ' +
+      '<b>STOP</b> = <b>Esc</b>, <b>CLR/HOME</b> = <b>Home</b>, <b>F1-F5</b> = your function keys. ' +
+      '<b>カナ</b> (row 8 bit 5) is experimental — it only works where the browser delivers KanaMode. The tenkey rows (0-1) are unmapped.'}</p>`;
+  return h;
+}
+const bkeys = document.createElement('button');
+bkeys.id = 'bkeys';
+bkeys.textContent = tt('⌨ キー配置');
+bkeys.onclick = () => showModal({
+  title: { ja: 'PC-8001 キーボードマトリクス', en: 'PC-8001 keyboard matrix' },
+  html: keyHelpHtml(),
+});
+$('bfull').parentElement.appendChild(bkeys);
+
+// ---- guided tour -----------------------------------------------------------
+const expandPanel = () => {
+  const body = document.getElementById('crtpanel-body');
+  if (body && body.style.display === 'none') document.getElementById('crtpanel-toggle').click();
+};
+mountTourButton(bkeys.parentElement, [
+  { el: null,
+    title: { ja: 'PC-8001、まるごと', en: 'The whole PC-8001' },
+    body: {
+      ja: 'このページは論理スタックの完成形。<b>Z80</b>が<b>N-BASIC ROM</b>を実行し、<b>μPD8257</b>が毎フレーム3000バイトをDMAで運び、<b>μPD3301</b>がアトリビュートを展開して、蛍光体と管がそれを光にする。\nESC・✕・外側クリックでいつでもツアーを抜けられるよ。',
+      en: 'This page is the full logical stack: a <b>Z80</b> runs the <b>N-BASIC ROM</b>, the <b>μPD8257</b> DMAs 3000 bytes every frame, the <b>μPD3301</b> expands attributes, and the phosphor + tube turn it into light.\nESC, ✕, or a click outside leaves the tour any time.' } },
+  { el: '#from',
+    title: { ja: 'ROMは持ち込み（BYO）', en: 'Bring your own ROM' },
+    body: {
+      ja: 'N-BASICはNECの著作物だから、このリポジトリにはROMを<b>同梱していない</b>。実機から吸い出した N80.ROM 等をここで選ぶと起動する。ローカルで roms/ にダンプを置いて manifest.json を作れば、ページを開くだけで自動ロードされるよ。',
+      en: 'N-BASIC is NEC\'s copyrighted code, so no ROM ships with this repo. Pick your own dump (N80.ROM etc.) here to boot. Served locally with dumps in roms/ + a manifest.json, the page auto-loads on open.' } },
+  { el: '#mach',
+    title: { ja: '機種選択', en: 'Machine picker' },
+    body: {
+      ja: 'roms/manifest.json にある機種の一覧。✓が付いてるのは「N-BASIC起動を確認済み」の機種だけ。PC-8001系とPC-8801系ではROMの配置が違って、まだ解読してないやつはリストに出ない（issue #4）。',
+      en: 'Machines listed in roms/manifest.json. Only entries verified to boot N-BASIC appear (✓). PC-8001 and PC-8801 families lay their ROMs out differently; uncracked layouts stay hidden (issue #4).' } },
+  { el: '#crt',
+    title: { ja: 'クリックしてから打つ', en: 'Click, then type' },
+    body: {
+      ja: 'キー入力はキャンバスに<b>フォーカスがあるとき</b>だけ届く（まずクリック）。キーはPC-8001の<b>キーマトリクス</b>（port 00h-09h、負論理）に変換されて、走査するのはエミュレータじゃなくROM自身。試しに <b>PRINT 3301</b> と打ってみて。ESC＝STOPキーだよ。',
+      en: 'Keys only arrive while the canvas has focus (click it first). Keystrokes become the PC-8001 <b>key matrix</b> (ports 00h-09h, active low) — the ROM itself does the scanning, not the emulator. Try <b>PRINT 3301</b>. ESC = the STOP key.' } },
+  { el: '#bkeys',
+    title: { ja: 'キー配置ヘルプ', en: 'Keyboard help' },
+    body: {
+      ja: 'このボタンで実機マトリクス（行×ビット）とPCキーの対応表が出る。<b>GRPH</b>キーはAltに割り当ててあって、実機だとGRPH+英字で罫線みたいな図形文字が直接打てた。カナ・F1-F5・CLR/HOMEもマップ済み。',
+      en: 'This button shows the matrix (row × bit) versus your PC keys. The <b>GRPH</b> key is on Alt — on real hardware GRPH+letter typed box-drawing glyphs directly. Kana, F1-F5 and CLR/HOME are mapped too.' } },
+  { el: '#mn80',
+    title: { ja: 'N80 / N88 起動モード', en: 'N80 / N88 boot modes' },
+    body: {
+      ja: '<b>N-BASIC (N80)</b>がPC-8001互換の起動。<b>N88-BASIC</b>はPC-8801の上位モードだけど、起動シーケンスがFDDサブCPU（もう1個のZ80！）の返事を待って止まるので今はWIP（issue #4）。',
+      en: '<b>N-BASIC (N80)</b> is the PC-8001-compatible boot. <b>N88-BASIC</b> is the 8801\'s native mode, but its boot stalls waiting for the FDD sub-CPU (a second Z80!) — WIP, issue #4.' } },
+  { el: '#dip1',
+    title: { ja: 'DIPSW', en: 'DIP switches' },
+    body: {
+      ja: '実機の背面ディップスイッチ。ROMが port <b>30h/31h</b> を読んで端子幅・ボーレートなどの設定を知る。16進2桁で自由に変えてリセットしてみて（FF＝全部ON）。',
+      en: 'The rear DIP switches. The ROM reads ports <b>30h/31h</b> to learn terminal width, baud rate and so on. Two hex digits — change them and reset (FF = all on).' } },
+  { el: '#fdisk',
+    title: { ja: '.d88 ディスクイメージ', en: '.d88 disk images' },
+    body: {
+      ja: 'D88イメージをパースしてマウントする。セクタID・記録密度・<b>不良セクタ</b>（コピープロテクトの住処！）まで読んで要約を出すよ。ここから実際にブートするにはFDDサブCPU＋μPD765が要る — それがissue #4/#5。',
+      en: 'Parses and mounts a D88 image — sector IDs, densities, even the <b>bad sectors</b> where copy protection lives, summarized on load. Actually booting from it needs the FDD sub-CPU + μPD765: issues #4/#5.' } },
+  { el: '#breset',
+    title: { ja: 'リセット', en: 'Reset' },
+    body: {
+      ja: 'マシンを作り直してROMの先頭から。BASICのプログラムは消えるけど、CRT設定は残る（別レイヤーだからね）。',
+      en: 'Rebuilds the machine and restarts from the ROM\'s entry. Your BASIC program is gone; the CRT settings survive (they are a different layer).' } },
+  { el: '#crtpanel-body', before: expandPanel,
+    title: { ja: 'CRT設定パネル', en: 'The CRT panel' },
+    body: {
+      ja: '蛍光体・マスク・裏のノブは全デモページ共通のコンポーネント（demo/crt-panel.js）。マシンの邪魔にならないよう普段は畳んであって、状態はlocalStorageに記憶される。長残光P39でBASICを書くと1979年の深夜って感じになるよ。',
+      en: 'Phosphor, mask and rear knobs are one shared component (demo/crt-panel.js), collapsed by default so the machine isn\'t buried under knobs; state persists in localStorage. Writing BASIC on long-persistence P39 feels exactly like 1979 at 2am.' } },
+  { el: '#guts',
+    title: { ja: 'ステータス行', en: 'The status line' },
+    body: {
+      ja: 'ms/frame（重さ）、フレーム番号、<b>pc</b>＝Z80のプログラムカウンタ（動いてる証拠！）、画面ジオメトリ、水平同期周波数。BASICが暴走したらpcが変な場所をぐるぐるするのが見える。',
+      en: 'ms/frame (cost), frame number, <b>pc</b> = the Z80 program counter (proof of life!), geometry, hsync. If BASIC runs away you can watch pc spin somewhere strange.' } },
+], { storageKey: 'tour-machine' });
 </script>
 </body>
 </html>

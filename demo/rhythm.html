@@ -231,6 +231,36 @@ document.addEventListener('keydown', (e) => {
   VOICES[i](ctx().currentTime);
   logOut(i);
 });
+
+// ---- guided tour -----------------------------------------------------------
+import { mountTourButton } from './tour.js';
+mountTourButton(document.getElementById('bclear').parentElement, [
+  { el: null,
+    title: { ja: 'ディスクユニットで刻め', en: 'Groove on the disk unit' },
+    body: {
+      ja: 'PC-8031（PC-8001の外付けFDDユニット）はヘッドシークが<b>異様にうるさくて</b>、当時それをドラム代わりに鳴らして遊ぶ文化があった。このページはそのオマージュ — 機械室の音でリズムを刻むドラムマシンだよ。\nツアーはESC・✕・外側クリックでいつでも抜けられる。',
+      en: 'The PC-8031 (the PC-8001\'s external FDD unit) had an <b>absurdly loud</b> head seek, and people really did drum on it. This page is an homage: a drum machine built from machine-room noises.\nESC, ✕, or an outside click exits any time.' } },
+  { el: '#grid',
+    title: { ja: '16ステップシーケンサ', en: '16-step sequencer' },
+    body: {
+      ja: 'マスをクリックで打ち込み。4トラックの正体は上から <b>FDDシーク</b>（ステッパーの連打＝ガガガッ）、<b>ヘッドロード</b>（ゴトッ）、<b>MOTORリレー</b>（カチッ）、<b>BEEP</b>（2400Hz矩形波）。キック・スネア・ハット・アクセントに聞こえてくるから不思議。',
+      en: 'Click cells to program. The four tracks, top to bottom: <b>FDD seek</b> (stepper pulse train — the grind), <b>head load</b> (thunk), <b>MOTOR relay</b> (click), <b>BEEP</b> (2400 Hz square). Kick, snare, hat, accent — it just works.' } },
+  { el: '#bplay',
+    title: { ja: 'PLAYとBPM', en: 'PLAY & BPM' },
+    body: {
+      ja: '▶で16分音符のループが走る。BPMスライダーはライブ中でも効くよ。まずは隣の「デモパターン」を読み込んで鳴らしてみるのが早い。',
+      en: '▶ starts the 16th-note loop; the BPM slider works live. Quickest start: load the demo pattern next door and press play.' } },
+  { el: '#log',
+    title: { ja: 'OUT命令ログ', en: 'The OUT-instruction log' },
+    body: {
+      ja: '音が鳴るたび、実機で同じ音を出すときの<b>OUT命令</b>が流れる。N-BASICの<b>MOTOR文</b>はカセットリレーを port <b>30h</b> の d3 でカチッと言わせる命令だし、BEEPは port <b>40h</b> の d5。ドラムマシンが同時にI/Oポートの教科書になってる。',
+      en: 'Every hit logs the <b>OUT instruction</b> that makes the same sound on real hardware: N-BASIC\'s <b>MOTOR statement</b> clicks the cassette relay via port <b>30h</b> bit d3; BEEP is port <b>40h</b> bit d5. A drum machine that doubles as an I/O port textbook.' } },
+  { el: '#note-rhythm',
+    title: { ja: '鍵盤代わりのZXCV', en: 'Z X C V as drum pads' },
+    body: {
+      ja: '<b>Z</b>=シーク <b>X</b>=ヘッドロード <b>C</b>=リレー <b>V</b>=BEEP で手叩きもできる。音は全部WebAudioの物理風合成（サンプル再生じゃない）。しかもノイズ源は決定論LCGで、このリポジトリの掟「Math.random禁止」をドラム音まで守ってるｗ',
+      en: 'Play by hand: <b>Z</b> = seek, <b>X</b> = head load, <b>C</b> = relay, <b>V</b> = BEEP. Every sound is WebAudio physics-flavored synthesis, not samples — and the noise source is a deterministic LCG, honoring this repo\'s "no Math.random" law all the way down to the drums.' } },
+], { storageKey: 'tour-rhythm' });
 </script>
 </body>
 </html>
