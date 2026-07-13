@@ -58,11 +58,22 @@ chunk:  ld   b, 250
 - `vstream.net` — **ERC検証済みKiCadネットリスト**（エラー0）
 - `bom.csv` — 部品表
 
-## fabに出すには
+## fabに出すには — もう出せる（ヘッドレス一気通貫済み）
 
-1. `kinet2pcb -i vstream.net -w`（またはKiCadでネットリスト読込）
-2. pcbnewで配置・配線（freeroutingでも可）。2層で余裕
-3. DRC → Gerber出力 → 好きな基板屋へzip
+GUIを一度も開かずに全工程を実行済み：
+
+1. `vstream_netlist.py`（skidl、ERCエラー0）→ `vstream.net`
+2. `make_pcb.py`（pcbnew 6 python）→ 配置済み基板＋自作Picoフット
+   プリント（`vstream.pretty/`）＋外形 → `vstream.kicad_pcb`＋DSN
+3. freerouting 1.9ヘッドレス → `vstream.ses`（4.5秒で配線、最適化+50%）
+4. `ses_import.py` — SESのs式を自前パースして423トラック＋17ビアを注入
+   （KiCad 6単体はImportSpecctraSES不可なので自分がインポータになった）
+   → `vstream-routed.kicad_pcb`、**接続性チェック：未結線0**
+5. Gerber＋Excellonドリル → **`vstream-gerber.zip`** — 今日このまま
+   基板屋が受け取れるファイル
+
+**ただしまだ発注するな**：J1のピン番号がプレースホルダのまま。
+サービスマニュアル照合→手順1-5を再実行（各1コマンド）→発注、の順で。
 
 ## 正直コーナー
 

@@ -59,11 +59,24 @@ rows, u8 fps, then frames of `rows × (cols + 40)` bytes.
 - `vstream.net` — **ERC-checked KiCad netlist** (0 errors)
 - `bom.csv` — bill of materials
 
-## To fab
+## To fab — ALREADY DONE (headless pipeline)
 
-1. `kinet2pcb -i vstream.net -w` (or KiCad: import netlist) → footprints
-2. Place & route in pcbnew (or freerouting), 2-layer is plenty
-3. DRC → `File > Fabrication Outputs > Gerber` → zip to any board house
+This repo now contains the full chain, executed without opening a GUI:
+
+1. `vstream_netlist.py` (skidl, ERC 0 errors) → `vstream.net`
+2. `make_pcb.py` (pcbnew 6 python) → placed board + custom Pico footprint
+   (`vstream.pretty/`) + board outline → `vstream.kicad_pcb` + Specctra DSN
+3. freerouting 1.9 headless → `vstream.ses` (routed in 4.5 s, optimizer +50%)
+4. `ses_import.py` — parses the SES s-expressions and injects 423 track
+   segments + 17 vias (KiCad 6 standalone can't ImportSpecctraSES, so we
+   became the importer) → `vstream-routed.kicad_pcb`,
+   **connectivity check: 0 unconnected**
+5. Gerber + Excellon drill → **`vstream-gerber.zip`** — a board house
+   would accept this file today
+
+**Do not actually order it yet**: J1's pin numbering is still a
+placeholder. Verify against the PC-8001 service manual, re-run steps 1-5
+(one command each), then order.
 
 ## Honesty section
 
