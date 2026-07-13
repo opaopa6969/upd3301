@@ -54,7 +54,28 @@ const ctx = canvas.getContext('2d');
 const guts = document.getElementById('guts');
 const video = document.createElement('video');
 video.muted = true; video.loop = true; video.playsInline = true;
+video.crossOrigin = 'anonymous';
 document.body.appendChild(video);
+
+let status = '';
+const say = (msg) => { status = msg; };
+window.onerror = (msg) => { say('ERROR: ' + msg); };
+video.addEventListener('error', () => {
+  const codes = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE (コーデック非対応かも — H.264のmp4かwebmで試して)', 4: 'SRC_NOT_SUPPORTED (この形式は再生できない)' };
+  say('video error: ' + (codes[video.error?.code] ?? video.error?.code));
+});
+video.addEventListener('loadeddata', () => say(`loaded ${video.videoWidth}x${video.videoHeight}`));
+
+// OffscreenCanvas fallback: some browsers don't have it — use a hidden canvas
+function makeGrab(w, h) {
+  if (typeof OffscreenCanvas !== 'undefined') {
+    return new OffscreenCanvas(w, h).getContext('2d', { willReadFrequently: true });
+  }
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h; c.style.display = 'none';
+  document.body.appendChild(c);
+  return c.getContext('2d', { willReadFrequently: true });
+}
 
 let geometry = 'ex'; // 'ex' | 'orig'
 let term = null, img = null, grab = null, gain = 1.3;
@@ -66,7 +87,7 @@ function boot() {
   const w = term.cols * 8, h = term.rows * 8;
   canvas.width = w; canvas.height = h * 2;
   img = ctx.createImageData(w, h * 2);
-  grab = new OffscreenCanvas(term.dotWidth, term.dotHeight).getContext('2d', { willReadFrequently: true });
+  grab = makeGrab(term.dotWidth, term.dotHeight);
   term.write('\x1b[2J\x1b[H\x1b[36m  LOAD A VIDEO OR START THE WEBCAM\x1b[0m');
   term.flush();
 }
@@ -107,33 +128,40 @@ let last = performance.now();
 function loop(now) {
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  if (video.readyState >= 2 && !video.paused) frameToCells();
+  if (video.readyState >= 2) frameToCells(); // paused too: show the frame
   term.update(dt);
   blit(term.render({ cgrom: cgromEmpty }));
   guts.textContent =
     `mode=${geometry}  ${term.cols}x${term.rows} cells = ${term.dotWidth}x${term.dotHeight} dots` +
     `  attrSlots/row=${term.attrSlots}  overflowRows(this frame)=${term.stats.overflowRows}` +
-    `  gain=${gain.toFixed(1)}  video=${video.videoWidth}x${video.videoHeight}`;
+    `  gain=${gain.toFixed(1)}  video=${video.videoWidth}x${video.videoHeight}` +
+    ` readyState=${video.readyState}${video.paused ? ' paused' : ''}\n${status}`;
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
 
 const $ = (id) => document.getElementById(id);
+function tryPlay() {
+  const p = video.play();
+  if (p && p.catch) p.catch((err) => say('play(): ' + err.message + ' — ⏯ボタンを押してみて'));
+}
 $('file').onchange = (e) => {
   const f = e.target.files[0];
   if (!f) return;
+  say('loading ' + f.name + ' ...');
   video.srcObject = null;
   video.src = URL.createObjectURL(f);
-  video.play();
+  video.load();
+  tryPlay();
 };
 $('bcam').onclick = async () => {
   try {
-    video.src = '';
+    video.removeAttribute('src');
     video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 400 } });
-    video.play();
-  } catch (err) { guts.textContent = 'webcam: ' + err.message; }
+    tryPlay();
+  } catch (err) { say('webcam: ' + err.message); }
 };
-$('bplay').onclick = () => { video.paused ? video.play() : video.pause(); };
+$('bplay').onclick = () => { video.paused ? tryPlay() : video.pause(); };
 $('gex').onclick = () => { geometry = 'ex'; boot(); $('gex').classList.add('on'); $('gorig').classList.remove('on'); };
 $('gorig').onclick = () => { geometry = 'orig'; boot(); $('gorig').classList.add('on'); $('gex').classList.remove('on'); };
 $('kgain').oninput = (e) => { gain = +e.target.value; };

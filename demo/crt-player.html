@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>CRT VIDEO PLAYER — なんでもブラウン管</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#101014; color:#ccd; font-family:ui-monospace,monospace; margin:24px; }
+  h1 { font-size:18px; color:#8fd; }
+  canvas { image-rendering:pixelated; border:12px solid #222; border-radius:8px; background:#000; max-width:100%; }
+  .row { margin:10px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .row .lbl { color:#778; min-width:70px; }
+  button, input[type=file]::file-selector-button { background:#223; color:#cde; border:1px solid #446; border-radius:4px; padding:6px 12px; cursor:pointer; }
+  button.on { background:#265; border-color:#4a8; }
+  #guts { font-size:12px; color:#889; white-space:pre; }
+  .note { color:#778; font-size:12px; max-width:700px; }
+  .knobs label { display:flex; flex-direction:column; align-items:center; font-size:11px; color:#9ab; }
+  .knobs input[type=range] { width:100px; accent-color:#4a8; }
+  video { display:none; }
+</style>
+</head>
+<body>
+<h1>CRT VIDEO PLAYER — 手持ちの動画をブラウン管で観る</h1>
+<p class="note">▶ <a href="./index.html" style="color:#8fd">CRT物理デモ</a> · <a href="./video.html" style="color:#8fd">動画セミグラ</a> · <a href="./terminal.html" style="color:#8fd">ターミナル</a> · <a href="./rhythm.html" style="color:#8fd">ドラムマシン</a></p>
+<canvas id="crt" width="640" height="480"></canvas>
+<div class="row">
+  <input type="file" id="file" accept="video/*">
+  <button id="bcam">Webカメラ</button>
+  <button id="bplay">⏯</button>
+  <button id="bpower" class="on">POWER</button>
+</div>
+<div class="row"><span class="lbl">蛍光体:</span>
+  <button id="pP22" class="on">P22</button>
+  <button id="pLONG">長残光</button>
+  <button id="pP39">P39緑</button>
+  <button id="pP7">P7レーダー</button>
+  <button id="bburn">焼き付き</button>
+</div>
+<div class="row"><span class="lbl">管:</span>
+  <button id="tnone">物理OFF</button>
+  <button id="taperture" class="on">グリル</button>
+  <button id="tshadow">シャドウ</button>
+  <button id="tslot">スロット</button>
+  <button id="binterlace">インターレース</button>
+</div>
+<div class="row knobs"><span class="lbl">ノブ:</span>
+  <label>FOCUS <input type="range" id="kfocus" min="0" max="2" step="0.05" value="0.8"></label>
+  <label>H-SIZE <input type="range" id="khsize" min="0.7" max="1.15" step="0.01" value="1"></label>
+  <label>V-SIZE <input type="range" id="kvsize" min="0.7" max="1.15" step="0.01" value="1"></label>
+  <label>BRIGHT <input type="range" id="kbright" min="0.4" max="3" step="0.05" value="1.2"></label>
+  <label>PITCH <input type="range" id="kpitch" min="2" max="9" step="1" value="3"></label>
+  <label>CONV <input type="range" id="kconv" min="0" max="0.02" step="0.001" value="0.004"></label>
+  <label>BARREL <input type="range" id="kbarrel" min="-0.12" max="0.25" step="0.01" value="0.07"></label>
+</div>
+<div id="guts"></div>
+<p class="note">
+  μPD3301は不使用ｗ — crt.js（蛍光体：ガン別2成分減衰・発光色・焼き付き）と
+  tube.js（マスク・ビームスポット・収束誤差・ガラス）だけを、アナログ駆動
+  （stepAnalog：sRGB→リニア化して励起）で任意の映像に適用するプレイヤー。
+  P7レーダー管で観る動画、最高だから試して。POWERで偏向崩壊も動く。
+</p>
+<script type="module">
+import { CrtPhosphor, PHOSPHORS } from '../crt.js';
+import { CrtTube } from '../tube.js';
+
+const SW = 640, SH = 240;
+const canvas = document.getElementById('crt');
+const ctx = canvas.getContext('2d');
+const guts = document.getElementById('guts');
+const video = document.createElement('video');
+video.muted = true; video.loop = true; video.playsInline = true;
+document.body.appendChild(video);
+
+let status = '';
+const say = (m) => { status = m; };
+window.onerror = (m) => say('ERROR: ' + m);
+video.addEventListener('error', () => {
+  const codes = { 3: 'DECODE (コーデック非対応かも)', 4: 'SRC_NOT_SUPPORTED (この形式は無理)' };
+  say('video error: ' + (codes[video.error?.code] ?? video.error?.code));
+});
+video.addEventListener('loadeddata', () => say(`loaded ${video.videoWidth}x${video.videoHeight}`));
+
+function makeGrab(w, h) {
+  if (typeof OffscreenCanvas !== 'undefined') {
+    return new OffscreenCanvas(w, h).getContext('2d', { willReadFrequently: true });
+  }
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h; c.style.display = 'none';
+  document.body.appendChild(c);
+  return c.getContext('2d', { willReadFrequently: true });
+}
+const grab = makeGrab(SW, SH);
+
+const phosphor = new CrtPhosphor({ width: SW, height: SH, phosphor: PHOSPHORS.P22 });
+let phosName = 'P22';
+const knobs = { focus: 0.8, hSize: 1, vSize: 1, bright: 1.2, pitch: 3, conv: 0.004, barrel: 0.07 };
+let tubeMode = 'aperture', interlaced = false;
+const tubes = {};
+function getTube() {
+  if (!tubes[tubeMode]) {
+    tubes[tubeMode] = new CrtTube({
+      srcWidth: SW, srcHeight: SH, outWidth: 640, outHeight: 480,
+      mask: tubeMode, maskPitch: knobs.pitch, convergence: knobs.conv, barrel: knobs.barrel,
+      beamWidth: knobs.focus, hSize: knobs.hSize, vSize: knobs.vSize,
+    });
+  }
+  return tubes[tubeMode];
+}
+
+const img = ctx.createImageData(640, 480);
+const frameBuf = new Uint8ClampedArray(SW * SH * 4);
+const darkBuf = new Uint8ClampedArray(SW * SH * 4);
+let rgbaSmall = null;
+
+// analog power-off: pile the shrinking raster toward the center, max-combined
+function collapseRGBA(src, dst, hS, vS) {
+  dst.fill(0);
+  const cx = (SW - 1) / 2, cy = (SH - 1) / 2;
+  for (let y = 0; y < SH; y++) {
+    const ty = Math.round(cy + (y - cy) * vS);
+    for (let x = 0; x < SW; x++) {
+      const s = (y * SW + x) * 4;
+      const tx = Math.round(cx + (x - cx) * hS);
+      const d = (ty * SW + tx) * 4;
+      for (let c = 0; c < 3; c++) if (src[s + c] > dst[d + c]) dst[d + c] = src[s + c];
+      dst[d + 3] = 255;
+    }
+  }
+}
+const collapseBuf = new Uint8ClampedArray(SW * SH * 4);
+const power = { state: 'on', t: 0 };
+
+function beamPass() {
+  const parity = interlaced ? (frameNo & 1) : null;
+  if (video.readyState >= 2) {
+    grab.drawImage(video, 0, 0, SW, SH);
+    frameBuf.set(grab.getImageData(0, 0, SW, SH).data);
+  }
+  if (power.state === 'on') {
+    phosphor.stepAnalog(frameBuf, FR, { fieldParity: parity });
+    return;
+  }
+  if (power.state === 'off') { phosphor.stepAnalog(darkBuf, FR); return; }
+  power.t += FR;
+  const closing = power.state === 'closing';
+  const k = Math.min(1, power.t / (closing ? 0.55 : 0.18));
+  const c = closing ? k : 1 - k;
+  const vS = Math.max(0.008, Math.pow(1 - c, 2.6));
+  const hS = Math.max(0.01, 1 - c * c * 0.99);
+  collapseRGBA(frameBuf, collapseBuf, hS, vS);
+  phosphor.drive = Math.min(8, 1 / Math.max(hS * vS, 1 / 8));
+  phosphor.stepAnalog(collapseBuf, FR);
+  phosphor.drive = 1;
+  if (k >= 1) power.state = closing ? 'off' : 'on';
+}
+
+function blit() {
+  const d = img.data;
+  if (tubeMode === 'none') {
+    rgbaSmall = phosphor.toRGBA(rgbaSmall, { scale: knobs.bright });
+    for (let y = 0; y < SH; y++) {
+      for (let x = 0; x < SW; x++) {
+        const s = (y * SW + x) * 4;
+        let o = (y * 2 * 640 + x) * 4;
+        d[o] = rgbaSmall[s]; d[o + 1] = rgbaSmall[s + 1]; d[o + 2] = rgbaSmall[s + 2]; d[o + 3] = 255;
+        o += 640 * 4;
+        d[o] = rgbaSmall[s] * .55; d[o + 1] = rgbaSmall[s + 1] * .55; d[o + 2] = rgbaSmall[s + 2] * .55; d[o + 3] = 255;
+      }
+    }
+  } else {
+    getTube().apply(phosphor.composite(), d, { scale: knobs.bright });
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+const FR = 1 / 60;
+let last = performance.now(), acc = 0, frameNo = 0;
+function loop(now) {
+  acc += Math.min(0.1, (now - last) / 1000);
+  last = now;
+  let steps = 0;
+  while (acc >= FR && steps < 4) { acc -= FR; steps++; frameNo++; beamPass(); }
+  if (steps) blit();
+  guts.textContent =
+    `phosphor=${PHOSPHORS[phosName].name}  tube=${tubeMode}${interlaced ? '  interlaced' : ''}` +
+    `${phosphor.burnRate ? '  burn-in!' : ''}  power=${power.state}` +
+    `  video=${video.videoWidth}x${video.videoHeight} rs=${video.readyState}${video.paused ? ' paused' : ''}\n${status}`;
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+const $ = (id) => document.getElementById(id);
+function tryPlay() {
+  const p = video.play();
+  if (p && p.catch) p.catch((err) => say('play(): ' + err.message + ' — ⏯を押して'));
+}
+$('file').onchange = (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  say('loading ' + f.name + ' ...');
+  video.srcObject = null;
+  video.src = URL.createObjectURL(f);
+  video.load();
+  tryPlay();
+};
+$('bcam').onclick = async () => {
+  try {
+    video.removeAttribute('src');
+    video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    tryPlay();
+  } catch (err) { say('webcam: ' + err.message); }
+};
+$('bplay').onclick = () => { video.paused ? tryPlay() : video.pause(); };
+$('bpower').onclick = () => {
+  if (power.state === 'on' || power.state === 'opening') { power.state = 'closing'; power.t = 0; $('bpower').classList.remove('on'); }
+  else { power.state = 'opening'; power.t = 0; $('bpower').classList.add('on'); }
+};
+const phosBtns = { P22: $('pP22'), LONG: $('pLONG'), P39: $('pP39'), P7: $('pP7') };
+for (const [k, el] of Object.entries(phosBtns)) {
+  el.onclick = () => {
+    phosName = k;
+    phosphor.setPhosphor(PHOSPHORS[k]);
+    for (const [k2, el2] of Object.entries(phosBtns)) el2.classList.toggle('on', k2 === k);
+  };
+}
+$('bburn').onclick = () => { phosphor.setBurnRate(phosphor.burnRate ? 0 : 1.5); $('bburn').classList.toggle('on', phosphor.burnRate > 0); };
+const tubeBtns = { none: $('tnone'), aperture: $('taperture'), shadow: $('tshadow'), slot: $('tslot') };
+for (const [k, el] of Object.entries(tubeBtns)) {
+  el.onclick = () => { tubeMode = k; for (const [k2, el2] of Object.entries(tubeBtns)) el2.classList.toggle('on', k2 === k); };
+}
+$('binterlace').onclick = () => { interlaced = !interlaced; $('binterlace').classList.toggle('on', interlaced); };
+$('kfocus').oninput = (e) => { knobs.focus = +e.target.value; for (const t of Object.values(tubes)) t.beamWidth = knobs.focus; };
+const regeo = () => {
+  for (const t of Object.values(tubes)) {
+    t.setGeometry({ hSize: knobs.hSize, vSize: knobs.vSize, maskPitch: knobs.pitch, convergence: knobs.conv, barrel: knobs.barrel });
+  }
+};
+$('khsize').oninput = (e) => { knobs.hSize = +e.target.value; regeo(); };
+$('kvsize').oninput = (e) => { knobs.vSize = +e.target.value; regeo(); };
+$('kbright').oninput = (e) => { knobs.bright = +e.target.value; };
+$('kpitch').oninput = (e) => { knobs.pitch = +e.target.value; regeo(); };
+$('kconv').oninput = (e) => { knobs.conv = +e.target.value; regeo(); };
+$('kbarrel').oninput = (e) => { knobs.barrel = +e.target.value; regeo(); };
+</script>
+</body>
+</html>

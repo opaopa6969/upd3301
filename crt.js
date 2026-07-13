@@ -224,3 +224,42 @@ export function collapseScan(src, dst, width, height, hScale, vScale) {
   }
   return dst;
 }
+
+// Analog drive: RGBA frames (a video, a framebuffer) excite the guns with
+// continuous levels instead of GRB bits. Input is sRGB-encoded; a LUT
+// linearizes (gamma 2.2) so the phosphor integrates light, not code values.
+const DEGAMMA = new Float32Array(256);
+for (let i = 0; i < 256; i++) DEGAMMA[i] = (i / 255) ** 2.2;
+
+CrtPhosphor.prototype.stepAnalog = function stepAnalog(rgba, dt, { fieldParity = null } = {}) {
+  const w = this.width, h = this.height;
+  for (let gun = 0; gun < 3; gun++) {
+    const F = this.fast[gun], T = this.tail[gun];
+    const D = this.dose ? this.dose[gun] : null;
+    const dFast = Math.exp(-dt / this.tau[gun]);
+    const dTail = Math.exp(-dt / this.tailTau[gun]);
+    const frac = this.tailFrac[gun];
+    for (let y = 0; y < h; y++) {
+      const excitable = fieldParity === null || (y & 1) === fieldParity;
+      const o = y * w;
+      for (let x = 0; x < w; x++) {
+        const i = o + x;
+        let f = F[i] * dFast;
+        let t = T[i] * dTail;
+        if (excitable) {
+          let e = DEGAMMA[rgba[i * 4 + gun]] * this.drive;
+          if (D && e > 0) {
+            e /= 1 + this.burnRate * D[i];
+            D[i] += dt * e;
+          }
+          if (e > f) f = e;
+          const et = e * frac;
+          if (et > t) t = et;
+        }
+        F[i] = f;
+        T[i] = t;
+      }
+    }
+  }
+  return this;
+};

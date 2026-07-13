@@ -707,3 +707,17 @@ test('mask: any pitch keeps color balance (no yellow cast at pitch 2)', async ()
     }
   }
 });
+
+test('analog drive: RGB levels excite the guns through degamma', () => {
+  const crt = new CrtPhosphor({ width: 2, height: 1, tau: [0.05, 0.05, 0.05] });
+  const frame = Uint8ClampedArray.from([255, 128, 0, 255, 0, 0, 0, 255]);
+  crt.stepAnalog(frame, 1 / 60);
+  const s = crt.sample(0, 0);
+  assert.equal(s.r, 1);
+  assert.ok(Math.abs(s.g - (128 / 255) ** 2.2) < 1e-4, `mid gray linearized (${s.g})`);
+  assert.equal(s.b, 0);
+  assert.deepEqual(crt.sample(1, 0), { r: 0, g: 0, b: 0 });
+  crt.stepAnalog(Uint8ClampedArray.from([0, 0, 0, 255, 0, 0, 0, 255]), 1 / 60);
+  const expected = Math.exp(-(1 / 60) / 0.05);
+  assert.ok(Math.abs(crt.sample(0, 0).r - expected) < 1e-6, 'decays like the bit-driven path');
+});
