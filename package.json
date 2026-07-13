@@ -20,7 +20,8 @@
     "./upd765": "./upd765.js",
     "./i8255": "./i8255.js",
     "./d88": "./d88.js",
-    "./snap": "./snap.js"
+    "./snap": "./snap.js",
+    "./memmap": "./memmap.js"
   },
   "files": [
     "*.js",
