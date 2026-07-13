@@ -210,10 +210,35 @@ export class Upd3301 {
     this.hblankChars = (p[3] & 0x1f) + 2;
     this.attrMode = (p[4] >> 5) & 7;
     this.attrsPerRow = this.attrMode === 1 ? 0 : Math.min((p[4] & 0x1f) + 1, MAX_ATTRS_PER_ROW);
+    this._applyGeometry();
+  }
 
+  // EX mode: fantasy silicon rev. The real RESET parameter encoding tops out
+  // at 80 columns, 64 rows and 20 attribute pairs; this entry point bypasses
+  // the port encoding for terminal-style use (arbitrary XY, per-cell
+  // attributes). Everything downstream — DMA row size, expansion, render —
+  // works unchanged.
+  resetEx({ cols, rows, linesPerChar = 8, attrsPerRow = 0, blinkPeriod = 32, cursorMode = 0 } = {}) {
+    this.ve = false;
+    this.status &= ~STATUS.VE;
+    this.cols = cols;
+    this.rows = rows;
+    this.linesPerChar = linesPerChar;
+    this.attrsPerRow = attrsPerRow;
+    this.blinkPeriod = blinkPeriod;
+    this.cursorMode = cursorMode;
+    this.vblankRows = 7;
+    this.hblankChars = 14;
+    this.attrMode = 0;
+    this._applyGeometry();
+    return this;
+  }
+
+  _applyGeometry() {
     this.cells = new Uint8Array(this.cols * this.rows);
     this.attrs = new Uint8Array(this.cols * this.rows);
     this.attrPairs = new Uint8Array(this.rows * this.attrsPerRow * 2);
+    this._rowBuf = new Uint8Array(this.cols + this.attrsPerRow * 2);
   }
 
   // ---- timing --------------------------------------------------------

@@ -69,27 +69,31 @@ export function decodeAttrPair(value) {
 export function expandRowStates(pairs, attrsPerRow, cols, colorOut, funcOut) {
   let colorState = DEFAULT_COLOR_SPEC;
   let funcState = 0x00;
-  // collect boundaries: pair k takes effect at its position (first pair
-  // back-fills to column 0, like the chip's expansion)
-  let x = 0;
+  if (attrsPerRow === 0) {
+    colorOut.fill(DEFAULT_COLOR_SPEC, 0, cols);
+    funcOut.fill(0, 0, cols);
+    return { colorOut, funcOut };
+  }
+  // Pair k takes effect at its position; the first pair back-fills to
+  // column 0 (chip quirk). A (0, 0) pair after the first is N-BASIC's
+  // padding for unused slots and ends the list. Two pairs at the same
+  // position both apply (e.g. a color spec and a function spec at column 0
+  // — needed by the terminal layer).
   for (let k = 0; k < attrsPerRow; k++) {
     let start = k === 0 ? 0 : pairs[k * 2];
-    if (k > 0 && start === 0) start = cols;
+    const value = pairs[k * 2 + 1];
+    if (k > 0 && pairs[k * 2] === 0 && value === 0) break; // padding sentinel
     let end = cols;
     if (k + 1 < attrsPerRow) {
       const next = pairs[(k + 1) * 2];
-      end = next === 0 ? cols : next;
+      end = next === 0 && pairs[(k + 1) * 2 + 1] === 0 ? cols : next;
     }
-    const value = pairs[k * 2 + 1];
     if (value & ATTR.COLOR_FLAG) colorState = value;
     else funcState = value;
-    for (x = Math.min(start, cols); x < Math.min(end, cols); x++) {
+    for (let x = Math.min(start, cols); x < Math.min(end, cols); x++) {
       colorOut[x] = colorState;
       funcOut[x] = funcState;
     }
-  }
-  for (let i = 0; i < cols; i++) {
-    if (attrsPerRow === 0) { colorOut[i] = DEFAULT_COLOR_SPEC; funcOut[i] = 0; }
   }
   return { colorOut, funcOut };
 }
@@ -224,8 +228,8 @@ export class Pc8001TextSystem {
   }
 
   // convenience: write text + attribute pairs into VRAM
-  line(y, { cols = 80, vramBase = PC8001.TEXT_VRAM } = {}) {
-    const base = vramBase + y * (cols + 40);
+  line(y, { cols = 80, attrBytes = 40, vramBase = PC8001.TEXT_VRAM } = {}) {
+    const base = vramBase + y * (cols + attrBytes);
     const mem = this.memory;
     return {
       text(x, str) {
@@ -238,11 +242,28 @@ export class Pc8001TextSystem {
       },
       attrs(...pairs) {
         // pairs: [pos, value, pos, value, ...]; unused slots pad with (0,0)
-        for (let i = 0; i < 40; i++) mem[base + cols + i] = 0;
-        for (let i = 0; i < pairs.length && i < 40; i++) mem[base + cols + i] = pairs[i] & 0xff;
+        for (let i = 0; i < attrBytes; i++) mem[base + cols + i] = 0;
+        for (let i = 0; i < pairs.length && i < attrBytes; i++) mem[base + cols + i] = pairs[i] & 0xff;
         return this;
       },
     };
+  }
+
+  // EX mode: arbitrary geometry with enough attribute slots for per-cell
+  // control (fantasy silicon rev on both chips — see resetEx/setChannelEx).
+  initTextModeEx({
+    cols = 80, rows = 25, linesPerChar = 8,
+    attrsPerRow = null, vramBase = 0x4000,
+  } = {}) {
+    const attrs = attrsPerRow ?? cols * 2; // worst case: color+func change every cell
+    this.width80 = true;
+    this.colorMode = true;
+    this.crtc.resetEx({ cols, rows, linesPerChar, attrsPerRow: attrs });
+    this.dmac.setChannelEx(2, { addr: vramBase, count: rows * (cols + attrs * 2) });
+    this.out(0x51, 0x40); // unmask VRTC interrupt
+    this.out(0x51, 0x20); // start display
+    this.ex = { cols, rows, attrsPerRow: attrs, vramBase };
+    return this.ex;
   }
 
   update(dt) { this.crtc.update(dt); }

@@ -28,6 +28,7 @@ export class Upd8257 {
       this.channels.push({
         baseAddr: 0, baseCount: 0, mode: 0,
         addr: 0, count: 0, // live counters
+        exCount: null, // EX mode: byte count beyond the 14-bit register
         tc: false,
       });
     }
@@ -55,6 +56,7 @@ export class Upd8257 {
       if (this._flipflop === 1) {
         c.mode = (c.baseCount >> 14) & 3;
         c.count = c.baseCount & 0x3fff;
+        c.exCount = null; // port writes return the channel to real 14-bit mode
         c.tc = false;
       }
     } else {
@@ -86,6 +88,27 @@ export class Upd8257 {
     return byte;
   }
 
+  // EX mode: fantasy silicon rev matching the μPD3301's resetEx — program a
+  // channel with a byte count beyond the 14-bit register, bypassing the port
+  // encoding. Used for extended terminal screens whose frame exceeds 16K.
+  setChannelEx(ch, { addr, count, autoload = true }) {
+    const c = this.channels[ch];
+    c.baseAddr = addr & 0xffff;
+    c.addr = c.baseAddr;
+    c.mode = DMA_MODE.READ;
+    c.exCount = count;
+    c.count = count - 1;
+    c.tc = false;
+    this.modeReg |= 1 << ch;
+    if (autoload && ch === 2) {
+      this.modeReg |= 0x80;
+      const c3 = this.channels[3];
+      c3.baseAddr = c.baseAddr;
+      c3.exCount = count;
+    }
+    return this;
+  }
+
   // Device-side burst pull (what a μPD3301 DRQ does): fill buf from the
   // channel's current address, decrementing the count. Returns bytes served.
   drqPull(ch, buf) {
@@ -102,12 +125,12 @@ export class Upd8257 {
         if (ch === 2 && this.autoload) {
           const c3 = this.channels[3];
           c.addr = c3.baseAddr;
-          c.count = c3.baseCount & 0x3fff;
+          c.count = c3.exCount != null ? c3.exCount - 1 : c3.baseCount & 0x3fff;
         } else if (this.modeReg & 0x40) {
           this.modeReg &= ~(1 << ch); // TC stop: disable channel
           break;
         } else {
-          c.count = c.baseCount & 0x3fff;
+          c.count = c.exCount != null ? c.exCount - 1 : c.baseCount & 0x3fff;
           c.addr = c.baseAddr;
         }
       } else {

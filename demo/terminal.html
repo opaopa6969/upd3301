@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>μPD3301 terminal — ESC sequences on 1979 silicon</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#101014; color:#ccd; font-family:ui-monospace,monospace; margin:24px; }
+  h1 { font-size:18px; color:#8fd; }
+  canvas { image-rendering:pixelated; border:12px solid #222; border-radius:8px; background:#000; outline:none; }
+  .row { margin:10px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .row .lbl { color:#778; }
+  button { background:#223; color:#cde; border:1px solid #446; border-radius:4px; padding:6px 12px; cursor:pointer; }
+  button.on { background:#265; border-color:#4a8; }
+  #guts { font-size:12px; color:#889; white-space:pre; }
+  .note { color:#778; font-size:12px; max-width:700px; }
+</style>
+</head>
+<body>
+<h1>μPD3301 terminal — ANSIエスケープ → アトリビュートペア変換層</h1>
+<canvas id="crt" tabindex="0" width="800" height="480"></canvas>
+<div class="row"><span class="lbl">モード:</span>
+  <button id="gex" class="on">EX 100×30 (全桁アトリビュート)</button>
+  <button id="gex132">EX 132×40</button>
+  <button id="gorig">ORIGINAL 80×25 (20ペア/行)</button>
+  <button id="brainbow">虹テスト (ペア溢れ実験)</button>
+</div>
+<div id="guts"></div>
+<p class="note">
+  キャンバスをクリックしてキー入力（Enter/Backspace対応、コマンド: help / beer / 3301 / clear）。
+  ESCシーケンス（SGR色・反転・点滅・下線、カーソル移動、消去）が
+  行ごとの (位置, 値) アトリビュートペアにコンパイルされてVRAMへ落ち、
+  μPD8257 が毎フレーム運ぶ。ORIGINALモードは実機の20ペア/行制約つき —
+  虹テストで色を溢れさせると後半の色が脱落するのが見える。EXモードは
+  架空のシリコン改版（resetEx / setChannelEx）で任意XY文字数＋セル単位
+  アトリビュート。セミグラAPI（setDot）のサイン波も描いてある。
+</p>
+<script type="module">
+import { Terminal } from '../term.js';
+import { buildFont } from './font.js';
+
+const { cgrom } = buildFont();
+const PALETTE = [
+  [0,0,0],[40,60,255],[255,60,50],[235,70,255],
+  [50,230,60],[60,235,235],[245,235,60],[240,240,240],
+];
+const canvas = document.getElementById('crt');
+const ctx = canvas.getContext('2d');
+const guts = document.getElementById('guts');
+
+let term = null, geometry = 'ex';
+let img = null;
+
+const E = '\x1b[';
+function banner() {
+  const cols = term.cols;
+  term.write(`${E}2J${E}H`);
+  term.write(`${E}7;36m ${'μPD3301 TERMINAL'.padEnd(cols - 2)}${E}0m\r\n\r\n`);
+  term.write(`${E}33m3301!${E}0m ESC sequences compiled to (position, value) attribute pairs.\r\n`);
+  term.write(`${E}31mR${E}32mG${E}34mB${E}0m ${E}7mREVERSE${E}0m ${E}5mBLINK${E}0m ${E}4mUNDERLINE${E}0m mode=${geometry.toUpperCase()} ${term.cols}x${term.rows}\r\n`);
+  // semigraphic sine wave, N-BASIC SET(x,y) feel
+  const W = term.dotWidth;
+  for (let x = 0; x < W; x++) {
+    const y = Math.round(34 + 10 * Math.sin(x * Math.PI * 4 / W));
+    term.setDot(x, y, 1 + (x / W * 6 | 0));
+  }
+  term.moveTo(0, 12);
+  term.write(`type: help / beer / 3301 / clear\r\n\r\n`);
+  prompt();
+}
+
+let lineBuf = '';
+function prompt() { term.write(`${E}32m3301>${E}0m `); }
+
+function handleLine(cmd) {
+  term.write('\r\n');
+  const c = cmd.trim().toLowerCase();
+  if (c === 'help') {
+    term.write(`commands: help, beer, 3301, clear\r\nANSI works too: try typing after ${E}33mESC is embedded for you${E}0m\r\n`);
+  } else if (c === 'beer') {
+    // small semigraphic mug at the cursor row, using dots
+    const bx = 8, by = term.y * 4 + 4;
+    for (let dy = 0; dy < 10; dy++) for (let dx = 0; dx < 12; dx++) {
+      if (dy === 0 || dy === 9 || dx === 0 || dx === 11) term.setDot(bx + dx, by + dy, 6);
+    }
+    for (let dy = 1; dy < 4; dy++) for (let dx = 1; dx < 11; dx++) term.setDot(bx + dx, by + dy, 7);
+    term.write('\r\n\r\n\r\n  KANPAI!\r\n');
+  } else if (c === '3301') {
+    term.write(`${E}36mCICADA${E}0m / ${E}33mSAIZERIYA BEER${E}0m / ${E}35muPD3301${E}0m ... IT ALL COMES BACK TO 3301.\r\n`);
+  } else if (c === 'clear') {
+    term.write(`${E}2J${E}H`);
+  } else if (c.length) {
+    term.write(`${E}31m?${E}0m ${cmd}\r\n`);
+  }
+  prompt();
+}
+
+function rainbowTest() {
+  term.write('\r\n');
+  for (let i = 0; i < Math.min(70, term.cols - 2); i++) term.write(`${E}3${(i % 7) + 1}m#`);
+  term.write(`${E}0m\r\n`);
+  prompt();
+}
+
+function boot() {
+  const geo = geometry === 'ex' ? { cols: 100, rows: 30, ex: true }
+    : geometry === 'ex132' ? { cols: 132, rows: 40, ex: true }
+    : { cols: 80, rows: 25, ex: false };
+  term = new Terminal(geo);
+  const w = term.cols * 8, h = term.rows * 8;
+  canvas.width = w;
+  canvas.height = h * 2;
+  canvas.style.width = Math.min(1000, w) + 'px';
+  img = ctx.createImageData(w, h * 2);
+  lineBuf = '';
+  banner();
+}
+boot();
+
+function blit(frame) {
+  const d = img.data;
+  const W = frame.width;
+  for (let y = 0; y < frame.height; y++) {
+    for (let x = 0; x < W; x++) {
+      const [r, g, b] = PALETTE[frame.pixels[y * W + x]];
+      let o = (y * 2 * W + x) * 4;
+      d[o] = r; d[o + 1] = g; d[o + 2] = b; d[o + 3] = 255;
+      o += W * 4;
+      d[o] = r * .55; d[o + 1] = g * .55; d[o + 2] = b * .55; d[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  term.flush().update(dt);
+  blit(term.render({ cgrom }));
+  guts.textContent =
+    `mode=${geometry}  ${term.cols}x${term.rows}  attrSlots/row=${term.attrSlots}` +
+    `  overflowRows=${term.stats.overflowRows}  scrolls=${term.stats.scrolls}` +
+    `  cursor=(${term.x},${term.y})  frame=${term.sys.crtc.frame}`;
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+canvas.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    const cmd = lineBuf; lineBuf = '';
+    handleLine(cmd);
+  } else if (e.key === 'Backspace') {
+    if (lineBuf.length) { lineBuf = lineBuf.slice(0, -1); term.write('\b \b'); }
+  } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+    lineBuf += e.key;
+    term.write(e.key.toUpperCase()); // 1979: uppercase is the vibe
+  } else return;
+  e.preventDefault();
+});
+
+const $ = (id) => document.getElementById(id);
+const geoBtns = { ex: $('gex'), ex132: $('gex132'), orig: $('gorig') };
+for (const [k, el] of Object.entries(geoBtns)) {
+  el.onclick = () => {
+    geometry = k; boot();
+    for (const [k2, el2] of Object.entries(geoBtns)) el2.classList.toggle('on', k2 === k);
+  };
+}
+$('brainbow').onclick = () => rainbowTest();
+</script>
+</body>
+</html>

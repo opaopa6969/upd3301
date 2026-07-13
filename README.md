@@ -58,6 +58,17 @@ on a long-persistence tube. Which is why there's a physical layer:
 - **The whine**: `crtc.hsyncHz()` derives the horizontal deflection
   frequency from the programmed geometry — (25+7 rows) × 8 lines × 60 Hz =
   15360 Hz — and the demo can play it. You know the sound.
+- **Terminal layer** (`term.js`): a sane write interface — `write()` with
+  cursor/scroll, ANSI escape sequences (SGR colors/reverse/blink/underline,
+  cursor addressing, erase) compiled into the chip's (position, value)
+  attribute pairs on `flush()`, plus an N-BASIC-feel semigraphic dot API
+  (`setDot`/`resetDot`/`dot`). Runs against real limits (80×25, 20
+  pairs/row → `stats.overflowRows` when you exceed them) or **EX mode**, a
+  fantasy silicon rev (`resetEx`/`setChannelEx`) with arbitrary cols×rows
+  and per-cell attributes — a usable terminal. Try `demo/terminal.html`.
+
+Chip-level reference (datasheet-style, mermaid block diagrams):
+[docs/datasheet.md](./docs/datasheet.md).
 
 ## Use
 

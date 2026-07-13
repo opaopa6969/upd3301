@@ -4,23 +4,29 @@
 // luminance on a perfect grid; the tube makes it look like television:
 //
 // - Beam spot: the electron beam is a Gaussian blob wider than one triad.
-//   Modeled as a separable pre-blur of the source. This IS the "nijimi" —
-//   the spot straddles neighboring mask openings, so edges bleed color.
-// - Shadow mask / aperture grille: the mask only lets each gun reach its
-//   own phosphor stripes/dots. Types: 'aperture' (Trinitron vertical
-//   stripes), 'shadow' (delta dot triads), 'slot' (in-line slot mask),
-//   'none'. Modeled as a per-output-pixel per-channel transmission pattern
-//   with a gain that keeps average brightness roughly constant.
-// - Glass: barrel distortion (curved faceplate + deflection), plus a faint
-//   ghost image from the inner-surface reflection (light bounces between
-//   phosphor and the front glass), plus corner vignette.
-// - Interlace lives in the phosphor layer (which lines get excited per
-//   field); the tube is field-agnostic.
+//   The spot straddles neighboring mask openings, so edges bleed color —
+//   this IS the "nijimi". FOCUS is continuous (0 sharp … 2 defocused).
+// - Oblique landing: the beam leaves one gun and is deflected; at the
+//   center it lands perpendicular, at the edges it lands at an angle, so
+//   the spot stretches and grows — focus degrades with r² (edgeDefocus).
+//   And the three guns sit apart, so their deflection errors differ:
+//   convergence error shifts R and B in opposite directions, growing
+//   toward the edges — the classic color fringing on corners.
+// - Shadow mask / aperture grille: 'aperture' (Trinitron vertical stripes),
+//   'shadow' (delta dot triads), 'slot' (in-line slots), 'none'. Modeled as
+//   a per-output-pixel per-channel transmission pattern with a gain that
+//   keeps average brightness roughly constant.
+// - Glass: barrel distortion (curved faceplate + deflection), a faint ghost
+//   from the inner-surface reflection, corner vignette.
+// - The knobs on the back: FOCUS (beamWidth), H-SIZE / V-SIZE (scan
+//   amplitude — shrink it and the border goes dark), via setGeometry().
+// - Interlace lives in the phosphor layer; the tube is field-agnostic.
 //
-// Pure and deterministic: all geometry/mask work is precomputed into LUTs
-// in the constructor; apply() is a gather loop. No Math.random, no DOM.
+// Pure and deterministic: geometry/mask work is precomputed into LUTs
+// (per gun, because of convergence); apply() is a gather loop. No
+// Math.random, no DOM.
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const MASKS = Object.freeze(['none', 'aperture', 'shadow', 'slot']);
 
@@ -31,13 +37,15 @@ export class CrtTube {
     mask = 'aperture',
     maskPitch = 3, // output pixels per triad period
     maskLeak = 0.12, // how much of a gun leaks through neighboring openings
-    beamWidth = 1.0, // FOCUS knob: beam spot size, 0 = sharp, >1 = defocused
+    beamWidth = 1.0, // FOCUS knob: 0 = sharp, 1 = nominal, 2 = defocused
     barrel = 0.06, // barrel distortion strength
     ghost = 0.07, // inner-glass reflection strength (0 disables)
     ghostShift = 0.012, // reflection offset toward the center, normalized
     vignette = 0.18,
     hSize = 1.0, // H-SIZE knob: horizontal scan width (1 = fills the glass)
     vSize = 1.0, // V-SIZE knob: vertical scan height
+    edgeDefocus = 0.35, // how much focus degrades per r² (oblique landing)
+    convergence = 0.0035, // R/B gun mis-registration per r² (color fringes)
   } = {}) {
     this.srcWidth = srcWidth;
     this.srcHeight = srcHeight;
@@ -45,25 +53,28 @@ export class CrtTube {
     this.outHeight = outHeight;
     this.beamWidth = beamWidth;
     this.ghost = ghost;
-    this.geometry = { mask, maskPitch, maskLeak, barrel, ghostShift, vignette, hSize, vSize };
+    this.edgeDefocus = edgeDefocus;
+    this.geometry = {
+      mask, maskPitch, maskLeak, barrel, ghostShift, vignette,
+      hSize, vSize, convergence,
+    };
 
     const n = outWidth * outHeight;
-    // geometry LUT: source sample position (fixed-point bilinear)
-    this.lutIdx = new Int32Array(n); // top-left source index, -1 = outside
-    this.lutFx = new Float32Array(n); // x fraction
-    this.lutFy = new Float32Array(n); // y fraction
+    // per-gun geometry LUTs (convergence error differs per gun)
+    this.lutIdx = [new Int32Array(n), new Int32Array(n), new Int32Array(n)];
+    this.lutFx = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+    this.lutFy = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
     this.lutGhostIdx = new Int32Array(n);
     this.lutVig = new Float32Array(n);
-    // mask transmission per channel
+    this.lutR2 = new Float32Array(n); // radius² per output pixel (for focus falloff)
     this.maskR = new Float32Array(n);
     this.maskG = new Float32Array(n);
     this.maskB = new Float32Array(n);
 
-    this._blurR = new Float32Array(srcWidth * srcHeight);
-    this._blurG = new Float32Array(srcWidth * srcHeight);
-    this._blurB = new Float32Array(srcWidth * srcHeight);
-    this._tmp = new Float32Array(srcWidth * srcHeight);
-    this._tmp2 = new Float32Array(srcWidth * srcHeight);
+    const m = srcWidth * srcHeight;
+    this._blur1 = [new Float32Array(m), new Float32Array(m), new Float32Array(m)];
+    this._blur2 = [new Float32Array(m), new Float32Array(m), new Float32Array(m)];
+    this._tmp = new Float32Array(m);
     this.rebuild();
   }
 
@@ -71,37 +82,53 @@ export class CrtTube {
   // changes them: setGeometry). Deterministic — same params, same LUTs.
   rebuild() {
     const { srcWidth, srcHeight, outWidth, outHeight } = this;
-    const { mask, maskPitch, maskLeak, barrel, ghostShift, vignette, hSize, vSize } = this.geometry;
+    const {
+      mask, maskPitch, maskLeak, barrel, ghostShift, vignette,
+      hSize, vSize, convergence,
+    } = this.geometry;
     const gain = mask === 'none' ? 1 : Math.min(2.2, 3 / (1 + 2 * maskLeak));
+    // convergence error per gun: R and B deflect to opposite sides of G
+    const conv = [convergence, 0, -convergence];
     for (let y = 0; y < outHeight; y++) {
       for (let x = 0; x < outWidth; x++) {
         const i = y * outWidth + x;
-        // normalized [-1, 1]
         const u = (x + 0.5) / outWidth * 2 - 1;
         const v = (y + 0.5) / outHeight * 2 - 1;
         const r2 = u * u + v * v;
-        // barrel: screen coords bulge outward → sample pulls inward at edges.
-        // H/V-SIZE scale the deflection: smaller size → the raster shrinks
-        // on the glass and the border goes dark, just like the real knob.
-        const su = u * (1 + barrel * r2) / hSize;
-        const sv = v * (1 + barrel * r2) / vSize;
-        if (Math.abs(su) > 1 || Math.abs(sv) > 1) {
-          this.lutIdx[i] = -1;
-          continue;
+        this.lutR2[i] = r2;
+        // barrel: screen coords bulge outward → sample pulls inward at
+        // edges. H/V-SIZE scale the deflection amplitude: smaller size →
+        // the raster shrinks on the glass and the border goes dark.
+        const bu = u * (1 + barrel * r2) / hSize;
+        const bv = v * (1 + barrel * r2) / vSize;
+        let inside = false;
+        for (let gun = 0; gun < 3; gun++) {
+          const su = bu * (1 + conv[gun] * r2);
+          const sv = bv;
+          if (Math.abs(su) > 1 || Math.abs(sv) > 1) {
+            this.lutIdx[gun][i] = -1;
+            continue;
+          }
+          inside = true;
+          const sx = (su + 1) / 2 * srcWidth - 0.5;
+          const sy = (sv + 1) / 2 * srcHeight - 0.5;
+          const x0 = Math.max(0, Math.min(srcWidth - 2, Math.floor(sx)));
+          const y0 = Math.max(0, Math.min(srcHeight - 2, Math.floor(sy)));
+          this.lutIdx[gun][i] = y0 * srcWidth + x0;
+          this.lutFx[gun][i] = Math.min(1, Math.max(0, sx - x0));
+          this.lutFy[gun][i] = Math.min(1, Math.max(0, sy - y0));
         }
-        const sx = (su + 1) / 2 * srcWidth - 0.5;
-        const sy = (sv + 1) / 2 * srcHeight - 0.5;
-        const x0 = Math.max(0, Math.min(srcWidth - 2, Math.floor(sx)));
-        const y0 = Math.max(0, Math.min(srcHeight - 2, Math.floor(sy)));
-        this.lutIdx[i] = y0 * srcWidth + x0;
-        this.lutFx[i] = Math.min(1, Math.max(0, sx - x0));
-        this.lutFy[i] = Math.min(1, Math.max(0, sy - y0));
-        // ghost: inner reflection displaced toward center
-        const gu = su * (1 - ghostShift * 2), gv = sv * (1 - ghostShift * 2);
-        const gx = Math.round((gu + 1) / 2 * srcWidth - 0.5);
-        const gy = Math.round((gv + 1) / 2 * srcHeight - 0.5);
-        this.lutGhostIdx[i] = Math.max(0, Math.min(srcHeight - 1, gy)) * srcWidth
-          + Math.max(0, Math.min(srcWidth - 1, gx));
+        // ghost: inner reflection displaced toward center (green geometry)
+        if (inside) {
+          const gu = Math.max(-1, Math.min(1, bu * (1 - ghostShift * 2)));
+          const gv = Math.max(-1, Math.min(1, bv * (1 - ghostShift * 2)));
+          const gx = Math.round((gu + 1) / 2 * srcWidth - 0.5);
+          const gy = Math.round((gv + 1) / 2 * srcHeight - 0.5);
+          this.lutGhostIdx[i] = Math.max(0, Math.min(srcHeight - 1, gy)) * srcWidth
+            + Math.max(0, Math.min(srcWidth - 1, gx));
+        } else {
+          this.lutGhostIdx[i] = 0;
+        }
         this.lutVig[i] = Math.max(0, 1 - vignette * r2 * r2);
 
         // mask pattern
@@ -132,8 +159,8 @@ export class CrtTube {
     return this;
   }
 
-  // Twist a knob: merge partial geometry (hSize, vSize, barrel, ...) and
-  // rebuild the LUTs.
+  // Twist a knob: merge partial geometry (hSize, vSize, barrel, convergence,
+  // ...) and rebuild the LUTs.
   setGeometry(partial) {
     Object.assign(this.geometry, partial);
     return this.rebuild();
@@ -160,52 +187,45 @@ export class CrtTube {
     }
   }
 
-  // FOCUS: beamWidth is continuous. 0 = perfectly sharp, 1 = one Gaussian
-  // pass, 2 = two passes; fractions blend between the neighboring integers.
-  _blurChannel(src, dst) {
-    const f = Math.max(0, Math.min(2, this.beamWidth));
-    if (f === 0) { dst.set(src); return; }
-    const n = src.length;
-    this._blurPass(src, dst);
-    if (f <= 1) {
-      if (f < 1) for (let i = 0; i < n; i++) dst[i] = src[i] + (dst[i] - src[i]) * f;
-      return;
-    }
-    const t2 = this._tmp2;
-    t2.set(dst);
-    this._blurPass(t2, dst);
-    const g = f - 1;
-    if (g < 1) for (let i = 0; i < n; i++) dst[i] = t2[i] + (dst[i] - t2[i]) * g;
-  }
-
   // lum: [R, G, B] Float32Arrays of srcWidth*srcHeight (phosphor output).
   // Returns RGBA Uint8ClampedArray of outWidth*outHeight.
   apply(lum, out, { gamma = 2.2, scale = 1 } = {}) {
     const n = this.outWidth * this.outHeight;
     const rgba = out && out.length === n * 4 ? out : new Uint8ClampedArray(n * 4);
-    this._blurChannel(lum[0], this._blurR);
-    this._blurChannel(lum[1], this._blurG);
-    this._blurChannel(lum[2], this._blurB);
-    const chans = [this._blurR, this._blurG, this._blurB];
+    for (let ch = 0; ch < 3; ch++) {
+      this._blurPass(lum[ch], this._blur1[ch]);
+      this._blurPass(this._blur1[ch], this._blur2[ch]);
+    }
     const masks = [this.maskR, this.maskG, this.maskB];
     const w = this.srcWidth;
     const inv = 1 / gamma;
     const ghost = this.ghost;
+    const beam = this.beamWidth, edge = this.edgeDefocus;
     for (let i = 0; i < n; i++) {
-      const idx = this.lutIdx[i];
-      if (idx < 0) {
-        rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = 0; rgba[i * 4 + 3] = 255;
-        continue;
-      }
-      const fx = this.lutFx[i], fy = this.lutFy[i];
-      const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy);
-      const w01 = (1 - fx) * fy, w11 = fx * fy;
-      const gi = this.lutGhostIdx[i];
+      // per-pixel focus: nominal beam width plus oblique-landing falloff
+      const f = Math.max(0, Math.min(2, beam + edge * this.lutR2[i]));
       const vig = this.lutVig[i];
+      const gi = this.lutGhostIdx[i];
       for (let ch = 0; ch < 3; ch++) {
-        const L = chans[ch];
-        let val = L[idx] * w00 + L[idx + 1] * w10 + L[idx + w] * w01 + L[idx + w + 1] * w11;
-        if (ghost > 0) val += L[gi] * ghost;
+        const idx = this.lutIdx[ch][i];
+        if (idx < 0) { rgba[i * 4 + ch] = 0; continue; }
+        const fx = this.lutFx[ch][i], fy = this.lutFy[ch][i];
+        const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy);
+        const w01 = (1 - fx) * fy, w11 = fx * fy;
+        const S = lum[ch], B1 = this._blur1[ch], B2 = this._blur2[ch];
+        let val;
+        if (f <= 0) {
+          val = S[idx] * w00 + S[idx + 1] * w10 + S[idx + w] * w01 + S[idx + w + 1] * w11;
+        } else if (f <= 1) {
+          const s = S[idx] * w00 + S[idx + 1] * w10 + S[idx + w] * w01 + S[idx + w + 1] * w11;
+          const b = B1[idx] * w00 + B1[idx + 1] * w10 + B1[idx + w] * w01 + B1[idx + w + 1] * w11;
+          val = s + (b - s) * f;
+        } else {
+          const b = B1[idx] * w00 + B1[idx + 1] * w10 + B1[idx + w] * w01 + B1[idx + w + 1] * w11;
+          const b2 = B2[idx] * w00 + B2[idx + 1] * w10 + B2[idx + w] * w01 + B2[idx + w + 1] * w11;
+          val = b + (b2 - b) * (f - 1);
+        }
+        if (ghost > 0) val += B1[gi] * ghost;
         val *= masks[ch][i] * vig * scale;
         rgba[i * 4 + ch] = 255 * Math.min(1, val) ** inv;
       }

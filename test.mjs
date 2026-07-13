@@ -374,7 +374,7 @@ test('interlace: only the driven field is excited, the other decays', () => {
 test('tube is deterministic and centers map ~identity', async () => {
   const { CrtTube } = await import('./tube.js');
   const mk = () => {
-    const tube = new CrtTube({ srcWidth: 64, srcHeight: 32, outWidth: 64, outHeight: 64, mask: 'none', ghost: 0, barrel: 0.05, beamWidth: 0 });
+    const tube = new CrtTube({ srcWidth: 64, srcHeight: 32, outWidth: 64, outHeight: 64, mask: 'none', ghost: 0, barrel: 0.05, beamWidth: 0, edgeDefocus: 0, convergence: 0 });
     const lum = [new Float32Array(64 * 32), new Float32Array(64 * 32), new Float32Array(64 * 32)];
     lum[0][16 * 64 + 32] = 1; // single red dot at center
     return tube.apply(lum);
@@ -393,7 +393,7 @@ test('aperture grille passes each gun mainly through its own stripe', async () =
   const tube = new CrtTube({
     srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
     mask: 'aperture', maskPitch: 3, maskLeak: 0.1,
-    barrel: 0, ghost: 0, vignette: 0, beamWidth: 0,
+    barrel: 0, ghost: 0, vignette: 0, beamWidth: 0, edgeDefocus: 0, convergence: 0,
   });
   const flat = new Float32Array(W * H).fill(0.5); // uniform white field
   const rgba = tube.apply([flat, flat, flat], null, { gamma: 1 });
@@ -415,7 +415,7 @@ test('beam spot blur bleeds a hard edge (the nijimi)', async () => {
   const W = 32, H = 8;
   const mk = (beamWidth) => new CrtTube({
     srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
-    mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth,
+    mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth, edgeDefocus: 0, convergence: 0,
   });
   const lum = new Float32Array(W * H);
   for (let y = 0; y < H; y++) for (let x = 16; x < W; x++) lum[y * W + x] = 1;
@@ -477,7 +477,7 @@ test('H-SIZE knob: shrinking the scan leaves dark borders', async () => {
   const W = 40, H = 10;
   const tube = new CrtTube({
     srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
-    mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth: 0,
+    mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth: 0, edgeDefocus: 0, convergence: 0,
   });
   const flat = new Float32Array(W * H).fill(1);
   const lum = [flat, flat, flat];
@@ -500,7 +500,7 @@ test('FOCUS knob: bleed grows monotonically with beam width', async () => {
   const bleedAt = (bw) => {
     const tube = new CrtTube({
       srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
-      mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth: bw,
+      mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth: bw, edgeDefocus: 0, convergence: 0,
     });
     return tube.apply([lum, lum, lum], null, { gamma: 1 })[(4 * W + 14) * 4];
   };
@@ -508,4 +508,115 @@ test('FOCUS knob: bleed grows monotonically with beam width', async () => {
   assert.equal(b[0], 0);
   for (let i = 1; i < b.length; i++) assert.ok(b[i] >= b[i - 1], `monotone: ${b.join(',')}`);
   assert.ok(b[4] > b[1], 'defocused end clearly softer');
+});
+
+test('oblique landing: edges defocus and R/B converge apart', async () => {
+  const { CrtTube } = await import('./tube.js');
+  const W = 128, H = 32;
+  const tube = new CrtTube({
+    srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
+    mask: 'none', barrel: 0, ghost: 0, vignette: 0,
+    beamWidth: 0, edgeDefocus: 0.8, convergence: 0.02,
+  });
+  // vertical white 1px lines at center and near the left edge
+  const lum = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) { lum[y * W + 64] = 1; lum[y * W + 8] = 1; }
+  const rgba = tube.apply([lum, lum, lum], null, { gamma: 1 });
+  const px = (x, ch) => rgba[(16 * W + x) * 4 + ch];
+  // center: r²≈0 → sharp, no fringing: neighbors dark, line white
+  assert.ok(px(64, 1) > 240, 'center line bright');
+  assert.equal(px(62, 1), 0, 'center stays sharp');
+  assert.ok(Math.abs(px(64, 0) - px(64, 2)) < 12, 'no fringe at center');
+  // edge: defocused → energy spreads to neighbors
+  const spread = px(7, 1) + px(9, 1);
+  assert.ok(spread > 20, `edge line bleeds into neighbors (${spread})`);
+  // convergence: red and blue peak on different columns near the edge
+  const peak = (ch) => {
+    let best = 0, bx = 0;
+    for (let x = 2; x < 16; x++) if (px(x, ch) > best) { best = px(x, ch); bx = x; }
+    return bx;
+  };
+  assert.notEqual(peak(0), peak(2), `R peak ${peak(0)} vs B peak ${peak(2)}`);
+});
+
+// ---- terminal layer ------------------------------------------------------
+
+test('terminal: ESC[31m paints red, ESC[0m returns to white', async () => {
+  const { Terminal } = await import('./term.js');
+  const t = new Terminal({ cols: 80, rows: 25, ex: true });
+  t.write('\x1b[31mRED\x1b[0mW');
+  t.flush().update(1 / 60);
+  const cgrom = new Uint8Array(256 * 16).fill(0xff);
+  const img = t.render({ cgrom });
+  assert.equal(img.pixels[0], 2, 'cell 0 red (GRB index 2)');
+  assert.equal(img.pixels[3 * 8], 7, 'cell 3 back to white');
+});
+
+test('terminal: color and reverse both apply at column 0', async () => {
+  const { Terminal } = await import('./term.js');
+  const t = new Terminal({ cols: 80, rows: 25, ex: true });
+  t.write('\x1b[7;33mAB');
+  t.flush().update(1 / 60);
+  const cgrom = new Uint8Array(256 * 16); // empty glyphs: reverse → solid
+  const img = t.render({ cgrom });
+  assert.equal(img.pixels[0], 6, 'reversed yellow at col 0 (ANSI 33 → GRB 6)');
+});
+
+test('terminal: newline at the bottom scrolls', async () => {
+  const { Terminal } = await import('./term.js');
+  const t = new Terminal({ cols: 80, rows: 5, ex: true });
+  for (let i = 0; i < 7; i++) t.writeLine(`LINE${i}`);
+  assert.ok(t.stats.scrolls >= 2);
+  // LINE0..1 scrolled off; top row now LINE2? rows=5, 7 lines + trailing LF
+  const top = String.fromCharCode(...t.chars.subarray(0, 5));
+  assert.equal(top, 'LINE3');
+});
+
+test('terminal: original mode overflows past 20 pairs, ex mode does not', async () => {
+  const { Terminal } = await import('./term.js');
+  const rainbow = () => {
+    let s = '';
+    for (let i = 0; i < 40; i++) s += `\x1b[3${(i % 7) + 1}mX`;
+    return s;
+  };
+  const orig = new Terminal({ cols: 80, rows: 25, ex: false });
+  orig.write(rainbow());
+  orig.flush();
+  assert.ok(orig.stats.overflowRows > 0, 'real hardware runs out of pairs');
+  const ex = new Terminal({ cols: 80, rows: 25, ex: true });
+  ex.write(rainbow());
+  ex.flush().update(1 / 60);
+  assert.equal(ex.stats.overflowRows, 0, 'ex mode has per-cell slots');
+  const cgrom = new Uint8Array(256 * 16).fill(0xff);
+  const img = ex.render({ cgrom });
+  // 25th X: color index for ANSI 3<(24%7)+1=4> → blue=1? ANSI 34 → GRB 1
+  assert.equal(img.pixels[24 * 8], ANSI_TO_GRB_CHECK[(24 % 7) + 1]);
+});
+const ANSI_TO_GRB_CHECK = [0, 2, 4, 6, 1, 3, 5, 7];
+
+test('terminal: semigraphic dots set/reset/query with per-cell color', async () => {
+  const { Terminal } = await import('./term.js');
+  const t = new Terminal({ cols: 80, rows: 25, ex: true });
+  t.setDot(5, 7, 4); // green dot
+  assert.equal(t.dot(5, 7), true);
+  assert.equal(t.dot(4, 7), false);
+  t.flush().update(1 / 60);
+  const img = t.render({ cgrom: new Uint8Array(256 * 16) });
+  // dot (5,7): cell (2,1), right column, band 3 → px x=5*4? dot x=5 → cell x*8..: cell 2 → px 16..23, right half 20..23; y: cell row 1 line 6..7 → py 8+6=14
+  const px = img.pixels[14 * 640 + 20];
+  assert.equal(px, 4, `green semigraphic dot (${px})`);
+  t.resetDot(5, 7);
+  assert.equal(t.dot(5, 7), false);
+});
+
+test('terminal: EX mode runs arbitrary geometry (100x30)', async () => {
+  const { Terminal } = await import('./term.js');
+  const t = new Terminal({ cols: 100, rows: 30, ex: true });
+  t.write('\x1b[30;100H\x1b[35m@'); // bottom-right corner, magenta
+  t.flush().update(1 / 60);
+  const cgrom = new Uint8Array(256 * 16).fill(0xff);
+  const img = t.render({ cgrom });
+  assert.equal(img.width, 800);
+  assert.equal(img.height, 240);
+  assert.equal(img.pixels[(29 * 8) * 800 + 99 * 8], 3, 'magenta @ in the corner');
 });
