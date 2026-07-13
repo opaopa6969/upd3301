@@ -258,7 +258,16 @@ export class CrtTube {
     }
     const masks = [this.maskR, this.maskG, this.maskB];
     const w = this.srcWidth;
-    const inv = 1 / gamma;
+    let lut = null;
+    if (gamma !== 1) { // pow per subpixel is the hot spot; 4096-entry LUT
+      if (!this._glut || this._glutGamma !== gamma) {
+        const inv = 1 / gamma;
+        this._glut = new Float32Array(4096);
+        for (let i = 0; i < 4096; i++) this._glut[i] = (i / 4095) ** inv;
+        this._glutGamma = gamma;
+      }
+      lut = this._glut;
+    }
     const ghost = this.ghost;
     const beam = this.beamWidth, edge = this.edgeDefocus;
     const M = tint !== 0 ? tintMatrix(tint) : null;
@@ -297,7 +306,10 @@ export class CrtTube {
         const b2 = M[6] * r + M[7] * g + M[8] * b;
         r = Math.max(0, r2); g = Math.max(0, g2); b = Math.max(0, b2);
       }
-      r = Math.min(1, r) ** inv; g = Math.min(1, g) ** inv; b = Math.min(1, b) ** inv;
+      r = Math.min(1, r); g = Math.min(1, g); b = Math.min(1, b);
+      if (lut) {
+        r = lut[(r * 4095) | 0]; g = lut[(g * 4095) | 0]; b = lut[(b * 4095) | 0];
+      }
       if (contrast !== 1) {
         r = (r - 0.5) * contrast + 0.5;
         g = (g - 0.5) * contrast + 0.5;

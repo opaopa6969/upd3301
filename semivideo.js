@@ -199,7 +199,10 @@ export function analyzePc98(rgba, dotW, dotH, { gain = 1.0, autoLevels = true } 
   const n = dotW * dotH;
   let lo = 0, scale = 1;
   if (autoLevels) ({ lo, scale } = computeLevels(rgba, n));
-  const norm = (v) => Math.min(1, Math.max(0, (v - lo) * scale / 255 * gain));
+  // levels as a 256-entry LUT: the closure version was ~600k calls/frame
+  const NLUT = new Float32Array(256);
+  for (let v = 0; v < 256; v++) NLUT[v] = Math.min(1, Math.max(0, (v - lo) * scale / 255 * gain));
+  const norm = (v) => NLUT[v];
 
   // edge map: per-channel region boundaries (anime = flat fills)
   const edge = new Uint8Array(n);
@@ -265,26 +268,37 @@ export function analyzePc98(rgba, dotW, dotH, { gain = 1.0, autoLevels = true } 
       palDot[i] = lut[key];
     }
   }
-  return { schemaVersion: SCHEMA_VERSION, dotW, dotH, palette, palDot, edge };
+  // FRC tables: GRB bits per (palette entry, temporal order) and the
+  // spatial phase offset per dot — the per-phase render becomes 3 lookups
+  const bitsTable = new Uint8Array(order.length * 7);
+  for (let p = 0; p < order.length; p++) {
+    for (let ord = 0; ord < 7; ord++) {
+      bitsTable[p * 7 + ord] = (ord < palette[p * 3] ? 2 : 0)
+        | (ord < palette[p * 3 + 1] ? 4 : 0)
+        | (ord < palette[p * 3 + 2] ? 1 : 0);
+    }
+  }
+  const ordBase = new Uint8Array(n);
+  for (let y = 0; y < dotH; y++) {
+    for (let x = 0; x < dotW; x++) ordBase[y * dotW + x] = (x * 3 + y * 5) % 7;
+  }
+  return { schemaVersion: SCHEMA_VERSION, dotW, dotH, palette, palDot, edge, bitsTable, ordBase };
 }
 
 // One temporal phase (0..6) of the analyzed frame → GRB-indexed dots.
 // Palette levels 0..7 become per-gun duty over the 7-frame FRC cycle;
 // outlines stay black on every phase.
 export function renderPc98Phase(analysis, phase, out = null) {
-  const { dotW, dotH, palette, palDot, edge } = analysis;
+  const { dotW, dotH, palDot, edge, bitsTable, ordBase } = analysis;
   const n = dotW * dotH;
   const idx = out && out.length === n ? out : new Uint8Array(n);
-  for (let y = 0; y < dotH; y++) {
-    for (let x = 0; x < dotW; x++) {
-      const i = y * dotW + x;
-      if (edge[i]) { idx[i] = 0; continue; }
-      const p = palDot[i] * 3;
-      const ord = (((phase + x * 3 + y * 5) % 7) * 3) % 7;
-      idx[i] = (ord < palette[p] ? 2 : 0)
-        | (ord < palette[p + 1] ? 4 : 0)
-        | (ord < palette[p + 2] ? 1 : 0);
-    }
+  const SPREAD = [0, 3, 6, 2, 5, 1, 4]; // ord*3 mod 7, precomputed
+  const ph = phase % 7;
+  for (let i = 0; i < n; i++) {
+    if (edge[i]) { idx[i] = 0; continue; }
+    let o = ordBase[i] + ph;
+    if (o >= 7) o -= 7;
+    idx[i] = bitsTable[palDot[i] * 7 + SPREAD[o]];
   }
   return idx;
 }

@@ -84,6 +84,7 @@
   <button id="taperture">グリル</button>
   <button id="tshadow">シャドウ</button>
   <button id="tslot">スロット</button>
+  <label style="color:#778;font-size:12px">ガラス反射<input type="checkbox" id="cghost" checked style="margin:2px"></label>
   <button id="tplasma">プラズマ格子</button>
   <button id="b400">400ライン</button>
 </div>
@@ -148,13 +149,14 @@ function makeGrab(w, h) {
 let geometry = 'ex'; // 'ex' | 'uex' | 'orig'
 let convMode = 'dither'; // 'dither' | 'line' | 'pc98'
 let pc98 = null, dotIdx = null; // pc98 analysis + per-phase dot frame
+let phosphor98 = null, tubes98 = {}, rollBuf98 = null, rowBright = null, rowDark = null;
 let autoLevels = true, flickerLevels = 0, gain = 1.3, phase = 0; // 0=off, 3=27c, 8=512c
 let term = null, img = null, grab = null, idxBuf = null, rollBuf = null;
 let phosphor = null;
 let tubeMode = 'none', tubes = {};
 const knobs = {
   focus: 0.6, hSize: 1, vSize: 1, bright: 1.2, pitch: 3, conv: 0.004,
-  barrel: 0.05, contrast: 1, tint: 0, tintOn: false, vhold: 0,
+  barrel: 0.05, contrast: 1, tint: 0, tintOn: false, vhold: 0, ghost: 0.07,
 };
 let W = 0, H = 0, phosName = 'P22';
 let rollPos = 0;
@@ -171,7 +173,13 @@ function boot() {
   rollBuf = new Uint8Array(W * H);
   rollPos = 0;
   phosphor = new CrtPhosphor({ width: W, height: H, phosphor: PHOSPHORS[phosName] });
-  tubes = {};
+  // pc98 runs the phosphor at DOT resolution (8x fewer pixels) and
+  // upscales at blit time — that's most of the mode's speedup
+  phosphor98 = new CrtPhosphor({ width: term.dotWidth, height: term.dotHeight, phosphor: PHOSPHORS[phosName] });
+  rollBuf98 = new Uint8Array(term.dotWidth * term.dotHeight);
+  rowBright = new Uint8ClampedArray(W * 4);
+  rowDark = new Uint8ClampedArray(W * 4);
+  tubes = {}; tubes98 = {};
   term.write('\x1b[2J\x1b[H\x1b[36m  LOAD A VIDEO OR START THE WEBCAM\x1b[0m');
   term.flush();
 }
@@ -185,6 +193,15 @@ function getTube() {
     });
   }
   return tubes[tubeMode];
+}
+function getTube98() {
+  if (!tubes98[tubeMode]) {
+    tubes98[tubeMode] = new CrtTube({
+      srcWidth: term.dotWidth, srcHeight: term.dotHeight, outWidth: W, outHeight: H * 2,
+      mask: tubeMode, maskPitch: 3, barrel: knobs.barrel, ghost: knobs.ghost, beamWidth: knobs.focus,
+    });
+  }
+  return tubes98[tubeMode];
 }
 boot();
 
@@ -215,8 +232,8 @@ function frameToCells() {
 }
 
 // V-HOLD (violent flavor: speed wobbles near lock, vertical size breathes)
-function vholdApply(src, dst) {
-  const blank = Math.round(H * 0.12), total = H + blank;
+function vholdApply(src, dst, w = W, h = H) {
+  const blank = Math.round(h * 0.12), total = h + blank;
   if (knobs.vhold !== 0) {
     const wobble = 1 + 0.8 * Math.sin(rollPos / total * Math.PI * 2);
     rollPos = (rollPos + knobs.vhold * wobble + total) % total;
@@ -227,15 +244,44 @@ function vholdApply(src, dst) {
   if (rollPos === 0) return src;
   const stretch = 1 + Math.min(0.5, Math.abs(knobs.vhold) * 0.03)
     * Math.sin(rollPos / total * Math.PI * 4);
-  return rollScan(src, dst, W, H, Math.round(rollPos) % total, blank, 1, stretch);
+  return rollScan(src, dst, w, h, Math.round(rollPos) % total, blank, 1, stretch);
 }
 
 const cgromEmpty = new Uint8Array(256 * 16);
 let rgbaSmall = null;
 
+let rgba98 = null;
 function blit() {
   const d = img.data;
   const opts = { scale: knobs.bright, tint: knobs.tintOn ? knobs.tint : 0, contrast: knobs.contrast };
+  if (convMode === 'pc98' && pc98) {
+    if (tubeMode !== 'none') {
+      getTube98().apply(phosphor98.composite(), d, opts);
+    } else {
+      // nearest upscale: dot → 4px × 4 canvas rows (2 logical × scanline)
+      rgba98 = phosphor98.toRGBA(rgba98, opts);
+      const dw = term.dotWidth, rowPx = W * 4;
+      for (let dy = 0; dy < term.dotHeight; dy++) {
+        for (let dx = 0; dx < dw; dx++) {
+          const sIdx = (dy * dw + dx) * 4;
+          const r = rgba98[sIdx], g = rgba98[sIdx + 1], b = rgba98[sIdx + 2];
+          let o = dx * 16;
+          for (let k = 0; k < 4; k++) {
+            rowBright[o] = r; rowBright[o + 1] = g; rowBright[o + 2] = b; rowBright[o + 3] = 255;
+            rowDark[o] = r * line2; rowDark[o + 1] = g * line2; rowDark[o + 2] = b * line2; rowDark[o + 3] = 255;
+            o += 4;
+          }
+        }
+        const base = dy * 4 * rowPx;
+        d.set(rowBright, base);
+        d.set(rowDark, base + rowPx);
+        d.set(rowBright, base + 2 * rowPx);
+        d.set(rowDark, base + 3 * rowPx);
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    return;
+  }
   if (tubeMode === 'none') {
     rgbaSmall = phosphor.toRGBA(rgbaSmall, opts);
     for (let y = 0; y < H; y++) {
@@ -264,25 +310,15 @@ function loop(now) {
   while (acc >= FR && steps < 2) {
     acc -= FR; steps++;
     if (convMode === 'pc98' && pc98) {
-      // bypass the whole logical stack: per-dot 512-color FRC frames
+      // bypass the whole logical stack: per-dot 512-color FRC frames,
+      // phosphor at dot resolution — upscaling happens at blit time
       dotIdx = renderPc98Phase(pc98, (frameNo98++) % 7, dotIdx);
-      const dw = term.dotWidth;
-      for (let dy = 0; dy < term.dotHeight; dy++) {
-        const rowOff = dy * 2 * W;
-        for (let dx = 0; dx < dw; dx++) {
-          const v = dotIdx[dy * dw + dx];
-          const px = dx * 4;
-          for (let sy = 0; sy < 2; sy++) {
-            const o = rowOff + sy * W + px;
-            idxBuf[o] = v; idxBuf[o + 1] = v; idxBuf[o + 2] = v; idxBuf[o + 3] = v;
-          }
-        }
-      }
+      phosphor98.step(vholdApply(dotIdx, rollBuf98, term.dotWidth, term.dotHeight), FR);
     } else {
       term.sys.crtc.stepFrame();
       term.sys.render({ cgrom: cgromEmpty, out: idxBuf });
+      phosphor.step(vholdApply(idxBuf, rollBuf), FR);
     }
-    phosphor.step(vholdApply(idxBuf, rollBuf), FR);
   }
   if (acc > FR) acc = 0; // drop the backlog instead of spiraling
   if (steps) blit();
@@ -343,6 +379,9 @@ $('brec').onclick = () => {
   for (const tr of recAudioTracks()) stream.addTrack(tr);
   const mime = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
     .find((m) => MediaRecorder.isTypeSupported(m)) ?? '';
+  // one-pass recording: play from the current position, stop by itself
+  // when the video ends (loop is suspended for the take)
+  const onEnded = () => { if (recorder) recorder.stop(); };
   recorder = new MediaRecorder(stream, { mimeType: mime || undefined, videoBitsPerSecond: 12_000_000 });
   recChunks = [];
   recorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
@@ -354,11 +393,16 @@ $('brec').onclick = () => {
     a.download = `upd3301-${Date.now()}.${ext}`;
     a.click();
     recorder = null;
+    video.loop = true;
+    video.removeEventListener('ended', onEnded);
     $('brec').textContent = t('⏺ 録画');
     $('brec').classList.remove('on');
     say(ext === 'mp4' ? t('MP4を保存した') : t('WebMを保存した（MP4化: ffmpeg -i in.webm out.mp4）'));
   };
   recorder.start(1000);
+  video.loop = false;
+  video.addEventListener('ended', onEnded, { once: true });
+  tryPlay();
   $('brec').textContent = t('■ 停止');
   $('brec').classList.add('on');
   say(t('録画中…' ) + (mime.includes('mp4') ? ' (mp4)' : ' (webm)'));
@@ -414,6 +458,7 @@ function setConv(m) {
   if (m === 'pc98' && phosName === 'P22') { // FRC needs afterglow to read
     phosName = 'LONG';
     phosphor.setPhosphor(PHOSPHORS.LONG);
+    phosphor98.setPhosphor(PHOSPHORS.LONG);
     for (const [k2, el2] of Object.entries(phosBtns)) el2.classList.toggle('on', k2 === 'LONG');
   }
 }
@@ -446,6 +491,7 @@ for (const [k, el] of Object.entries(phosBtns)) {
   el.onclick = () => {
     phosName = k;
     phosphor.setPhosphor(PHOSPHORS[k]);
+    phosphor98.setPhosphor(PHOSPHORS[k]);
     for (const [k2, el2] of Object.entries(phosBtns)) el2.classList.toggle('on', k2 === k);
   };
 }
@@ -454,14 +500,14 @@ for (const [k, el] of Object.entries(tubeBtns)) {
   el.onclick = () => { tubeMode = k; for (const [k2, el2] of Object.entries(tubeBtns)) el2.classList.toggle('on', k2 === k); };
 }
 const regeo = () => {
-  for (const tb of Object.values(tubes)) {
+  for (const tb of [...Object.values(tubes), ...Object.values(tubes98)]) {
     tb.setGeometry({
       hSize: knobs.hSize, vSize: knobs.vSize, maskPitch: knobs.pitch,
       convergence: knobs.conv, barrel: knobs.barrel,
     });
   }
 };
-$('kfocus').oninput = (e) => { knobs.focus = +e.target.value; for (const tb of Object.values(tubes)) tb.beamWidth = knobs.focus; };
+$('kfocus').oninput = (e) => { knobs.focus = +e.target.value; for (const tb of [...Object.values(tubes), ...Object.values(tubes98)]) tb.beamWidth = knobs.focus; };
 $('khsize').oninput = (e) => { knobs.hSize = +e.target.value; regeo(); };
 $('kvsize').oninput = (e) => { knobs.vSize = +e.target.value; regeo(); };
 $('kbright').oninput = (e) => { knobs.bright = +e.target.value; };
@@ -472,6 +518,10 @@ $('kcontrast').oninput = (e) => { knobs.contrast = +e.target.value; };
 $('ktint').oninput = (e) => { knobs.tint = (+e.target.value) * Math.PI / 180; };
 $('ctint').onchange = (e) => { knobs.tintOn = e.target.checked; };
 $('kvhold').oninput = (e) => { knobs.vhold = +e.target.value; };
+$('cghost').onchange = (e) => {
+  knobs.ghost = e.target.checked ? 0.07 : 0; // inner-glass reflection off = modern AR-coated fantasy
+  for (const tb of [...Object.values(tubes), ...Object.values(tubes98)]) tb.ghost = knobs.ghost;
+};
 </script>
 </body>
 </html>

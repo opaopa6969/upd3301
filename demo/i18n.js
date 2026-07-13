@@ -29,6 +29,7 @@ const DICT = {
   'アンバー': 'Amber',
   'プラズマ橙': 'Plasma orange',
   'プラズマ格子': 'Plasma grid',
+  'ガラス反射': 'Glass reflection',
   '焼き付き (加速)': 'Burn-in (accelerated)',
   '焼き付き': 'Burn-in',
   // nav

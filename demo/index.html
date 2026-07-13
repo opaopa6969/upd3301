@@ -70,6 +70,7 @@
   <button id="binterlace">インターレース</button>
   <button id="baudio">15kHz 音鳴り</button>
   <button id="bpower" class="on">POWER</button>
+  <label style="color:#778;font-size:12px">ガラス反射<input type="checkbox" id="cghost" checked style="margin:2px"></label>
   <button id="b400">400ライン</button>
 </div>
 <div class="row knobs"><span class="lbl">裏のノブ:</span>
@@ -295,13 +296,13 @@ const phosphor = new CrtPhosphor({ width: 640, height: 200, phosphor: PHOSPHORS.
 let phosName = 'P22';
 let tubeMode = 'aperture'; // 'off' | 'aperture' | 'shadow' | 'slot'
 let interlaced = false;
-const knobs = { focus: 1, hSize: 1, vSize: 1, bright: 1, pitch: 3, conv: 0.0035, barrel: 0.06, contrast: 1, tint: 0, tintOn: false, vhold: 0 }; // 裏のノブ
+const knobs = { focus: 1, hSize: 1, vSize: 1, bright: 1, pitch: 3, conv: 0.0035, barrel: 0.06, contrast: 1, tint: 0, tintOn: false, vhold: 0, ghost: 0.07 }; // 裏のノブ
 const tubes = {};
 function getTube() {
   if (!tubes[tubeMode]) {
     tubes[tubeMode] = new CrtTube({
       srcWidth: 640, srcHeight: 200, outWidth: 640, outHeight: 400,
-      mask: tubeMode, maskPitch: knobs.pitch, convergence: knobs.conv, barrel: knobs.barrel,
+      mask: tubeMode, maskPitch: knobs.pitch, convergence: knobs.conv, barrel: knobs.barrel, ghost: knobs.ghost,
       beamWidth: knobs.focus, hSize: knobs.hSize, vSize: knobs.vSize,
     });
   }
@@ -590,6 +591,10 @@ $('kcontrast').oninput = (e) => { knobs.contrast = +e.target.value; };
 $('ktint').oninput = (e) => { knobs.tint = (+e.target.value) * Math.PI / 180; }; // 度→rad、NTSCのTINTつまみ
 $('ctint').onchange = (e) => { knobs.tintOn = e.target.checked; };
 $('kvhold').oninput = (e) => { knobs.vhold = +e.target.value; };
+$('cghost').onchange = (e) => {
+  knobs.ghost = e.target.checked ? 0.07 : 0; // inner-glass reflection off = modern AR-coated fantasy
+  for (const tb of Object.values(tubes)) tb.ghost = knobs.ghost;
+};
 </script>
 </body>
 </html>

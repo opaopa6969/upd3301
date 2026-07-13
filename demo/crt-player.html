@@ -74,6 +74,7 @@
   <button id="tslot">スロット</button>
   <button id="tplasma">プラズマ格子</button>
   <button id="binterlace">インターレース</button>
+  <label style="color:#778;font-size:12px">ガラス反射<input type="checkbox" id="cghost" checked style="margin:2px"></label>
   <button id="b400">400ライン</button>
 </div>
 <div class="row knobs"><span class="lbl">ノブ:</span>
@@ -131,14 +132,14 @@ const grab = makeGrab(SW, SH);
 
 const phosphor = new CrtPhosphor({ width: SW, height: SH, phosphor: PHOSPHORS.P22 });
 let phosName = 'P22';
-const knobs = { focus: 0.8, hSize: 1, vSize: 1, bright: 1.2, pitch: 3, conv: 0.004, barrel: 0.07, contrast: 1, tint: 0, tintOn: false, vhold: 0 };
+const knobs = { focus: 0.8, hSize: 1, vSize: 1, bright: 1.2, pitch: 3, conv: 0.004, barrel: 0.07, contrast: 1, tint: 0, tintOn: false, vhold: 0, ghost: 0.07 };
 let tubeMode = 'aperture', interlaced = false;
 const tubes = {};
 function getTube() {
   if (!tubes[tubeMode]) {
     tubes[tubeMode] = new CrtTube({
       srcWidth: SW, srcHeight: SH, outWidth: 640, outHeight: 480,
-      mask: tubeMode, maskPitch: knobs.pitch, convergence: knobs.conv, barrel: knobs.barrel,
+      mask: tubeMode, maskPitch: knobs.pitch, convergence: knobs.conv, barrel: knobs.barrel, ghost: knobs.ghost,
       beamWidth: knobs.focus, hSize: knobs.hSize, vSize: knobs.vSize,
     });
   }
@@ -303,6 +304,9 @@ $('brec').onclick = () => {
   for (const tr of recAudioTracks()) stream.addTrack(tr);
   const mime = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
     .find((m) => MediaRecorder.isTypeSupported(m)) ?? '';
+  // one-pass recording: play from the current position, stop by itself
+  // when the video ends (loop is suspended for the take)
+  const onEnded = () => { if (recorder) recorder.stop(); };
   recorder = new MediaRecorder(stream, { mimeType: mime || undefined, videoBitsPerSecond: 12_000_000 });
   recChunks = [];
   recorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
@@ -314,11 +318,16 @@ $('brec').onclick = () => {
     a.download = `upd3301-${Date.now()}.${ext}`;
     a.click();
     recorder = null;
+    video.loop = true;
+    video.removeEventListener('ended', onEnded);
     $('brec').textContent = t('⏺ 録画');
     $('brec').classList.remove('on');
     say(ext === 'mp4' ? t('MP4を保存した') : t('WebMを保存した（MP4化: ffmpeg -i in.webm out.mp4）'));
   };
   recorder.start(1000);
+  video.loop = false;
+  video.addEventListener('ended', onEnded, { once: true });
+  tryPlay();
   $('brec').textContent = t('■ 停止');
   $('brec').classList.add('on');
   say(t('録画中…' ) + (mime.includes('mp4') ? ' (mp4)' : ' (webm)'));
@@ -396,6 +405,10 @@ $('kcontrast').oninput = (e) => { knobs.contrast = +e.target.value; };
 $('ktint').oninput = (e) => { knobs.tint = (+e.target.value) * Math.PI / 180; }; // 度→rad、NTSCのTINTつまみ
 $('ctint').onchange = (e) => { knobs.tintOn = e.target.checked; };
 $('kvhold').oninput = (e) => { knobs.vhold = +e.target.value; };
+$('cghost').onchange = (e) => {
+  knobs.ghost = e.target.checked ? 0.07 : 0; // inner-glass reflection off = modern AR-coated fantasy
+  for (const tb of Object.values(tubes)) tb.ghost = knobs.ghost;
+};
 </script>
 </body>
 </html>
