@@ -63,6 +63,32 @@ const { cgrom } = buildFont();
 addPlaceholderUpperHalf(cgrom);
 
 let machine = null, romBytes = null, tubeOn = true;
+
+// auto-load: if a ROM sits in the served dir, boot without asking. On the
+// public site none is present (NEC copyright → BYO), so this 404s quietly
+// and the file picker stays. Serve locally with your dump in roms/ to boot
+// on page load.
+const ROM_CANDIDATES = ['../roms/N80.ROM', '../roms/N80_2.ROM', '../roms/8801-N80.ROM', '../roms/N88.ROM'];
+const FONT_CANDIDATES = ['../roms/FONT.ROM', '../roms/FONT80.ROM', '../roms/FONT88.ROM'];
+async function autoLoad() {
+  for (const url of FONT_CANDIDATES) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) { applyFontRom(cgrom, new Uint8Array(await r.arrayBuffer())); break; }
+    } catch {}
+  }
+  for (const url of ROM_CANDIDATES) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) {
+        romBytes = new Uint8Array(await r.arrayBuffer());
+        guts.textContent = 'auto-loaded ' + url.split('/').pop();
+        boot();
+        return;
+      }
+    } catch {}
+  }
+}
 const phosphor = new CrtPhosphor({ width: 640, height: 200, phosphor: PHOSPHORS.P22 });
 const tube = new CrtTube({ srcWidth: 640, srcHeight: 200, outWidth: 640, outHeight: 400, mask: 'aperture' });
 const idxBuf = new Uint8Array(640 * 200);
@@ -94,6 +120,7 @@ function boot() {
   machine = new Pc8001Machine({ rom: romBytes });
   canvas.focus();
 }
+autoLoad();
 
 // PC-8001 keyboard matrix
 const KEY = {
