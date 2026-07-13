@@ -11,6 +11,8 @@
 // verified against. Confidence follows memmap.js: verified / documented /
 // approx.
 
+import { ROM_LABEL_META } from './romlabels-meta.js';
+
 export const SCHEMA_VERSION = 1;
 
 const L = (addr, name, confidence, ja, en) =>
@@ -139,11 +141,14 @@ export const ROM_LABELS = Object.freeze({
   }),
 });
 
-// flatten to {addr → entry} for a given ROM set
+// flatten to {addr → entry} for a given ROM set. Each entry carries its
+// machine-generated meta (clobbers/inputs/saves, I/O, memory, T-states)
+// when tools/gen-romlabel-meta.mjs has been run against the dumps.
 export function labelMap(setName) {
   const set = ROM_LABELS[setName];
   if (!set) return new Map();
-  return new Map(set.labels.map((l) => [l.addr, l]));
+  const meta = ROM_LABEL_META[setName] ?? {};
+  return new Map(set.labels.map((l) => [l.addr, { ...l, meta: meta[l.addr] ?? null }]));
 }
 
 // comment in the requested language (ja is the house default)
