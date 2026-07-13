@@ -43,6 +43,8 @@ const DICT = {
   'CRT動画プレイヤー': 'CRT video player',
   'PC-8001実機': 'PC-8001 (the machine)',
   'リセット': 'Reset',
+  '機種:': 'Machine:',
+  'またはROMを選ぶ:': 'or pick a ROM:',
   'CRT物理': 'CRT physics',
   // index
   'テキスト (80桁)': 'Text (80 col)',

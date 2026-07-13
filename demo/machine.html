@@ -33,7 +33,8 @@
 <p class="note">▶ <a href="./index.html" style="color:#8fd">CRT物理デモ</a> · <a href="./terminal.html" style="color:#8fd">ターミナル</a> · <a href="./video.html" style="color:#8fd">動画セミグラ</a> · <a href="./crt-player.html" style="color:#8fd">CRT動画プレイヤー</a></p>
 <div id="stage"><canvas id="crt" tabindex="0" width="640" height="400"></canvas></div>
 <div class="row">
-  <label style="color:#778;font-size:12px">N-BASIC ROM (32KB/24KB): <input type="file" id="from" style="font-size:11px"></label>
+  <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
+  <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">FONT.ROM (任意): <input type="file" id="ffont" style="font-size:11px"></label>
   <button id="breset">リセット</button>
   <button id="btube" class="on">CRT物理</button>
@@ -71,27 +72,47 @@ let machine = null, romBytes = null, tubeOn = true;
 // roms/manifest.json decides — one request, so a ROM-less deploy (the public
 // site: NEC copyright) doesn't spray 404s across the console.
 // manifest: {"rom": "N80_2.ROM", "font": "FONT88.ROM"}
+// roms/manifest.json drives the machine list — one request, so a ROM-less
+// deploy (the public site: NEC copyright → BYO) doesn't spray 404s.
+// Generate it with: node tools/import-bios.mjs <BIOS zip dir>
+let manifest = null;
+async function fetchRom(path) {
+  const r = await fetch('../roms/' + path);
+  if (!r.ok) throw new Error('404 ' + path);
+  return new Uint8Array(await r.arrayBuffer());
+}
+async function loadMachine(entry) {
+  if (!entry?.rom) { guts.textContent = 'この機種はN-BASIC ROM(N80)が無い（88のN88起動はWIP: issue #4）'; return; }
+  try {
+    if (entry.font) { try { applyFontRom(cgrom, await fetchRom(entry.font)); } catch {} }
+    romBytes = await fetchRom(entry.rom);
+    guts.textContent = 'loaded ' + entry.rom;
+    boot();
+  } catch (e) { guts.textContent = String(e.message); }
+}
 async function autoLoad() {
-  let man;
   try {
     const r = await fetch('../roms/manifest.json');
-    if (!r.ok) return;
-    man = await r.json();
+    if (!r.ok) return; // no ROMs served (public site) → file picker stays
+    manifest = await r.json();
   } catch { return; }
-  if (man.font) {
-    try {
-      const r = await fetch('../roms/' + man.font);
-      if (r.ok) applyFontRom(cgrom, new Uint8Array(await r.arrayBuffer()));
-    } catch {}
+  const sel = $('mach');
+  // only machines whose N-BASIC image is verified to boot (the rest have
+  // ROM layouts we haven't cracked — see issue #4)
+  const list = (manifest.machines ?? []).filter((m) => m.rom && m.boots !== false);
+  for (const m of list) {
+    const o = document.createElement('option');
+    o.value = m.name;
+    o.textContent = m.name + (m.boots ? ' ✓' : '');
+    sel.appendChild(o);
   }
-  if (!man.rom) return;
-  try {
-    const r = await fetch('../roms/' + man.rom);
-    if (!r.ok) return;
-    romBytes = new Uint8Array(await r.arrayBuffer());
-    guts.textContent = 'auto-loaded ' + man.rom;
-    boot();
-  } catch {}
+  sel.onchange = () => loadMachine(list.find((m) => m.name === sel.value));
+  const def = list.find((m) => manifest.default && m.rom === manifest.default) ?? list[0];
+  if (def) {
+    sel.value = def.name;
+    if (manifest.font && !def.font) { try { applyFontRom(cgrom, await fetchRom(manifest.font)); } catch {} }
+    loadMachine(def);
+  }
 }
 const phosphor = new CrtPhosphor({ width: 640, height: 200, phosphor: PHOSPHORS.P22 });
 const tube = new CrtTube({ srcWidth: 640, srcHeight: 200, outWidth: 640, outHeight: 400, mask: 'aperture' });

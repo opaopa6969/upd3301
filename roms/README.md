@@ -9,3 +9,15 @@
 | PC-80S31.ROM / DISK.ROM | 2048 / 8192 | ディスクユニットのサブZ80 ROM |
 
 `node tools/identify-roms.mjs roms/` でサイズ・ハッシュから既知セットを判定できる。
+
+## 自動読み込み（machine.html）
+
+```sh
+node tools/import-bios.mjs /mnt/c/Users/opaop/Downloads/BIOS   # 展開＋manifest生成
+node serve.py 3301   # または python3 serve.py 3301
+```
+→ http://localhost:3301/demo/machine.html が `roms/manifest.json` を読んで
+機種プルダウンを作り、既定機（PC-8001mkII）を自動起動する。
+
+公開サイトにはROMを置かない（NEC著作権、2049年まで）ので、そちらでは
+manifest.jsonが404 → 従来のファイル選択にフォールバックする。
