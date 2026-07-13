@@ -980,3 +980,35 @@ test('empty cells carry color: line art survives ORIGINAL 20-pair rows', async (
   const px = img.pixels[4 * 640 + rightCell * 8];
   assert.ok(px > 0, `right-half dots visible (${px})`);
 });
+
+test('PC-98 mode: 16-color palette fill inside detected regions, black outlines', async () => {
+  const { analyzePc98, renderPc98Phase } = await import('./semivideo.js');
+  const W = 32, H = 16;
+  const rgba = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = (y * W + x) * 4;
+    if (x < 16) rgba[o] = 255; // flat red region
+    else { rgba[o + 1] = 128; } // flat mid-green region
+    rgba[o + 3] = 255;
+  }
+  const a = analyzePc98(rgba, W, H, { autoLevels: false });
+  assert.ok(a.palette.length / 3 <= 16, 'at most 16 palette entries');
+  // full red: duty 7 → lit red on every phase; boundary column is black
+  for (let ph = 0; ph < 7; ph++) {
+    const idx = renderPc98Phase(a, ph);
+    assert.equal(idx[5 * W + 4], 2, `red interior on phase ${ph}`);
+    assert.equal(idx[5 * W + 15], 0, 'outline stays black');
+  }
+  // mid green: duty ≈ half over the 7-phase cycle
+  let lit = 0;
+  for (let ph = 0; ph < 7; ph++) {
+    const idx = renderPc98Phase(a, ph);
+    for (let y = 1; y < H - 1; y++) for (let x = 20; x < 30; x++) {
+      if (idx[y * W + x] & 4) lit++;
+    }
+  }
+  const duty = lit / (7 * (H - 2) * 10);
+  assert.ok(duty > 0.3 && duty < 0.75, `mid green ≈ half duty (${duty})`);
+  const a2 = analyzePc98(rgba, W, H, { autoLevels: false });
+  assert.deepEqual(a.palDot, a2.palDot, 'deterministic');
+});

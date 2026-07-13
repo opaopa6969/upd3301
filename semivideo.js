@@ -184,3 +184,107 @@ export function rgbaToLineArt(rgba, dotW, dotH, { edgeGain = 1.0, autoLevels = t
   carryEmptyCellColors(codes, colors, cols, rows);
   return { schemaVersion: SCHEMA_VERSION, cols, rows, codes, colors };
 }
+
+// PC-98 style: outlines + interiors flat-filled with an adaptive 16-color
+// palette picked from the 512 cube (the "16 colors out of the analog
+// palette" culture, one palette per picture). This mode ignores the μPD3301
+// entirely — no cells, no attribute pairs: per-dot color, straight to the
+// framebuffer, the way the 16-bit machines across the street did it.
+//
+// analyzePc98: per frame — edge map (region boundaries, same detector as
+// line art), 512-cube quantization histogram → top-16 palette, and a
+// Bayer-dithered palette index per dot (LUT over all 512 keys, so the
+// per-dot work is a lookup).
+export function analyzePc98(rgba, dotW, dotH, { gain = 1.0, autoLevels = true } = {}) {
+  const n = dotW * dotH;
+  let lo = 0, scale = 1;
+  if (autoLevels) ({ lo, scale } = computeLevels(rgba, n));
+  const norm = (v) => Math.min(1, Math.max(0, (v - lo) * scale / 255 * gain));
+
+  // edge map: per-channel region boundaries (anime = flat fills)
+  const edge = new Uint8Array(n);
+  const eth = 0.16;
+  for (let y = 0; y < dotH - 1; y++) {
+    for (let x = 0; x < dotW - 1; x++) {
+      const o = (y * dotW + x) * 4, ox = o + 4, oy = o + dotW * 4;
+      let mag = 0;
+      for (let c = 0; c < 3; c++) {
+        mag = Math.max(mag,
+          Math.abs(norm(rgba[o + c]) - norm(rgba[ox + c])),
+          Math.abs(norm(rgba[o + c]) - norm(rgba[oy + c])));
+      }
+      if (mag > eth) edge[y * dotW + x] = 1;
+    }
+  }
+
+  // histogram over the 512 cube (8 levels per gun), interiors only
+  const hist = new Uint32Array(512);
+  const keyOf = (o) => {
+    const r = Math.round(norm(rgba[o]) * 7);
+    const g = Math.round(norm(rgba[o + 1]) * 7);
+    const b = Math.round(norm(rgba[o + 2]) * 7);
+    return (r << 6) | (g << 3) | b;
+  };
+  for (let i = 0; i < n; i++) if (!edge[i]) hist[keyOf(i * 4)]++;
+  // top 16 by popularity, deterministic tie-break on key
+  const order = Array.from({ length: 512 }, (_, k) => k)
+    .filter((k) => hist[k] > 0)
+    .sort((a, b) => hist[b] - hist[a] || a - b)
+    .slice(0, 16);
+  if (order.length === 0) order.push(0);
+  const palette = new Uint8Array(order.length * 3);
+  order.forEach((k, i) => {
+    palette[i * 3] = (k >> 6) & 7;
+    palette[i * 3 + 1] = (k >> 3) & 7;
+    palette[i * 3 + 2] = k & 7;
+  });
+  // nearest-palette LUT over all 512 keys
+  const lut = new Uint8Array(512);
+  for (let k = 0; k < 512; k++) {
+    const kr = (k >> 6) & 7, kg = (k >> 3) & 7, kb = k & 7;
+    let best = 0, bd = 1e9;
+    for (let p = 0; p < order.length; p++) {
+      const dr = kr - palette[p * 3], dg = kg - palette[p * 3 + 1], db = kb - palette[p * 3 + 2];
+      const d = dr * dr + dg * dg * 1.5 + db * db; // green weighs a little more
+      if (d < bd) { bd = d; best = p; }
+    }
+    lut[k] = best;
+  }
+  // per-dot palette index, ordered dither (±half a level) before the lookup
+  const BAYER = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+  const palDot = new Uint8Array(n);
+  for (let y = 0; y < dotH; y++) {
+    for (let x = 0; x < dotW; x++) {
+      const i = y * dotW + x, o = i * 4;
+      const jit = ((BAYER[y & 3][x & 3] + 0.5) / 16 - 0.5) / 7;
+      let key = 0;
+      for (let c = 0; c < 3; c++) {
+        const q = Math.round(Math.min(1, Math.max(0, norm(rgba[o + c]) + jit)) * 7);
+        key = (key << 3) | q;
+      }
+      palDot[i] = lut[key];
+    }
+  }
+  return { schemaVersion: SCHEMA_VERSION, dotW, dotH, palette, palDot, edge };
+}
+
+// One temporal phase (0..6) of the analyzed frame → GRB-indexed dots.
+// Palette levels 0..7 become per-gun duty over the 7-frame FRC cycle;
+// outlines stay black on every phase.
+export function renderPc98Phase(analysis, phase, out = null) {
+  const { dotW, dotH, palette, palDot, edge } = analysis;
+  const n = dotW * dotH;
+  const idx = out && out.length === n ? out : new Uint8Array(n);
+  for (let y = 0; y < dotH; y++) {
+    for (let x = 0; x < dotW; x++) {
+      const i = y * dotW + x;
+      if (edge[i]) { idx[i] = 0; continue; }
+      const p = palDot[i] * 3;
+      const ord = (((phase + x * 3 + y * 5) % 7) * 3) % 7;
+      idx[i] = (ord < palette[p] ? 2 : 0)
+        | (ord < palette[p + 1] ? 4 : 0)
+        | (ord < palette[p + 2] ? 1 : 0);
+    }
+  }
+  return idx;
+}

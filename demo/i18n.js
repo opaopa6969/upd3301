@@ -73,6 +73,7 @@ const DICT = {
   '動的2値化 (自動レベル)': 'Dynamic binarization (auto levels)',
   'ディザ': 'Dither',
   '線画 (アニメ)': 'Line art (anime)',
+  '98風 (512中16色)': "'98-style (16 of 512)",
   '27色ちらつき': '27-color flicker',
   '512色ちらつき': '512-color flicker',
   '⏺ 録画': '⏺ REC',

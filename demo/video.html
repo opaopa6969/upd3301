@@ -65,6 +65,7 @@
 <div class="row"><span class="lbl">変換:</span>
   <button id="mdither" class="on">ディザ</button>
   <button id="mline">線画 (アニメ)</button>
+  <button id="m98">98風 (512中16色)</button>
   <button id="bauto" class="on">動的2値化 (自動レベル)</button>
   <button id="b27">27色ちらつき</button>
   <button id="b512">512色ちらつき</button>
@@ -113,7 +114,7 @@
 import { applyI18n, t } from './i18n.js';
 applyI18n();
 import { Terminal } from '../term.js';
-import { rgbaToSemigraphic, rgbaToLineArt } from '../semivideo.js';
+import { rgbaToSemigraphic, rgbaToLineArt, analyzePc98, renderPc98Phase } from '../semivideo.js';
 import { ATTR } from '../pc8001.js';
 import { CrtPhosphor, PHOSPHORS, rollScan } from '../crt.js';
 import { CrtTube } from '../tube.js';
@@ -145,7 +146,8 @@ function makeGrab(w, h) {
 }
 
 let geometry = 'ex'; // 'ex' | 'uex' | 'orig'
-let convMode = 'dither'; // 'dither' | 'line'
+let convMode = 'dither'; // 'dither' | 'line' | 'pc98'
+let pc98 = null, dotIdx = null; // pc98 analysis + per-phase dot frame
 let autoLevels = true, flickerLevels = 0, gain = 1.3, phase = 0; // 0=off, 3=27c, 8=512c
 let term = null, img = null, grab = null, idxBuf = null, rollBuf = null;
 let phosphor = null;
@@ -191,6 +193,10 @@ function frameToCells() {
   grab.drawImage(video, 0, 0, dw, dh);
   const rgba = grab.getImageData(0, 0, dw, dh).data;
   phase++;
+  if (convMode === 'pc98') { // no cells, no attributes: full per-dot color
+    pc98 = analyzePc98(rgba, dw, dh, { gain, autoLevels });
+    return;
+  }
   const r = convMode === 'line'
     ? rgbaToLineArt(rgba, dw, dh, { edgeGain: gain, autoLevels })
     : rgbaToSemigraphic(rgba, dw, dh, {
@@ -248,7 +254,7 @@ function blit() {
 }
 
 const FR = 1 / 60;
-let last = performance.now(), acc = 0, workMs = 0;
+let last = performance.now(), acc = 0, workMs = 0, frameNo98 = 0;
 function loop(now) {
   acc += Math.min(0.1, (now - last) / 1000);
   last = now;
@@ -257,8 +263,25 @@ function loop(now) {
   let steps = 0;
   while (acc >= FR && steps < 2) {
     acc -= FR; steps++;
-    term.sys.crtc.stepFrame();
-    term.sys.render({ cgrom: cgromEmpty, out: idxBuf });
+    if (convMode === 'pc98' && pc98) {
+      // bypass the whole logical stack: per-dot 512-color FRC frames
+      dotIdx = renderPc98Phase(pc98, (frameNo98++) % 7, dotIdx);
+      const dw = term.dotWidth;
+      for (let dy = 0; dy < term.dotHeight; dy++) {
+        const rowOff = dy * 2 * W;
+        for (let dx = 0; dx < dw; dx++) {
+          const v = dotIdx[dy * dw + dx];
+          const px = dx * 4;
+          for (let sy = 0; sy < 2; sy++) {
+            const o = rowOff + sy * W + px;
+            idxBuf[o] = v; idxBuf[o + 1] = v; idxBuf[o + 2] = v; idxBuf[o + 3] = v;
+          }
+        }
+      }
+    } else {
+      term.sys.crtc.stepFrame();
+      term.sys.render({ cgrom: cgromEmpty, out: idxBuf });
+    }
     phosphor.step(vholdApply(idxBuf, rollBuf), FR);
   }
   if (acc > FR) acc = 0; // drop the backlog instead of spiraling
@@ -384,8 +407,19 @@ for (const [k, el] of Object.entries(geoBtns)) {
     for (const [k2, el2] of Object.entries(geoBtns)) el2.classList.toggle('on', k2 === k);
   };
 }
-$('mdither').onclick = () => { convMode = 'dither'; $('mdither').classList.add('on'); $('mline').classList.remove('on'); };
-$('mline').onclick = () => { convMode = 'line'; $('mline').classList.add('on'); $('mdither').classList.remove('on'); };
+const convBtns = { dither: $('mdither'), line: $('mline'), pc98: $('m98') };
+function setConv(m) {
+  convMode = m;
+  for (const [k, el] of Object.entries(convBtns)) el.classList.toggle('on', k === m);
+  if (m === 'pc98' && phosName === 'P22') { // FRC needs afterglow to read
+    phosName = 'LONG';
+    phosphor.setPhosphor(PHOSPHORS.LONG);
+    for (const [k2, el2] of Object.entries(phosBtns)) el2.classList.toggle('on', k2 === 'LONG');
+  }
+}
+$('mdither').onclick = () => setConv('dither');
+$('mline').onclick = () => setConv('line');
+$('m98').onclick = () => setConv('pc98');
 $('bauto').onclick = () => { autoLevels = !autoLevels; $('bauto').classList.toggle('on', autoLevels); };
 $('b400').onclick = () => {
   const on = $('b400').classList.toggle('on');
