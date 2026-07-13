@@ -18,7 +18,7 @@ import { Pc8001TextSystem } from './pc8001.js';
 export const SCHEMA_VERSION = 1;
 
 export class Pc8001Machine {
-  constructor({ rom, frameHz = 60, clockHz = 4_000_000, dmaSteal = 0.3 } = {}) {
+  constructor({ rom, frameHz = 60, clockHz = 4_000_000, dmaSteal = 0.3, extRamBanks = 4 } = {}) {
     if (!rom || rom.length < 0x1000) throw new Error('need an N-BASIC ROM image');
     this.sys = new Pc8001TextSystem({ frameHz });
     this.romTop = Math.min(0x8000, rom.length);
@@ -28,15 +28,52 @@ export class Pc8001Machine {
     this.tInFrame = 0;
     this.frame = 0;
 
+    // PC-8012 expansion-unit bank RAM: 32KB boards overlaying 0000-7FFF.
+    // Port E2h = per-bank READ enable bitmap, E3h = per-bank WRITE enable
+    // bitmap — separate registers, so "read the ROM while writing the RAM
+    // behind it" is a legitimate move, and enabling several write bits
+    // broadcasts one LD into every selected board at once. The PC-8801
+    // inherited this exact protocol for its expansion RAM.
+    this.extRam = Array.from({ length: Math.min(8, extRamBanks) }, () => null);
+    this.readEn = 0;
+    this.writeEn = 0;
+
     const mem = this.sys.memory;
     const romTop = this.romTop;
     this.cpu = new Z80({
-      read: (a) => mem[a],
-      write: (a, v) => { if (a >= romTop) mem[a] = v; },
+      read: (a) => {
+        if (a < 0x8000 && this.readEn) {
+          const bank = this._lowestBank(this.readEn);
+          if (bank >= 0) return this._bank(bank)[a];
+        }
+        return mem[a];
+      },
+      write: (a, v) => {
+        if (a < 0x8000 && this.writeEn) {
+          for (let b = 0; b < this.extRam.length; b++) {
+            if (this.writeEn & (1 << b)) this._bank(b)[a] = v;
+          }
+          return;
+        }
+        if (a >= romTop) mem[a] = v;
+      },
       in: (p) => this._in(p & 0xff),
-      out: (p, v) => this.sys.out(p & 0xff, v),
+      out: (p, v) => this._out(p & 0xff, v),
     });
     this.cpu.pc = 0;
+  }
+
+  _bank(b) { return this.extRam[b] ?? (this.extRam[b] = new Uint8Array(0x8000)); }
+
+  _lowestBank(mask) {
+    for (let b = 0; b < this.extRam.length; b++) if (mask & (1 << b)) return b;
+    return -1;
+  }
+
+  _out(port, v) {
+    if (port === 0xe2) { this.readEn = v & ((1 << this.extRam.length) - 1); return; }
+    if (port === 0xe3) { this.writeEn = v & ((1 << this.extRam.length) - 1); return; }
+    this.sys.out(port, v);
   }
 
   _in(port) {
@@ -47,6 +84,8 @@ export class Pc8001Machine {
       return vrtc ? 0xff : 0xdf;
     }
     if (port === 0x20 || port === 0x21) return 0x00; // 8251 stub
+    if (port === 0xe2) return this.readEn; // PC-8012 bank state readback
+    if (port === 0xe3) return this.writeEn;
     const v = this.sys.in(port);
     return v === 0xff && port >= 0x50 && port <= 0x68 ? this.sys.in(port) : v;
   }
