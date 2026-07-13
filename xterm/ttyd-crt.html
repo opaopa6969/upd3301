@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ttyd — 1979 CRT</title>
+<!--
+  ttyd client page with the CRT renderer. Two lives:
+  - dev: served from the repo root (python3 serve.py), the BUNDLE block below
+    imports ./crt-xterm.js as real ES modules. No ttyd behind it → the page
+    drops into a local-echo DEMO mode so you can still see the glass.
+  - dist: `node xterm/build.mjs` inlines crt-xterm.js + crt.js + tube.js +
+    demo/font.js into the BUNDLE block and writes xterm/dist/ttyd-crt.html —
+    a single file you hand to `ttyd --index`.
+  xterm.js itself stays on the CDN (MIT, not our code to embed).
+
+  ttyd protocol (verified against ttyd main, html/src/components/terminal/
+  xterm/index.ts): WebSocket subprotocol 'tty', binary frames; client sends
+  {AuthToken, columns, rows} JSON on open, then '0'+input / '1'+resize JSON /
+  '2' pause / '3' resume; server sends '0'+output / '1'+title / '2'+prefs.
+  Token comes from GET <base>/token → {token}.
+-->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+<style>
+  html, body { height: 100%; margin: 0; background: #000; overflow: hidden; }
+  #terminal { position: absolute; inset: 0; padding: 8px; }
+  .xterm .xterm-viewport { background: #000; }
+  /* panel: top-right, collapsible, out of the phosphor's way */
+  #panel {
+    position: fixed; top: 8px; right: 8px; z-index: 100;
+    font: 12px ui-monospace, monospace; color: #9ab; user-select: none;
+  }
+  #panel .head {
+    display: flex; gap: 8px; align-items: center; justify-content: flex-end;
+  }
+  #status { padding: 3px 8px; border-radius: 10px; background: #222; color: #888; }
+  #status.on { background: #143; color: #6fa; }
+  #status.err { background: #411; color: #f88; }
+  #panel button {
+    background: #1a1a22; color: #9ab; border: 1px solid #334; border-radius: 4px;
+    padding: 3px 10px; cursor: pointer; font: inherit;
+  }
+  #panel button.on { background: #253; border-color: #4a6; color: #cfd; }
+  #body {
+    margin-top: 6px; background: rgba(10,10,16,.92); border: 1px solid #334;
+    border-radius: 6px; padding: 10px; display: grid; gap: 7px; min-width: 230px;
+  }
+  #body label { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+  #body select, #body input[type=range] { width: 130px; }
+  #body select { background: #111; color: #9ab; border: 1px solid #334; }
+  #body.hidden { display: none; }
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<div id="panel">
+  <div class="head">
+    <span id="status">connecting…</span>
+    <button id="crtToggle" class="on" title="toggle CRT renderer">CRT</button>
+    <button id="knobsToggle" title="show/hide knobs">▾</button>
+  </div>
+  <div id="body">
+    <label>phosphor <select id="phosphor"></select></label>
+    <label>mask <select id="mask"></select></label>
+    <label>bright <input id="bright" type="range" min="0.4" max="3" step="0.05"></label>
+    <label>flicker <input id="flicker" type="checkbox"></label>
+    <label>strict 1979 <input id="strict" type="checkbox" title="no per-cell background, like the real PC-8001"></label>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+
+<!-- BUILD:BUNDLE-START -->
+<script type="module">
+// dev mode: real module imports; build.mjs swaps this whole block for the
+// inlined bundle so dist is a single self-contained file
+import { CrtRendererAddon, PHOSPHORS, MASKS } from './crt-xterm.js';
+window.CrtRendererAddon = CrtRendererAddon;
+window.CrtPHOSPHORS = PHOSPHORS;
+window.CrtMASKS = MASKS;
+</script>
+<!-- BUILD:BUNDLE-END -->
+
+<script type="module">
+// module scripts run in document order, so the bundle above already ran
+const CrtRendererAddon = window.CrtRendererAddon;
+const PHOSPHORS = window.CrtPHOSPHORS;
+const MASKS = window.CrtMASKS;
+
+// ---- settings (persisted) --------------------------------------------------
+const STORE = 'ttyd-crt-settings';
+const settings = Object.assign({
+  phosphor: 'P22', mask: 'aperture', bright: 1.2,
+  flicker: false, strict1979: false, crtOn: true,
+}, (() => { try { return JSON.parse(localStorage.getItem(STORE)) || {}; } catch { return {}; } })());
+const save = () => { try { localStorage.setItem(STORE, JSON.stringify(settings)); } catch {} };
+
+// ---- terminal + CRT ---------------------------------------------------------
+const term = new Terminal({
+  // cursor drawing is ours; keep xterm's own blink off so the hidden layer
+  // never fights the phosphor
+  cursorBlink: false,
+  fontSize: 15,
+  fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
+  scrollback: 2000,
+  theme: { background: '#000000' },
+});
+const fitAddon = new FitAddon.FitAddon();
+term.loadAddon(fitAddon);
+term.open(document.getElementById('terminal'));
+fitAddon.fit();
+
+const crt = new CrtRendererAddon({
+  phosphor: settings.phosphor, mask: settings.mask, bright: settings.bright,
+  flicker: settings.flicker, strict1979: settings.strict1979,
+});
+term.loadAddon(crt);
+crt.setEnabled(settings.crtOn);
+term.focus();
+
+// ---- panel wiring -----------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const fill = (sel, keys, current) => {
+  for (const k of keys) {
+    const o = document.createElement('option');
+    o.value = k; o.textContent = k; o.selected = k === current;
+    sel.appendChild(o);
+  }
+};
+fill($('phosphor'), Object.keys(PHOSPHORS), settings.phosphor);
+fill($('mask'), MASKS.filter((m) => m !== 'plasma'), settings.mask);
+$('bright').value = settings.bright;
+$('flicker').checked = settings.flicker;
+$('strict').checked = settings.strict1979;
+const apply = (key, value) => { settings[key] = value; crt.setOptions({ [key]: value }); save(); };
+$('phosphor').onchange = (e) => apply('phosphor', e.target.value);
+$('mask').onchange = (e) => apply('mask', e.target.value);
+$('bright').oninput = (e) => apply('bright', +e.target.value);
+$('flicker').onchange = (e) => apply('flicker', e.target.checked);
+$('strict').onchange = (e) => apply('strict1979', e.target.checked);
+$('crtToggle').onclick = () => {
+  settings.crtOn = !settings.crtOn;
+  crt.setEnabled(settings.crtOn);
+  $('crtToggle').classList.toggle('on', settings.crtOn);
+  save();
+  term.focus();
+};
+$('crtToggle').classList.toggle('on', settings.crtOn);
+let knobsOpen = true;
+$('knobsToggle').onclick = () => {
+  knobsOpen = !knobsOpen;
+  $('body').classList.toggle('hidden', !knobsOpen);
+  $('knobsToggle').textContent = knobsOpen ? '▾' : '▸';
+};
+$('knobsToggle').onclick(); // start collapsed: the terminal is the point
+const setStatus = (text, cls) => {
+  const s = $('status');
+  s.textContent = text;
+  s.className = cls || '';
+};
+
+// ---- ttyd websocket ----------------------------------------------------------
+// URL derivation mirrors ttyd's own client (html/src/components/app.tsx):
+// token = <proto>//<host><path>/token, ws = ws(s)://<host><path>/ws.
+// ?ws=ws://... overrides for pointing a dev page at a live ttyd.
+const query = new URLSearchParams(window.location.search);
+const basePath = window.location.pathname.replace(/[/]+$/, '');
+const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const wsUrl = query.get('ws')
+  || [wsProto, '//', window.location.host, basePath, '/ws', window.location.search].join('');
+const tokenUrl = [window.location.protocol, '//', window.location.host, basePath, '/token'].join('');
+
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+let ws = null;
+let opened = false;
+let demo = false;
+
+// ttyd flow control (same constants as the stock client): past `limit`
+// buffered bytes, count pending writes and PAUSE/RESUME the pty
+const flow = { limit: 100000, highWater: 10, lowWater: 4, written: 0, pending: 0 };
+
+function sendResize() {
+  if (ws?.readyState === 1) {
+    ws.send(enc.encode('1' + JSON.stringify({ columns: term.cols, rows: term.rows })));
+  }
+}
+
+async function connect() {
+  let token = '';
+  try {
+    const resp = await fetch(tokenUrl);
+    if (resp.ok) token = (await resp.json()).token || '';
+  } catch {} // no /token endpoint (no auth, or dev server) — fine
+  setStatus('connecting…', '');
+  ws = new WebSocket(wsUrl, ['tty']);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    opened = true;
+    demo = false;
+    setStatus('connected', 'on');
+    ws.send(enc.encode(JSON.stringify({ AuthToken: token, columns: term.cols, rows: term.rows })));
+  };
+  ws.onmessage = (ev) => {
+    const raw = new Uint8Array(ev.data);
+    const cmd = String.fromCharCode(raw[0]);
+    const data = raw.subarray(1);
+    if (cmd === '0') { // OUTPUT
+      flow.written += data.length;
+      if (flow.written > flow.limit) {
+        term.write(data, () => {
+          flow.pending = Math.max(flow.pending - 1, 0);
+          if (flow.pending < flow.lowWater) ws?.send(enc.encode('3')); // RESUME
+        });
+        flow.pending++;
+        flow.written = 0;
+        if (flow.pending > flow.highWater) ws.send(enc.encode('2')); // PAUSE
+      } else {
+        term.write(data);
+      }
+    } else if (cmd === '1') { // SET_WINDOW_TITLE
+      document.title = dec.decode(data);
+    } else if (cmd === '2') { // SET_PREFERENCES (--client-option)
+      try {
+        const prefs = JSON.parse(dec.decode(data));
+        for (const [k, v] of Object.entries(prefs)) {
+          // crtPhosphor=P39 etc. steer the addon; the rest go to xterm
+          if (k.startsWith('crt')) {
+            const key = k.slice(3, 4).toLowerCase() + k.slice(4);
+            crt.setOptions({ [key]: v });
+          } else {
+            try { term.options[k] = v; } catch {}
+          }
+        }
+      } catch {}
+    }
+  };
+  ws.onclose = (ev) => {
+    ws = null;
+    if (!opened) { enterDemo(); return; } // never connected: probably no ttyd
+    setStatus('disconnected', 'err');
+    if (ev.code !== 1000) setTimeout(connect, 2000); // ttyd-style auto-reconnect
+  };
+}
+
+// No ttyd behind the page (dev preview): local echo, so the tube still glows.
+function enterDemo() {
+  demo = true;
+  setStatus('demo (no ttyd)', 'err');
+  term.write('\x1b[2J\x1b[H');
+  term.write('\x1b[7m 1979 CRT — demo mode \x1b[0m\r\n\r\n');
+  term.write('No ttyd endpoint at ' + wsUrl + '\r\n');
+  term.write('Serve this file via `ttyd --index ...` for a real shell.\r\n');
+  term.write('\x1b[31mR\x1b[32mG\x1b[34mB\x1b[33mY\x1b[35mM\x1b[36mC\x1b[0m ');
+  term.write('\x1b[7mREVERSE\x1b[0m \x1b[4mUNDER\x1b[0m \x1b[5mBLINK\x1b[0m — local echo below:\r\n\r\n$ ');
+}
+
+term.onData((d) => {
+  if (demo) { term.write(d === '\r' ? '\r\n$ ' : d); return; }
+  if (ws?.readyState === 1) ws.send(enc.encode('0' + d));
+});
+term.onBinary((d) => {
+  if (ws?.readyState !== 1) return;
+  const buf = new Uint8Array(d.length + 1);
+  buf[0] = '0'.charCodeAt(0);
+  for (let i = 0; i < d.length; i++) buf[i + 1] = d.charCodeAt(i) & 255;
+  ws.send(buf);
+});
+term.onResize(sendResize);
+window.addEventListener('resize', () => fitAddon.fit());
+
+connect();
+</script>
+</body>
+</html>

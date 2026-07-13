@@ -1,0 +1,1573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ttyd — 1979 CRT</title>
+<!--
+  ttyd client page with the CRT renderer. Two lives:
+  - dev: served from the repo root (python3 serve.py), the BUNDLE block below
+    imports ./crt-xterm.js as real ES modules. No ttyd behind it → the page
+    drops into a local-echo DEMO mode so you can still see the glass.
+  - dist: `node xterm/build.mjs` inlines crt-xterm.js + crt.js + tube.js +
+    demo/font.js into the BUNDLE block and writes xterm/dist/ttyd-crt.html —
+    a single file you hand to `ttyd --index`.
+  xterm.js itself stays on the CDN (MIT, not our code to embed).
+
+  ttyd protocol (verified against ttyd main, html/src/components/terminal/
+  xterm/index.ts): WebSocket subprotocol 'tty', binary frames; client sends
+  {AuthToken, columns, rows} JSON on open, then '0'+input / '1'+resize JSON /
+  '2' pause / '3' resume; server sends '0'+output / '1'+title / '2'+prefs.
+  Token comes from GET <base>/token → {token}.
+-->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+<style>
+  html, body { height: 100%; margin: 0; background: #000; overflow: hidden; }
+  #terminal { position: absolute; inset: 0; padding: 8px; }
+  .xterm .xterm-viewport { background: #000; }
+  /* panel: top-right, collapsible, out of the phosphor's way */
+  #panel {
+    position: fixed; top: 8px; right: 8px; z-index: 100;
+    font: 12px ui-monospace, monospace; color: #9ab; user-select: none;
+  }
+  #panel .head {
+    display: flex; gap: 8px; align-items: center; justify-content: flex-end;
+  }
+  #status { padding: 3px 8px; border-radius: 10px; background: #222; color: #888; }
+  #status.on { background: #143; color: #6fa; }
+  #status.err { background: #411; color: #f88; }
+  #panel button {
+    background: #1a1a22; color: #9ab; border: 1px solid #334; border-radius: 4px;
+    padding: 3px 10px; cursor: pointer; font: inherit;
+  }
+  #panel button.on { background: #253; border-color: #4a6; color: #cfd; }
+  #body {
+    margin-top: 6px; background: rgba(10,10,16,.92); border: 1px solid #334;
+    border-radius: 6px; padding: 10px; display: grid; gap: 7px; min-width: 230px;
+  }
+  #body label { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+  #body select, #body input[type=range] { width: 130px; }
+  #body select { background: #111; color: #9ab; border: 1px solid #334; }
+  #body.hidden { display: none; }
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<div id="panel">
+  <div class="head">
+    <span id="status">connecting…</span>
+    <button id="crtToggle" class="on" title="toggle CRT renderer">CRT</button>
+    <button id="knobsToggle" title="show/hide knobs">▾</button>
+  </div>
+  <div id="body">
+    <label>phosphor <select id="phosphor"></select></label>
+    <label>mask <select id="mask"></select></label>
+    <label>bright <input id="bright" type="range" min="0.4" max="3" step="0.05"></label>
+    <label>flicker <input id="flicker" type="checkbox"></label>
+    <label>strict 1979 <input id="strict" type="checkbox" title="no per-cell background, like the real PC-8001"></label>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+
+<script type="module">
+// bundled by xterm/build.mjs — do not edit; edit the modules
+const __defs = new Map(), __mods = new Map();
+const __def = (id, fn) => { __defs.set(id, fn); };
+const __req = (id) => {
+  if (!__mods.has(id)) __mods.set(id, __defs.get(id)(__req));
+  return __mods.get(id);
+};
+
+// ---- crt.js ----
+__def("crt.js", (__req) => {
+// crt — the physical layer, part 1: phosphor physics.
+//
+// Everything below the μPD3301 is digital and frame-atomic; this module is
+// where photons happen. A phosphor is characterized here by:
+//
+// - Two-component decay per gun. Real phosphor decay is roughly hyperbolic;
+//   we approximate it with a fast "flash" component and a slow "afterglow"
+//   tail, each exponential:
+//     fast(t+dt) = max(fast · e^(-dt/tauFast), drive)
+//     tail(t+dt) = max(tail · e^(-dt/tauTail), drive · tailFrac)
+//   The max() models re-excitation; an undriven dot just decays.
+// - Differential persistence: each gun (R,G,B) has its own constants. On a
+//   real P22 tube blue dies first and red lingers, so a white flash decays
+//   through an orange ghost. That falls out of the numbers here.
+// - Emission color: guns don't emit ideal R/G/B. `primaries[gun] = [r,g,b]`
+//   is the linear light each gun's phosphor actually radiates; a mono tube
+//   (P39 green) is just three guns all mapped to green. The tail may have
+//   its own color (`tailPrimaries`) — that's the P7 radar phosphor: a
+//   blue-white flash whose afterglow is yellow-green.
+// - Burn-in: excitation accumulates dose; efficiency = 1/(1 + burnRate·dose).
+//   Leave a screen up long enough and its ghost stays. Off by default.
+//
+// Constants are order-of-magnitude honest, tuned so the character of each
+// phosphor is visible at 60 Hz frame granularity — not colorimetry.
+//
+// Pure, zero deps, deterministic. Suite-contract compliant.
+
+const SCHEMA_VERSION = 2;
+
+const ID3 = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+
+const PHOSPHORS = Object.freeze({
+  P22: {
+    name: 'P22 (color TV, short)',
+    tau: [0.0015, 0.0008, 0.0004],
+    tailTau: [0.15, 0.08, 0.05],
+    tailFrac: [0.045, 0.02, 0.012],
+    primaries: [[1, 0.22, 0.12], [0.2, 1, 0.16], [0.14, 0.18, 1]],
+  },
+  LONG: {
+    name: 'hypothetical long color',
+    tau: [0.12, 0.12, 0.12],
+    tailTau: [0.4, 0.4, 0.4],
+    tailFrac: [0.05, 0.05, 0.05],
+    primaries: [[1, 0.22, 0.12], [0.2, 1, 0.16], [0.14, 0.18, 1]],
+  },
+  P39: {
+    name: 'P39 (long green mono)',
+    tau: [0.2, 0.2, 0.2],
+    tailTau: [0.55, 0.55, 0.55],
+    tailFrac: [0.08, 0.08, 0.08],
+    // every gun lands on the same green phosphor, weighted like luma
+    primaries: [[0.09, 0.3, 0.05], [0.16, 0.55, 0.09], [0.04, 0.15, 0.02]],
+  },
+  AMBER: {
+    name: 'amber mono CRT (Apple II era)',
+    tau: [0.045, 0.045, 0.045],
+    tailTau: [0.18, 0.18, 0.18],
+    tailFrac: [0.03, 0.03, 0.03],
+    // one amber phosphor, all guns land on it (luma-weighted)
+    primaries: [[0.35, 0.22, 0.02], [0.55, 0.34, 0.03], [0.15, 0.09, 0.01]],
+  },
+  PLASMA: {
+    name: 'neon gas plasma (orange)',
+    // gas discharge, not phosphor: light stops almost instantly when the
+    // cell stops firing — but AC plasma cells latch (memory), so a lit
+    // pixel refreshes every frame and never flickers. Neon glow ~585nm.
+    tau: [0.002, 0.002, 0.002],
+    tailTau: [0.01, 0.01, 0.01],
+    tailFrac: [0.0, 0.0, 0.0],
+    primaries: [[0.35, 0.16, 0.01], [0.55, 0.25, 0.02], [0.15, 0.07, 0.005]],
+  },
+  P7: {
+    name: 'P7 (radar: blue flash, yellow afterglow)',
+    tau: [0.004, 0.004, 0.004],
+    tailTau: [0.9, 0.9, 0.9],
+    tailFrac: [0.16, 0.16, 0.16],
+    primaries: [[0.35, 0.45, 1], [0.35, 0.45, 1], [0.35, 0.45, 1]].map(
+      (p, i) => p.map((v) => v * [0.35, 0.5, 0.15][i])),
+    tailPrimaries: [[0.75, 0.9, 0.15], [0.75, 0.9, 0.15], [0.75, 0.9, 0.15]].map(
+      (p, i) => p.map((v) => v * [0.35, 0.5, 0.15][i])),
+  },
+});
+
+// GRB index (0..7) → per-gun drive bit
+function indexToRgb(i) {
+  return [(i >> 1) & 1, (i >> 2) & 1, i & 1];
+}
+
+class CrtPhosphor {
+  // Either pass `phosphor: PHOSPHORS.P22` (full character) or a bare
+  // `tau: [r,g,b]` (single-exponential, identity emission — handy in tests).
+  constructor({ width, height, phosphor = null, tau = null, drive = 1.0, burnRate = 0 } = {}) {
+    this.width = width;
+    this.height = height;
+    this.drive = drive;
+    this.burnRate = burnRate;
+    const n = width * height;
+    this.fast = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+    this.tail = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+    this.dose = burnRate > 0
+      ? [new Float32Array(n), new Float32Array(n), new Float32Array(n)] : null;
+    this._comp = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+    this.setPhosphor(phosphor ?? (tau ? { tau } : PHOSPHORS.P22));
+  }
+
+  setPhosphor(spec) {
+    this.spec = spec;
+    this.tau = [...spec.tau];
+    this.tailTau = spec.tailTau ? [...spec.tailTau] : [1, 1, 1];
+    this.tailFrac = spec.tailFrac ? [...spec.tailFrac] : [0, 0, 0];
+    this.primaries = spec.primaries ?? ID3;
+    this.tailPrimaries = spec.tailPrimaries ?? this.primaries;
+    return this;
+  }
+
+  setTau(tau) { this.tau = [...tau]; return this; }
+
+  setBurnRate(rate) {
+    if (rate > 0 && !this.dose) {
+      const n = this.width * this.height;
+      this.dose = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+    }
+    this.burnRate = rate;
+    return this;
+  }
+
+  reset() {
+    for (const c of this.fast) c.fill(0);
+    for (const c of this.tail) c.fill(0);
+    if (this.dose) for (const c of this.dose) c.fill(0);
+  }
+
+  // One beam pass: pixels is a GRB-indexed (0..7) Uint8Array of width*height,
+  // dt the time since the previous pass (typically 1/60 s).
+  // fieldParity: null = progressive; 0/1 = interlaced field — only lines of
+  // that parity are excited, the rest just decay, so each line refreshes at
+  // half rate and detail flickers on short phosphor.
+  step(pixels, dt, { fieldParity = null } = {}) {
+    const w = this.width, h = this.height;
+    for (let gun = 0; gun < 3; gun++) {
+      const F = this.fast[gun], T = this.tail[gun];
+      const D = this.dose ? this.dose[gun] : null;
+      const dFast = Math.exp(-dt / this.tau[gun]);
+      const dTail = Math.exp(-dt / this.tailTau[gun]);
+      const frac = this.tailFrac[gun];
+      const shift = gun === 0 ? 1 : gun === 1 ? 2 : 0; // R=bit1, G=bit2, B=bit0
+      for (let y = 0; y < h; y++) {
+        const excitable = fieldParity === null || (y & 1) === fieldParity;
+        const o = y * w;
+        for (let x = 0; x < w; x++) {
+          const i = o + x;
+          let f = F[i] * dFast;
+          let t = T[i] * dTail;
+          if (excitable && ((pixels[i] >> shift) & 1)) {
+            let e = this.drive;
+            if (D) {
+              e /= 1 + this.burnRate * D[i];
+              D[i] += dt;
+            }
+            if (e > f) f = e;
+            const et = e * frac;
+            if (et > t) t = et;
+          }
+          F[i] = f;
+          T[i] = t;
+        }
+      }
+    }
+    return this;
+  }
+
+  // Linear emitted light per display channel: for each gun, flash and
+  // afterglow radiate through their own emission colors.
+  composite() {
+    const n = this.width * this.height;
+    const [R, G, B] = this._comp;
+    R.fill(0); G.fill(0); B.fill(0);
+    for (let gun = 0; gun < 3; gun++) {
+      const F = this.fast[gun], T = this.tail[gun];
+      const [pr, pg, pb] = this.primaries[gun];
+      const [tr, tg, tb] = this.tailPrimaries[gun];
+      for (let i = 0; i < n; i++) {
+        const f = F[i], t = T[i];
+        R[i] += f * pr + t * tr;
+        G[i] += f * pg + t * tg;
+        B[i] += f * pb + t * tb;
+      }
+    }
+    return this._comp;
+  }
+
+  _gammaLut(gamma) {
+    // Math.pow per subpixel dominates the frame budget; a 4096-entry LUT is
+    // indistinguishable (error < 0.5/255) and ~10x faster
+    if (!this._glut || this._glutGamma !== gamma) {
+      const lut = new Float32Array(4096);
+      const inv = 1 / gamma;
+      for (let i = 0; i < 4096; i++) lut[i] = (i / 4095) ** inv;
+      this._glut = lut;
+      this._glutGamma = gamma;
+    }
+    return this._glut;
+  }
+
+  toRGBA(out, { gamma = 2.2, scale = 1, tint = 0, contrast = 1 } = {}) {
+    const n = this.width * this.height;
+    const rgba = out && out.length === n * 4 ? out : new Uint8ClampedArray(n * 4);
+    const [R, G, B] = this.composite();
+    const lut = gamma !== 1 ? this._gammaLut(gamma) : null;
+    const M = tint !== 0 ? tintMatrix(tint) : null;
+    for (let i = 0; i < n; i++) {
+      let r = R[i] * scale, g = G[i] * scale, b = B[i] * scale;
+      if (M) {
+        const r2 = M[0] * r + M[1] * g + M[2] * b;
+        const g2 = M[3] * r + M[4] * g + M[5] * b;
+        const b2 = M[6] * r + M[7] * g + M[8] * b;
+        r = Math.max(0, r2); g = Math.max(0, g2); b = Math.max(0, b2);
+      }
+      r = Math.min(1, r); g = Math.min(1, g); b = Math.min(1, b);
+      if (lut) {
+        r = lut[(r * 4095) | 0]; g = lut[(g * 4095) | 0]; b = lut[(b * 4095) | 0];
+      }
+      if (contrast !== 1) {
+        r = (r - 0.5) * contrast + 0.5;
+        g = (g - 0.5) * contrast + 0.5;
+        b = (b - 0.5) * contrast + 0.5;
+      }
+      rgba[i * 4] = 255 * r;
+      rgba[i * 4 + 1] = 255 * g;
+      rgba[i * 4 + 2] = 255 * b;
+      rgba[i * 4 + 3] = 255;
+    }
+    return rgba;
+  }
+
+  // Raw per-gun luminance (flash + afterglow) at one pixel — for tests.
+  sample(x, y) {
+    const i = y * this.width + x;
+    return {
+      r: this.fast[0][i] + this.tail[0][i],
+      g: this.fast[1][i] + this.tail[1][i],
+      b: this.fast[2][i] + this.tail[2][i],
+    };
+  }
+}
+
+function createCrtPhosphor(opts) {
+  return new CrtPhosphor(opts);
+}
+
+// Power-off: the deflection amplitude collapses, so the whole raster lands
+// on a shrinking band — vertical dies first (bright horizontal line), then
+// horizontal (a dot), while the beam energy concentrates: same electrons,
+// less phosphor area. Model: remap every lit source pixel toward the
+// center by (hScale, vScale), OR-ing gun bits where they pile up; the
+// caller raises `drive` by the density factor 1/(hScale·vScale) so the
+// piled-up phosphor is excited past 1.0 and its afterglow lingers.
+function collapseScan(src, dst, width, height, hScale, vScale) {
+  dst.fill(0);
+  const cx = (width - 1) / 2, cy = (height - 1) / 2;
+  for (let y = 0; y < height; y++) {
+    const ty = Math.round(cy + (y - cy) * vScale);
+    const rowOff = ty * width;
+    const o = y * width;
+    for (let x = 0; x < width; x++) {
+      const v = src[o + x];
+      if (!v) continue;
+      const tx = Math.round(cx + (x - cx) * hScale);
+      dst[rowOff + tx] |= v;
+    }
+  }
+  return dst;
+}
+
+// Analog drive: RGBA frames (a video, a framebuffer) excite the guns with
+// continuous levels instead of GRB bits. Input is sRGB-encoded; a LUT
+// linearizes (gamma 2.2) so the phosphor integrates light, not code values.
+const DEGAMMA = new Float32Array(256);
+for (let i = 0; i < 256; i++) DEGAMMA[i] = (i / 255) ** 2.2;
+
+CrtPhosphor.prototype.stepAnalog = function stepAnalog(rgba, dt, { fieldParity = null } = {}) {
+  const w = this.width, h = this.height;
+  for (let gun = 0; gun < 3; gun++) {
+    const F = this.fast[gun], T = this.tail[gun];
+    const D = this.dose ? this.dose[gun] : null;
+    const dFast = Math.exp(-dt / this.tau[gun]);
+    const dTail = Math.exp(-dt / this.tailTau[gun]);
+    const frac = this.tailFrac[gun];
+    for (let y = 0; y < h; y++) {
+      const excitable = fieldParity === null || (y & 1) === fieldParity;
+      const o = y * w;
+      for (let x = 0; x < w; x++) {
+        const i = o + x;
+        let f = F[i] * dFast;
+        let t = T[i] * dTail;
+        if (excitable) {
+          let e = DEGAMMA[rgba[i * 4 + gun]] * this.drive;
+          if (D && e > 0) {
+            e /= 1 + this.burnRate * D[i];
+            D[i] += dt * e;
+          }
+          if (e > f) f = e;
+          const et = e * frac;
+          if (et > t) t = et;
+        }
+        F[i] = f;
+        T[i] = t;
+      }
+    }
+  }
+  return this;
+};
+
+// NTSC tint: a chroma phase error rotates every hue at once — the reason
+// American TVs shipped with a TINT knob. RGB → YIQ, rotate (I,Q) by rad,
+// back to RGB, precombined into one 3x3 matrix (row-major, length 9).
+function tintMatrix(rad) {
+  const A = [ // RGB → YIQ
+    [0.299, 0.587, 0.114],
+    [0.596, -0.274, -0.322],
+    [0.211, -0.523, 0.312],
+  ];
+  // YIQ → RGB: exact numeric inverse of A, so tint 0 is exactly identity
+  const inv3 = (m) => {
+    const [a, b, c0, d, e, f, g, h, i] = m.flat();
+    const det = a * (e * i - f * h) - b * (d * i - f * g) + c0 * (d * h - e * g);
+    return [
+      [(e * i - f * h) / det, (c0 * h - b * i) / det, (b * f - c0 * e) / det],
+      [(f * g - d * i) / det, (a * i - c0 * g) / det, (c0 * d - a * f) / det],
+      [(d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det],
+    ];
+  };
+  const B = inv3(A);
+  const c = Math.cos(rad), s = Math.sin(rad);
+  const R = [[1, 0, 0], [0, c, -s], [0, s, c]];
+  const mul = (X, Y) => X.map((row, i) => Y[0].map((_, j) =>
+    row.reduce((acc, v, k) => acc + v * Y[k][j], 0)));
+  return mul(B, mul(R, A)).flat();
+}
+
+// V-HOLD: when the vertical oscillator free-runs off the sync frequency,
+// each field starts drawing at a shifted line — the picture rolls, and the
+// vertical blanking interval sweeps through as a dark band. Remap rows
+// with wraparound over (height + blankLines); rows landing in the VBI go
+// dark. bpp: bytes per pixel (1 for GRB-indexed frames, 4 for RGBA).
+// stretch != 1 warps the row mapping nonlinearly — the vertical size
+// breathes and lines tear/duplicate, which is what a badly detuned
+// oscillator really looks like (it never rolls smoothly).
+function rollScan(src, dst, width, height, offsetLines, blankLines, bpp = 1, stretch = 1) {
+  const total = height + blankLines;
+  const rowBytes = width * bpp;
+  for (let y = 0; y < height; y++) {
+    let s = Math.floor(y * stretch + offsetLines) % total;
+    if (s < 0) s += total;
+    const o = y * rowBytes;
+    if (s < height) dst.set(src.subarray(s * rowBytes, (s + 1) * rowBytes), o);
+    else dst.fill(0, o, o + rowBytes); // vertical blanking band
+  }
+  return dst;
+}
+
+return { SCHEMA_VERSION, PHOSPHORS, indexToRgb, CrtPhosphor, createCrtPhosphor, collapseScan, tintMatrix, rollScan };
+});
+
+// ---- tube.js ----
+__def("tube.js", (__req) => {
+// tube — the glass: spatial physics of a color CRT.
+//
+// Sits after the phosphor layer (crt.js). The phosphor gives per-dot
+// luminance on a perfect grid; the tube makes it look like television:
+//
+// - Beam spot: the electron beam is a Gaussian blob wider than one triad.
+//   The spot straddles neighboring mask openings, so edges bleed color —
+//   this IS the "nijimi". FOCUS is continuous (0 sharp … 2 defocused).
+// - Oblique landing: the beam leaves one gun and is deflected; at the
+//   center it lands perpendicular, at the edges it lands at an angle, so
+//   the spot stretches and grows — focus degrades with r² (edgeDefocus).
+//   And the three guns sit apart, so their deflection errors differ:
+//   convergence error shifts R and B in opposite directions, growing
+//   toward the edges — the classic color fringing on corners.
+// - Shadow mask / aperture grille: 'aperture' (Trinitron vertical stripes),
+//   'shadow' (delta dot triads), 'slot' (in-line slots), 'none'. Modeled as
+//   a per-output-pixel per-channel transmission pattern with a gain that
+//   keeps average brightness roughly constant.
+// - Glass: barrel distortion (curved faceplate + deflection), a faint ghost
+//   from the inner-surface reflection, corner vignette.
+// - The knobs on the back: FOCUS (beamWidth), H-SIZE / V-SIZE (scan
+//   amplitude — shrink it and the border goes dark), via setGeometry().
+// - Interlace lives in the phosphor layer; the tube is field-agnostic.
+//
+// Pure and deterministic: geometry/mask work is precomputed into LUTs
+// (per gun, because of convergence); apply() is a gather loop. No
+// Math.random, no DOM.
+
+const { tintMatrix } = __req("crt.js");
+
+const SCHEMA_VERSION = 2;
+
+const MASKS = Object.freeze(['none', 'aperture', 'shadow', 'slot', 'plasma']);
+
+class CrtTube {
+  constructor({
+    srcWidth, srcHeight,
+    outWidth = srcWidth, outHeight = srcHeight * 2,
+    mask = 'aperture',
+    maskPitch = 3, // output pixels per triad period
+    maskLeak = 0.12, // how much of a gun leaks through neighboring openings
+    beamWidth = 1.0, // FOCUS knob: 0 = sharp, 1 = nominal, 2 = defocused
+    barrel = 0.06, // barrel distortion strength
+    ghost = 0.07, // inner-glass reflection strength (0 disables)
+    ghostShift = 0.012, // reflection offset toward the center, normalized
+    vignette = 0.18,
+    hSize = 1.0, // H-SIZE knob: horizontal scan width (1 = fills the glass)
+    vSize = 1.0, // V-SIZE knob: vertical scan height
+    edgeDefocus = 0.35, // how much focus degrades per r² (oblique landing)
+    convergence = 0.0035, // R/B gun mis-registration per r² (color fringes)
+    // The beam draws discrete lines with a Gaussian vertical profile; between
+    // them sits unlit glass. scanlineDepth is how much of that gap goes black
+    // (1 = nothing between the lines but darkness — the real 200-line look);
+    // beamHeight is the line's thickness as a fraction of the line pitch
+    // (~0.45 on a 200-line CRT: the gap is as wide as the line. 400-line
+    // packs the lines until the gaps close → beamHeight ~1).
+    // Gamma encoding lifts dim values hard (linear 0.05 → displayed 0.25), so
+    // "a bit dark between the lines" reads as grey. A real 200-line CRT is
+    // near-black between traces: full depth, and a beam thinner than half the
+    // pitch so its tail doesn't reach the next row.
+    scanlineDepth = 1.0,
+    beamHeight = 0.35,
+  } = {}) {
+    this.srcWidth = srcWidth;
+    this.srcHeight = srcHeight;
+    this.outWidth = outWidth;
+    this.outHeight = outHeight;
+    this.beamWidth = beamWidth;
+    this.ghost = ghost;
+    this.edgeDefocus = edgeDefocus;
+    this.geometry = {
+      mask, maskPitch, maskLeak, barrel, ghostShift, vignette,
+      hSize, vSize, convergence, scanlineDepth, beamHeight,
+    };
+
+    const n = outWidth * outHeight;
+    // per-gun geometry LUTs (convergence error differs per gun)
+    this.lutIdx = [new Int32Array(n), new Int32Array(n), new Int32Array(n)];
+    this.lutFx = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+    this.lutFy = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+    this.lutGhostIdx = new Int32Array(n);
+    this.lutVig = new Float32Array(n);
+    this.lutR2 = new Float32Array(n); // radius² per output pixel (for focus falloff)
+    this.maskR = new Float32Array(n);
+    this.maskG = new Float32Array(n);
+    this.maskB = new Float32Array(n);
+
+    const m = srcWidth * srcHeight;
+    this._blur1 = [new Float32Array(m), new Float32Array(m), new Float32Array(m)];
+    this._blur2 = [new Float32Array(m), new Float32Array(m), new Float32Array(m)];
+    this._tmp = new Float32Array(m);
+    this.rebuild();
+  }
+
+  // Recompute the geometry + mask LUTs (call after twisting a knob that
+  // changes them: setGeometry). Deterministic — same params, same LUTs.
+  rebuild() {
+    const { srcWidth, srcHeight, outWidth, outHeight } = this;
+    const {
+      mask, maskPitch, maskLeak, barrel, ghostShift, vignette,
+      hSize, vSize, convergence, scanlineDepth, beamHeight,
+    } = this.geometry;
+    const gain = mask === 'none' ? 1 : Math.min(2.2, 3 / (1 + 2 * maskLeak));
+    // convergence error per gun: R and B deflect to opposite sides of G
+    const conv = [convergence, 0, -convergence];
+    for (let y = 0; y < outHeight; y++) {
+      for (let x = 0; x < outWidth; x++) {
+        const i = y * outWidth + x;
+        const u = (x + 0.5) / outWidth * 2 - 1;
+        const v = (y + 0.5) / outHeight * 2 - 1;
+        const r2 = u * u + v * v;
+        this.lutR2[i] = r2;
+        // barrel: screen coords bulge outward → sample pulls inward at
+        // edges. H/V-SIZE scale the deflection amplitude: smaller size →
+        // the raster shrinks on the glass and the border goes dark.
+        const bu = u * (1 + barrel * r2) / hSize;
+        const bv = v * (1 + barrel * r2) / vSize;
+        let inside = false;
+        for (let gun = 0; gun < 3; gun++) {
+          const su = bu * (1 + conv[gun] * r2);
+          const sv = bv;
+          if (Math.abs(su) > 1 || Math.abs(sv) > 1) {
+            this.lutIdx[gun][i] = -1;
+            continue;
+          }
+          inside = true;
+          const sx = (su + 1) / 2 * srcWidth - 0.5;
+          const sy = (sv + 1) / 2 * srcHeight - 0.5;
+          const x0 = Math.max(0, Math.min(srcWidth - 2, Math.floor(sx)));
+          const y0 = Math.max(0, Math.min(srcHeight - 2, Math.floor(sy)));
+          this.lutIdx[gun][i] = y0 * srcWidth + x0;
+          this.lutFx[gun][i] = Math.min(1, Math.max(0, sx - x0));
+          this.lutFy[gun][i] = Math.min(1, Math.max(0, sy - y0));
+        }
+        // ghost: inner reflection displaced toward center (green geometry)
+        if (inside) {
+          const gu = Math.max(-1, Math.min(1, bu * (1 - ghostShift * 2)));
+          const gv = Math.max(-1, Math.min(1, bv * (1 - ghostShift * 2)));
+          const gx = Math.round((gu + 1) / 2 * srcWidth - 0.5);
+          const gy = Math.round((gv + 1) / 2 * srcHeight - 0.5);
+          this.lutGhostIdx[i] = Math.max(0, Math.min(srcHeight - 1, gy)) * srcWidth
+            + Math.max(0, Math.min(srcWidth - 1, gx));
+        } else {
+          this.lutGhostIdx[i] = 0;
+        }
+        let vigv = Math.max(0, 1 - vignette * r2 * r2);
+        // Scanline structure. Each source line is a beam trace with a
+        // Gaussian vertical profile of width `beamHeight` (in line pitches);
+        // the space between traces is unlit glass. A 200-line CRT drawn on a
+        // 400-row raster therefore alternates lit / black, and that black is
+        // *black*, not "slightly dimmer" — which is what the old cosine
+        // shading got wrong.
+        if (scanlineDepth > 0 && Math.abs(bv) <= 1) {
+          // Work inside one source line's band (one line pitch). The trace's
+          // phase is a free parameter on real glass; we land it on the first
+          // output row of the band so a 2x raster can actually *show* the
+          // gap — otherwise both samples straddle the trace symmetrically
+          // and you get two half-lit rows instead of line + black.
+          const rowsPerLine = outHeight / srcHeight;
+          const sy = (bv + 1) / 2 * srcHeight;
+          const u = sy - Math.floor(sy); // 0..1 within the band
+          const c = 0.5 / rowsPerLine; // trace center on the first row
+          const d = Math.min(Math.abs(u - c), Math.abs(u - c - 1), Math.abs(u - c + 1));
+          const sigma = Math.max(0.04, beamHeight * 0.5);
+          const beam = Math.exp(-(d * d) / (2 * sigma * sigma));
+          vigv *= (1 - scanlineDepth) + scanlineDepth * beam;
+        }
+        this.lutVig[i] = vigv;
+
+        // mask pattern
+        let mr = 1, mg = 1, mb = 1, g2 = gain;
+        if (mask === 'aperture' || mask === 'slot') {
+          // stripes, area-sampled: one output pixel spans [a, b) in stripe
+          // units (period 3, one unit per gun); point sampling would skip
+          // whole stripes when pitch < 3 (blue dies → yellow cast).
+          const a = x * 3 / maskPitch;
+          const b = (x + 1) * 3 / maskPitch;
+          const cov = [0, 0, 0];
+          for (let k = Math.floor(a / 3) - 1; k * 3 < b; k++) {
+            for (let c = 0; c < 3; c++) {
+              const lo = Math.max(a, k * 3 + c), hi = Math.min(b, k * 3 + c + 1);
+              if (hi > lo) cov[c] += hi - lo;
+            }
+          }
+          const len = b - a;
+          mr = maskLeak + (1 - maskLeak) * cov[0] / len;
+          mg = maskLeak + (1 - maskLeak) * cov[1] / len;
+          mb = maskLeak + (1 - maskLeak) * cov[2] / len;
+          if (mask === 'slot') {
+            // dark horizontal gaps between slots, staggered by column
+            const colStagger = (Math.floor(x / maskPitch) % 2) * ((maskPitch * 2) >> 1);
+            if ((y + colStagger) % (maskPitch * 2) === 0) { mr *= 0.35; mg *= 0.35; mb *= 0.35; }
+          }
+        } else if (mask === 'plasma') {
+          // gas-plasma panel: square pixel cells with thin dark ribs between
+          // them, identical for all channels (it's monochrome light)
+          const cell = Math.max(2, maskPitch);
+          const fx2 = ((x % cell) + cell) % cell, fy2 = ((y % cell) + cell) % cell;
+          const rib = (fx2 < 1 || fy2 < 1) ? 0.25 : 1;
+          mr = mg = mb = rib;
+          const fill = ((cell - 1) / cell) ** 2;
+          g2 = Math.min(1.8, 1 / (fill + 0.25 * (1 - fill)));
+        } else if (mask === 'shadow') {
+          // the real shadow mask: round-dot triads in delta (∵) arrangement
+          // on a hex lattice — per gun, transmission is a soft circular
+          // aperture around the nearest dot center of that gun's sublattice
+          const p = maskPitch * 2; // triad pitch in output pixels
+          const hh = p * 0.866; // hex row height
+          const r0 = p * 0.30, aa = 0.8; // dot radius, anti-alias width
+          const D = [[0, -0.29 * p], [-0.25 * p, 0.145 * p], [0.25 * p, 0.145 * p]]; // R G B ∵
+          const m = [0, 0, 0];
+          for (let c = 0; c < 3; c++) {
+            let best = 1e9;
+            const ry = Math.round(y / hh);
+            for (let dr = -1; dr <= 1; dr++) {
+              const row = ry + dr;
+              const cy2 = row * hh + D[c][1];
+              const xoff = (row & 1) * (p / 2) + D[c][0];
+              const rx = Math.round((x - xoff) / p);
+              for (let dc = -1; dc <= 1; dc++) {
+                const cx2 = (rx + dc) * p + xoff;
+                const d2 = (x - cx2) * (x - cx2) + (y - cy2) * (y - cy2);
+                if (d2 < best) best = d2;
+              }
+            }
+            const cov = Math.min(1, Math.max(0, (r0 + aa / 2 - Math.sqrt(best)) / aa));
+            m[c] = maskLeak + (1 - maskLeak) * cov;
+          }
+          [mr, mg, mb] = m;
+          // brightness normalization: average circular coverage per gun
+          const avgCov = Math.PI * r0 * r0 / (p * hh);
+          g2 = Math.min(2.5, 1 / (maskLeak + (1 - maskLeak) * avgCov));
+        }
+        this.maskR[i] = mr * g2;
+        this.maskG[i] = mg * g2;
+        this.maskB[i] = mb * g2;
+      }
+    }
+    return this;
+  }
+
+  // Twist a knob: merge partial geometry (hSize, vSize, barrel, convergence,
+  // ...) and rebuild the LUTs.
+  setGeometry(partial) {
+    Object.assign(this.geometry, partial);
+    return this.rebuild();
+  }
+
+  // one separable Gaussian pass: 5-tap horizontal, 3-tap vertical
+  _blurPass(src, dst) {
+    const w = this.srcWidth, h = this.srcHeight;
+    const t = this._tmp;
+    for (let y = 0; y < h; y++) {
+      const o = y * w;
+      for (let x = 0; x < w; x++) {
+        const xm2 = Math.max(0, x - 2), xm1 = Math.max(0, x - 1);
+        const xp1 = Math.min(w - 1, x + 1), xp2 = Math.min(w - 1, x + 2);
+        t[o + x] = (src[o + xm2] + 4 * src[o + xm1] + 6 * src[o + x]
+          + 4 * src[o + xp1] + src[o + xp2]) / 16;
+      }
+    }
+    for (let y = 0; y < h; y++) {
+      const ym = Math.max(0, y - 1) * w, yp = Math.min(h - 1, y + 1) * w, o = y * w;
+      for (let x = 0; x < w; x++) {
+        dst[o + x] = (t[ym + x] + 2 * t[o + x] + t[yp + x]) / 4;
+      }
+    }
+  }
+
+  // lum: [R, G, B] Float32Arrays of srcWidth*srcHeight (phosphor output).
+  // Returns RGBA Uint8ClampedArray of outWidth*outHeight.
+  // tint: NTSC chroma phase error in radians (see crt.js tintMatrix);
+  // contrast: gain around mid after gamma encoding (the front-panel knob).
+  apply(lum, out, { gamma = 2.2, scale = 1, tint = 0, contrast = 1 } = {}) {
+    const n = this.outWidth * this.outHeight;
+    const rgba = out && out.length === n * 4 ? out : new Uint8ClampedArray(n * 4);
+    // second blur stage is only reachable when per-pixel focus can exceed 1
+    const needB2 = Math.min(2, this.beamWidth + this.edgeDefocus * 2) > 1;
+    for (let ch = 0; ch < 3; ch++) {
+      this._blurPass(lum[ch], this._blur1[ch]);
+      if (needB2) this._blurPass(this._blur1[ch], this._blur2[ch]);
+    }
+    const masks = [this.maskR, this.maskG, this.maskB];
+    const w = this.srcWidth;
+    let lut = null;
+    if (gamma !== 1) { // pow per subpixel is the hot spot; 4096-entry LUT
+      if (!this._glut || this._glutGamma !== gamma) {
+        const inv = 1 / gamma;
+        this._glut = new Float32Array(4096);
+        for (let i = 0; i < 4096; i++) this._glut[i] = (i / 4095) ** inv;
+        this._glutGamma = gamma;
+      }
+      lut = this._glut;
+    }
+    const ghost = this.ghost;
+    const beam = this.beamWidth, edge = this.edgeDefocus;
+    const M = tint !== 0 ? tintMatrix(tint) : null;
+    const vals = [0, 0, 0];
+    for (let i = 0; i < n; i++) {
+      // per-pixel focus: nominal beam width plus oblique-landing falloff
+      const f = Math.max(0, Math.min(2, beam + edge * this.lutR2[i]));
+      const vig = this.lutVig[i];
+      const gi = this.lutGhostIdx[i];
+      for (let ch = 0; ch < 3; ch++) {
+        const idx = this.lutIdx[ch][i];
+        if (idx < 0) { vals[ch] = 0; continue; }
+        const fx = this.lutFx[ch][i], fy = this.lutFy[ch][i];
+        const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy);
+        const w01 = (1 - fx) * fy, w11 = fx * fy;
+        const S = lum[ch], B1 = this._blur1[ch], B2 = this._blur2[ch];
+        let val;
+        if (f <= 0) {
+          val = S[idx] * w00 + S[idx + 1] * w10 + S[idx + w] * w01 + S[idx + w + 1] * w11;
+        } else if (f <= 1) {
+          const s = S[idx] * w00 + S[idx + 1] * w10 + S[idx + w] * w01 + S[idx + w + 1] * w11;
+          const b = B1[idx] * w00 + B1[idx + 1] * w10 + B1[idx + w] * w01 + B1[idx + w + 1] * w11;
+          val = s + (b - s) * f;
+        } else {
+          const b = B1[idx] * w00 + B1[idx + 1] * w10 + B1[idx + w] * w01 + B1[idx + w + 1] * w11;
+          const b2 = B2[idx] * w00 + B2[idx + 1] * w10 + B2[idx + w] * w01 + B2[idx + w + 1] * w11;
+          val = b + (b2 - b) * (f - 1);
+        }
+        if (ghost > 0) val += B1[gi] * ghost;
+        vals[ch] = val * masks[ch][i] * vig * scale;
+      }
+      let r = vals[0], g = vals[1], b = vals[2];
+      if (M) {
+        const r2 = M[0] * r + M[1] * g + M[2] * b;
+        const g2 = M[3] * r + M[4] * g + M[5] * b;
+        const b2 = M[6] * r + M[7] * g + M[8] * b;
+        r = Math.max(0, r2); g = Math.max(0, g2); b = Math.max(0, b2);
+      }
+      r = Math.min(1, r); g = Math.min(1, g); b = Math.min(1, b);
+      if (lut) {
+        r = lut[(r * 4095) | 0]; g = lut[(g * 4095) | 0]; b = lut[(b * 4095) | 0];
+      }
+      if (contrast !== 1) {
+        r = (r - 0.5) * contrast + 0.5;
+        g = (g - 0.5) * contrast + 0.5;
+        b = (b - 0.5) * contrast + 0.5;
+      }
+      rgba[i * 4] = 255 * r;
+      rgba[i * 4 + 1] = 255 * g;
+      rgba[i * 4 + 2] = 255 * b;
+      rgba[i * 4 + 3] = 255;
+    }
+    return rgba;
+  }
+}
+
+function createCrtTube(opts) {
+  return new CrtTube(opts);
+}
+
+return { SCHEMA_VERSION, MASKS, CrtTube, createCrtTube };
+});
+
+// ---- demo/font.js ----
+__def("demo/font.js", (__req) => {
+// font — shared hand-drawn 5x7 glyphs (public domain, ours)
+const G = {
+A:'01110 10001 10001 11111 10001 10001 10001',B:'11110 10001 10001 11110 10001 10001 11110',
+C:'01110 10001 10000 10000 10000 10001 01110',D:'11100 10010 10001 10001 10001 10010 11100',
+E:'11111 10000 10000 11110 10000 10000 11111',F:'11111 10000 10000 11110 10000 10000 10000',
+G:'01110 10001 10000 10111 10001 10001 01111',H:'10001 10001 10001 11111 10001 10001 10001',
+I:'01110 00100 00100 00100 00100 00100 01110',J:'00111 00010 00010 00010 00010 10010 01100',
+K:'10001 10010 10100 11000 10100 10010 10001',L:'10000 10000 10000 10000 10000 10000 11111',
+M:'10001 11011 10101 10101 10001 10001 10001',N:'10001 11001 10101 10011 10001 10001 10001',
+O:'01110 10001 10001 10001 10001 10001 01110',P:'11110 10001 10001 11110 10000 10000 10000',
+Q:'01110 10001 10001 10001 10101 10010 01101',R:'11110 10001 10001 11110 10100 10010 10001',
+S:'01111 10000 10000 01110 00001 00001 11110',T:'11111 00100 00100 00100 00100 00100 00100',
+U:'10001 10001 10001 10001 10001 10001 01110',V:'10001 10001 10001 10001 10001 01010 00100',
+W:'10001 10001 10001 10101 10101 10101 01010',X:'10001 10001 01010 00100 01010 10001 10001',
+Y:'10001 10001 01010 00100 00100 00100 00100',Z:'11111 00001 00010 00100 01000 10000 11111',
+0:'01110 10001 10011 10101 11001 10001 01110',1:'00100 01100 00100 00100 00100 00100 01110',
+2:'01110 10001 00001 00010 00100 01000 11111',3:'11111 00010 00100 00010 00001 10001 01110',
+4:'00010 00110 01010 10010 11111 00010 00010',5:'11111 10000 11110 00001 00001 10001 01110',
+6:'00110 01000 10000 11110 10001 10001 01110',7:'11111 00001 00010 00100 01000 01000 01000',
+8:'01110 10001 10001 01110 10001 10001 01110',9:'01110 10001 10001 01111 00001 00010 01100',
+'!':'00100 00100 00100 00100 00100 00000 00100','.':'00000 00000 00000 00000 00000 01100 01100',
+'-':'00000 00000 00000 11111 00000 00000 00000','/':'00001 00010 00010 00100 01000 01000 10000',
+':':'00000 01100 01100 00000 01100 01100 00000','*':'00100 10101 01110 00100 01110 10101 00100',
+'=':'00000 00000 11111 00000 11111 00000 00000','+':'00000 00100 00100 11111 00100 00100 00000',
+'(':'00010 00100 01000 01000 01000 00100 00010',')':'01000 00100 00010 00010 00010 00100 01000',
+'?':'01110 10001 00001 00010 00100 00000 00100',
+};
+
+function buildFont() {
+  const cgrom = new Uint8Array(256 * 16);
+  const glyphRows = {};
+  for (const [ch, rows] of Object.entries(G)) {
+    const r = rows.trim().split(/\s+/);
+    glyphRows[ch] = r;
+    r.forEach((bits, line) => { cgrom[ch.charCodeAt(0) * 16 + line] = parseInt(bits, 2) << 3; });
+  }
+  return { cgrom, glyphRows };
+}
+
+// Upper-half (0x80-0xFF) placeholder glyphs. The real PC-8001 CGROM has
+// glyphs here (this is what the OUT &H51 accident shows, font-dot rendered);
+// we can't ship NEC's ROM, so: a few hand-drawn sprites on the attribute
+// values the accident actually lands on, and deterministic symmetric
+// "invader" patterns everywhere else. Drop a dumped FONT.ROM in to get the
+// real thing (applyFontRom).
+const SPRITES = {
+  0xe8: ['00000000','00110010','01111100','11010110','01111111','00101010','01000100','00000000'], // hover bike ｗ
+  0xc8: ['00011000','00111100','01111110','11011011','11111111','00100100','01011010','00000000'], // invader
+  0xd8: ['00010000','00111000','01111100','11111110','01111100','00111000','00010000','00000000'], // diamond
+  0x98: ['01100110','11111111','11111111','11111111','01111110','00111100','00011000','00000000'], // heart
+};
+function addPlaceholderUpperHalf(cgrom) {
+  const rev4 = (n) => ((n & 1) << 3) | ((n & 2) << 1) | ((n & 4) >> 1) | ((n & 8) >> 3);
+  for (let code = 0x80; code < 0x100; code++) {
+    if (SPRITES[code]) {
+      SPRITES[code].forEach((bits, line) => { cgrom[code * 16 + line] = parseInt(bits, 2); });
+      continue;
+    }
+    for (let line = 0; line < 8; line++) {
+      if (line === 0 || line === 7) { cgrom[code * 16 + line] = 0; continue; }
+      const n = ((code >> ((line * 3) & 7)) ^ (code * 5 + line * 11)) & 0xf;
+      cgrom[code * 16 + line] = (n << 4) | rev4(n);
+    }
+  }
+  return cgrom;
+}
+
+// FONT.ROM: 2KB dump = 256 glyphs x 8 lines → our 16-byte-stride CGROM
+function applyFontRom(cgrom, bytes) {
+  for (let code = 0; code < 256; code++) {
+    for (let line = 0; line < 16; line++) {
+      cgrom[code * 16 + line] = line < 8 ? (bytes[code * 8 + line] ?? 0) : 0;
+    }
+  }
+  return cgrom;
+}
+
+return { G, buildFont, addPlaceholderUpperHalf, applyFontRom };
+});
+
+// ---- xterm/crt-xterm.js ----
+__def("xterm/crt-xterm.js", (__req) => {
+// crt-xterm — an xterm.js renderer addon that pushes the terminal through
+// the 1979 glass: cells → 8×8 bitmap glyphs → GRB-indexed low-res frame →
+// CrtPhosphor (decay physics) → CrtTube (mask/barrel/scanlines) → canvas.
+//
+// Design constraints, same as the rest of this repo:
+// - xterm.js is a *peer*: we never import it. activate(terminal) hands us
+//   the one object we read (buffer, cols/rows, events), so the addon works
+//   against any xterm.js the page loaded (CDN, bundler, whatever).
+// - The raster core (color quantization, glyph blitting, cursor/selection
+//   inversion) is pure and headless — it takes a plain "view" object and a
+//   Uint8Array, so tests feed it fakes without a DOM.
+// - Deterministic: no Math.random. Flicker/blink phases are frame-counted,
+//   exactly like demo/crt-panel.js.
+// - 1979 rules: everything is quantized to the 8 GRB colors the PC-8001
+//   could actually show. `strict1979` additionally drops per-cell
+//   backgrounds (the real machine had none — reverse video was all you got).
+//
+// Out of scope (documented, not hidden): CJK/Unicode glyphs (you get the
+// tofu), IME preview overlay, and xterm's own decorations layer. Input,
+// selection *behavior* and clipboard stay 100% xterm.js — we only replace
+// the photons.
+
+const { CrtPhosphor, PHOSPHORS } = __req("crt.js");
+const { CrtTube, MASKS } = __req("tube.js");
+const { G } = __req("demo/font.js");
+
+const SCHEMA_VERSION = 1;
+
+
+// ---------------------------------------------------------------------------
+// Color: everything lands on the 8 GRB colors (G=bit2, R=bit1, B=bit0 — the
+// μPD3301 attribute layout, see crt.js indexToRgb).
+// ---------------------------------------------------------------------------
+
+// ANSI 0-7 → GRB index (same table as term.js — black red green yellow blue
+// magenta cyan white in GRB bit order).
+const ANSI_TO_GRB = [0, 2, 4, 6, 1, 3, 5, 7];
+
+// Nearest-GRB quantization with luminance rescue: a plain per-channel
+// threshold at 128 sends every dark color (navy, maroon…) to black, which
+// erases text. A 1979 monitor showed navy as BLUE — one phosphor, driven.
+// So: threshold each channel against half of the *brightest* channel, and
+// only give up (black) when the whole pixel is near-dark.
+function rgbToGrb(r, g, b) {
+  const m = Math.max(r, g, b);
+  if (m < 48) return 0;
+  const t = m / 2;
+  return ((g >= t ? 1 : 0) << 2) | ((r >= t ? 1 : 0) << 1) | (b >= t ? 1 : 0);
+}
+
+// xterm's 256-color palette, reduced to GRB. 0-15 map through the ANSI
+// table directly (bright variants land on the same GRB color — there is no
+// intensity bit on this glass). 16-231 is the 6×6×6 cube, 232-255 the
+// grayscale ramp; both go through rgbToGrb. Precomputed once: 256 bytes.
+const PALETTE_TO_GRB = (() => {
+  const out = new Uint8Array(256);
+  const CUBE = [0, 95, 135, 175, 215, 255];
+  for (let i = 0; i < 256; i++) {
+    if (i < 16) { out[i] = ANSI_TO_GRB[i & 7]; continue; }
+    if (i < 232) {
+      const c = i - 16;
+      out[i] = rgbToGrb(CUBE[(c / 36) | 0], CUBE[((c / 6) | 0) % 6], CUBE[c % 6]);
+    } else {
+      const v = 8 + 10 * (i - 232);
+      out[i] = rgbToGrb(v, v, v);
+    }
+  }
+  return out;
+})();
+
+// Read one xterm IBufferCell into {fg, bg} GRB indexes. Uses only the
+// public IBufferCell API (isFgRGB/isFgPalette/getFgColor/...), so a test
+// fake with those five methods per side is a valid cell.
+function cellToGrb(cell, defaultFg = 7, defaultBg = 0) {
+  let fg = defaultFg, bg = defaultBg;
+  if (cell.isFgRGB()) {
+    const v = cell.getFgColor();
+    fg = rgbToGrb((v >> 16) & 255, (v >> 8) & 255, v & 255);
+  } else if (cell.isFgPalette()) fg = PALETTE_TO_GRB[cell.getFgColor() & 255];
+  if (cell.isBgRGB()) {
+    const v = cell.getBgColor();
+    bg = rgbToGrb((v >> 16) & 255, (v >> 8) & 255, v & 255);
+  } else if (cell.isBgPalette()) bg = PALETTE_TO_GRB[cell.getBgColor() & 255];
+  return { fg, bg };
+}
+
+// ---------------------------------------------------------------------------
+// Font: 5×7 glyphs in an 8×8 cell. demo/font.js has uppercase, digits and a
+// few symbols; a login shell is mostly lowercase, so the missing printable
+// ASCII lives here in the same hand-drawn format. Anything else (CJK,
+// box-drawing, emoji) renders as the checkerboard tofu — Japanese glyphs
+// are explicitly out of scope for this addon.
+// ---------------------------------------------------------------------------
+
+const EXTRA_GLYPHS = {
+  a: '00000 00000 01110 00001 01111 10001 01111',
+  b: '10000 10000 11110 10001 10001 10001 11110',
+  c: '00000 00000 01110 10000 10000 10001 01110',
+  d: '00001 00001 01111 10001 10001 10001 01111',
+  e: '00000 00000 01110 10001 11111 10000 01110',
+  f: '00110 01001 01000 11100 01000 01000 01000',
+  g: '00000 01111 10001 10001 01111 00001 01110',
+  h: '10000 10000 11110 10001 10001 10001 10001',
+  i: '00100 00000 01100 00100 00100 00100 01110',
+  j: '00010 00000 00110 00010 00010 10010 01100',
+  k: '10000 10000 10010 10100 11000 10100 10010',
+  l: '01100 00100 00100 00100 00100 00100 01110',
+  m: '00000 00000 11010 10101 10101 10101 10101',
+  n: '00000 00000 11110 10001 10001 10001 10001',
+  o: '00000 00000 01110 10001 10001 10001 01110',
+  p: '00000 00000 11110 10001 11110 10000 10000',
+  q: '00000 00000 01111 10001 01111 00001 00001',
+  r: '00000 00000 10110 11001 10000 10000 10000',
+  s: '00000 00000 01111 10000 01110 00001 11110',
+  t: '01000 01000 11100 01000 01000 01001 00110',
+  u: '00000 00000 10001 10001 10001 10011 01101',
+  v: '00000 00000 10001 10001 10001 01010 00100',
+  w: '00000 00000 10001 10001 10101 10101 01010',
+  x: '00000 00000 10001 01010 00100 01010 10001',
+  y: '00000 00000 10001 10001 01111 00001 01110',
+  z: '00000 00000 11111 00010 00100 01000 11111',
+  ',': '00000 00000 00000 00000 01100 00100 01000',
+  ';': '00000 01100 01100 00000 01100 00100 01000',
+  "'": '00100 00100 01000 00000 00000 00000 00000',
+  '"': '01010 01010 10100 00000 00000 00000 00000',
+  '`': '01000 00100 00010 00000 00000 00000 00000',
+  '<': '00010 00100 01000 10000 01000 00100 00010',
+  '>': '01000 00100 00010 00001 00010 00100 01000',
+  '[': '01110 01000 01000 01000 01000 01000 01110',
+  ']': '01110 00010 00010 00010 00010 00010 01110',
+  '{': '00110 00100 00100 01000 00100 00100 00110',
+  '}': '01100 00100 00100 00010 00100 00100 01100',
+  '|': '00100 00100 00100 00100 00100 00100 00100',
+  '\\': '10000 01000 01000 00100 00010 00010 00001',
+  _: '00000 00000 00000 00000 00000 00000 11111',
+  '^': '00100 01010 10001 00000 00000 00000 00000',
+  '~': '00000 00000 01000 10101 00010 00000 00000',
+  '@': '01110 10001 00001 01101 10101 10101 01110',
+  '#': '01010 01010 11111 01010 11111 01010 01010',
+  $: '00100 01111 10100 01110 00101 11110 00100',
+  '%': '11000 11001 00010 00100 01000 10011 00011',
+  '&': '01100 10010 10100 01000 10101 10010 01101',
+};
+
+const TOFU_INDEX = 95; // one slot past '~' in the 0x20-based table
+
+// 8 bytes per glyph, rows top→bottom, bit7 = leftmost pixel. Slots 0..94
+// cover printable ASCII 0x20..0x7E, slot 95 is the tofu. Row 7 stays blank
+// (inter-line gap / underline row), 5-bit glyphs sit in bits 7..3 so the
+// right 3 columns are the inter-character gap — same packing as
+// demo/font.js buildFont().
+function buildGlyphs() {
+  const glyphs = new Uint8Array((TOFU_INDEX + 1) * 8);
+  const put = (code, rows) => {
+    const r = rows.trim().split(/\s+/);
+    for (let line = 0; line < 7 && line < r.length; line++) {
+      glyphs[(code - 0x20) * 8 + line] = parseInt(r[line], 2) << 3;
+    }
+  };
+  for (const [ch, rows] of Object.entries(G)) put(ch.charCodeAt(0), rows);
+  for (const [ch, rows] of Object.entries(EXTRA_GLYPHS)) put(ch.charCodeAt(0), rows);
+  // tofu: a checkerboard, unmistakably "no glyph here"
+  for (let line = 0; line < 7; line++) glyphs[TOFU_INDEX * 8 + line] = line & 1 ? 0b01010000 : 0b10101000;
+  return glyphs;
+}
+
+function glyphIndexFor(codePoint) {
+  if (codePoint === 0 || codePoint === 0x20) return 0; // empty cell = space
+  if (codePoint > 0x20 && codePoint < 0x7f) return codePoint - 0x20;
+  return TOFU_INDEX;
+}
+
+// ---------------------------------------------------------------------------
+// Raster core: view → GRB-indexed Uint8Array (cols*8 × rows*8).
+//
+// `view` is a plain-object contract, satisfied by both the live addon and
+// test fakes:
+//   { cols, rows, getLine(y) -> line|null, cursorX, cursorY }
+// where line.getCell(x[, recycle]) returns an IBufferCell-shaped object.
+// ---------------------------------------------------------------------------
+
+function drawTerminalToIndexed(view, glyphs, out, {
+  strict1979 = false,
+  blinkOn = true,     // frame-phased by the caller; SGR blink hides fg when false
+  cursorOn = true,
+  defaultFg = 7,
+  defaultBg = 0,
+  workCell = null,    // xterm getNullCell() recycle object, optional
+} = {}) {
+  const { cols, rows } = view;
+  const w = cols * 8;
+  for (let cy = 0; cy < rows; cy++) {
+    const line = view.getLine(cy);
+    for (let cx = 0; cx < cols; cx++) {
+      let fg = defaultFg, bg = defaultBg;
+      let gi = 0, bold = false, underline = false;
+      const cell = line ? (workCell ? line.getCell(cx, workCell) : line.getCell(cx)) : null;
+      if (cell) {
+        const chars = cell.getChars();
+        gi = glyphIndexFor(chars ? chars.codePointAt(0) : 0);
+        ({ fg, bg } = cellToGrb(cell, defaultFg, defaultBg));
+        // 1979: the attribute stream carries a color and a function per
+        // run, never a background — so strict mode drops bg BEFORE the
+        // inverse swap. Reverse video then renders as dark-glyph-on-fg,
+        // which is exactly how the real machine faked backgrounds.
+        if (strict1979) bg = 0;
+        if (cell.isInverse()) { const t = fg; fg = bg; bg = t; }
+        if (cell.isBlink() && !blinkOn) fg = bg;
+        bold = !!cell.isBold();
+        underline = !!cell.isUnderline();
+      }
+      const base = cy * 8 * w + cx * 8;
+      for (let r = 0; r < 8; r++) {
+        let bits = glyphs[gi * 8 + r];
+        if (bold) bits |= bits >> 1; // classic CRT bold: re-strike shifted
+        if (underline && r === 7) bits = 0xff;
+        const o = base + r * w;
+        out[o] = bits & 0x80 ? fg : bg;
+        out[o + 1] = bits & 0x40 ? fg : bg;
+        out[o + 2] = bits & 0x20 ? fg : bg;
+        out[o + 3] = bits & 0x10 ? fg : bg;
+        out[o + 4] = bits & 0x08 ? fg : bg;
+        out[o + 5] = bits & 0x04 ? fg : bg;
+        out[o + 6] = bits & 0x02 ? fg : bg;
+        out[o + 7] = bits & 0x01 ? fg : bg;
+      }
+    }
+  }
+  if (cursorOn && view.cursorY >= 0 && view.cursorY < rows
+    && view.cursorX >= 0 && view.cursorX < cols) {
+    invertCellBlock(out, w, view.cursorX, view.cursorY, 1);
+  }
+  return out;
+}
+
+// XOR 7 flips all three guns — reverse video the way the hardware does it.
+function invertCellBlock(out, w, cellX, cellY, cellCount) {
+  const base = cellY * 8 * w + cellX * 8;
+  const px = cellCount * 8;
+  for (let r = 0; r < 8; r++) {
+    const o = base + r * w;
+    for (let c = 0; c < px; c++) out[o + c] ^= 7;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The addon.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_OPTIONS = Object.freeze({
+  phosphor: 'P22',     // key into PHOSPHORS
+  mask: 'aperture',    // key into MASKS
+  maskPitch: 3,
+  barrel: 0.06,
+  focus: 0.8,          // CrtTube beamWidth
+  bright: 1.2,         // toRGBA/apply scale
+  contrast: 1.0,
+  flicker: false,      // 10 Hz beat + mains drift, frame-counted
+  strict1979: false,   // drop per-cell backgrounds (PC-8001 truth)
+  cursorBlink: true,
+  outputScale: 2,      // tube output pixels per source pixel (h; v gets ×2 more)
+  scanlineDepth: 1.0,  // 200-line look: real black between traces
+  beamHeight: 0.35,
+});
+
+class CrtRendererAddon {
+  constructor(options = {}) {
+    this.options = { ...DEFAULT_OPTIONS, ...options };
+    this._glyphs = buildGlyphs();
+    this._terminal = null;
+    this._canvas = null;
+    this._ctx = null;
+    this._img = null;
+    this._screen = null;
+    this._phosphor = null;
+    this._tube = null;
+    this._indexed = null;
+    this._rgba = null;
+    this._cols = 0;
+    this._rows = 0;
+    this._raf = 0;
+    this._last = 0;
+    this._frame = 0; // deterministic phase source for blink + flicker
+    this._enabled = true;
+    this._disposables = [];
+    this._workCell = null;
+  }
+
+  // ITerminalAddon
+  activate(terminal) {
+    if (typeof requestAnimationFrame === 'undefined') {
+      throw new Error('CrtRendererAddon needs a browser (requestAnimationFrame); use drawTerminalToIndexed() headless');
+    }
+    this._terminal = terminal;
+    // geometry becomes stale on resize; the next tick rebuilds everything
+    if (terminal.onResize) {
+      this._disposables.push(terminal.onResize(() => { this._cols = 0; }));
+    }
+    const tick = (now) => {
+      this._raf = requestAnimationFrame(tick);
+      this._tick(now);
+    };
+    this._raf = requestAnimationFrame(tick);
+  }
+
+  dispose() {
+    if (this._raf) cancelAnimationFrame(this._raf);
+    this._raf = 0;
+    for (const d of this._disposables) d.dispose?.();
+    this._disposables = [];
+    if (this._screen) this._screen.style.visibility = '';
+    this._canvas?.remove();
+    this._canvas = null;
+    this._terminal = null;
+  }
+
+  // Live knob turning from a settings panel; only rebuilds what changed.
+  setOptions(partial) {
+    const o = this.options;
+    Object.assign(o, partial);
+    if ('phosphor' in partial && this._phosphor) {
+      this._phosphor.setPhosphor(PHOSPHORS[o.phosphor] ?? PHOSPHORS.P22);
+    }
+    if ('outputScale' in partial) this._cols = 0; // full rebuild
+    else if (this._tube) {
+      if ('focus' in partial) this._tube.beamWidth = o.focus;
+      if ('mask' in partial || 'maskPitch' in partial || 'barrel' in partial) {
+        this._tube.setGeometry({ mask: o.mask, maskPitch: o.maskPitch, barrel: o.barrel });
+      }
+    }
+    return this;
+  }
+
+  // CRT off = give the page back to xterm's own renderer, live.
+  setEnabled(on) {
+    this._enabled = !!on;
+    if (this._canvas) this._canvas.style.display = on ? '' : 'none';
+    if (this._screen) this._screen.style.visibility = on ? 'hidden' : '';
+    return this;
+  }
+
+  get enabled() { return this._enabled; }
+
+  // ---- internals ----------------------------------------------------------
+
+  // terminal.element only exists after terminal.open(); loadAddon() may run
+  // first. So DOM binding is lazy: each tick tries until the element shows up.
+  _ensureDom() {
+    const term = this._terminal;
+    if (!term || !term.element) return false;
+    if (!this._canvas) {
+      this._screen = term.element.querySelector('.xterm-screen');
+      const c = document.createElement('canvas');
+      c.className = 'crt-xterm-canvas';
+      // pointer-events:none so selection/click/paste land on xterm as before
+      c.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;'
+        + 'image-rendering:auto;z-index:10;';
+      term.element.style.position = 'relative';
+      term.element.appendChild(c);
+      this._canvas = c;
+      this._ctx = c.getContext('2d');
+      if (this._enabled && this._screen) this._screen.style.visibility = 'hidden';
+      if (!this._enabled) c.style.display = 'none';
+      this._workCell = term.buffer?.active?.getNullCell?.() ?? null;
+    }
+    return true;
+  }
+
+  _ensureBuffers() {
+    const term = this._terminal;
+    if (this._cols === term.cols && this._rows === term.rows) return;
+    this._cols = term.cols;
+    this._rows = term.rows;
+    const w = this._cols * 8, h = this._rows * 8;
+    const s = Math.max(1, this.options.outputScale);
+    const outW = Math.round(w * s);
+    const outH = Math.round(h * 2 * s); // ×2: scanline doubling, like the demos
+    this._indexed = new Uint8Array(w * h);
+    this._phosphor = new CrtPhosphor({
+      width: w, height: h,
+      phosphor: PHOSPHORS[this.options.phosphor] ?? PHOSPHORS.P22,
+    });
+    this._tube = new CrtTube({
+      srcWidth: w, srcHeight: h, outWidth: outW, outHeight: outH,
+      mask: this.options.mask, maskPitch: this.options.maskPitch,
+      barrel: this.options.barrel, beamWidth: this.options.focus,
+      scanlineDepth: this.options.scanlineDepth, beamHeight: this.options.beamHeight,
+    });
+    this._rgba = new Uint8ClampedArray(outW * outH * 4);
+    this._canvas.width = outW;
+    this._canvas.height = outH;
+    this._img = this._ctx.createImageData(outW, outH);
+  }
+
+  // Keep the overlay glued to xterm's screen box (it moves when the
+  // scrollbar appears or fonts load).
+  _placeCanvas() {
+    const el = this._screen ?? this._terminal.element;
+    const wpx = el.clientWidth || el.offsetWidth;
+    const hpx = el.clientHeight || el.offsetHeight;
+    const c = this._canvas;
+    if (this._cssW !== wpx || this._cssH !== hpx) {
+      this._cssW = wpx; this._cssH = hpx;
+      c.style.width = wpx + 'px';
+      c.style.height = hpx + 'px';
+      c.style.left = (this._screen ? this._screen.offsetLeft : 0) + 'px';
+      c.style.top = (this._screen ? this._screen.offsetTop : 0) + 'px';
+    }
+  }
+
+  _tick(now) {
+    if (!this._ensureDom()) return;
+    if (!this._enabled) return; // xterm's renderer is showing; nothing to do
+    this._ensureBuffers();
+    this._placeCanvas();
+    const dt = this._last ? Math.min(0.1, Math.max(0.0001, (now - this._last) / 1000)) : 1 / 60;
+    this._last = now;
+    this._frame++;
+
+    const term = this._terminal;
+    const buf = term.buffer.active;
+    // ~1.1 Hz cursor blink, ~2 Hz SGR blink — frame-counted, deterministic
+    const cursorOn = !this.options.cursorBlink || ((this._frame >> 5) & 1) === 0;
+    const view = {
+      cols: term.cols, rows: term.rows,
+      getLine: (y) => buf.getLine(buf.viewportY + y),
+      cursorX: buf.cursorX,
+      // cursorY is relative to baseY; when scrolled back it can leave the view
+      cursorY: buf.baseY + buf.cursorY - buf.viewportY,
+    };
+    drawTerminalToIndexed(view, this._glyphs, this._indexed, {
+      strict1979: this.options.strict1979,
+      blinkOn: ((this._frame >> 4) & 1) === 0,
+      cursorOn,
+      workCell: this._workCell,
+    });
+    this._overlaySelection(term, buf);
+
+    this._phosphor.step(this._indexed, dt);
+    // flicker: the ~10 Hz beat you get *filming* a 60 Hz raster, plus a slow
+    // mains drift — the demo panel's recipe, frame-counted (crt-panel.js)
+    let flick = 1;
+    if (this.options.flicker) {
+      const beat = Math.sin(this._frame * 2 * Math.PI * 10 / 60);
+      const hum = Math.sin(this._frame * 2 * Math.PI * 1.7 / 60);
+      flick = 1 - 0.10 * (0.5 + 0.5 * beat) - 0.04 * (0.5 + 0.5 * hum);
+    }
+    this._tube.apply(this._phosphor.composite(), this._rgba, {
+      scale: this.options.bright * flick,
+      contrast: this.options.contrast,
+    });
+    this._img.data.set(this._rgba);
+    this._ctx.putImageData(this._img, 0, 0);
+  }
+
+  // xterm's selection layer is hidden with the rest of the screen, so echo
+  // the selection as hardware reverse video. Both API shapes are handled
+  // (IBufferRange {start,end} in 5.x, ISelectionPosition columns/rows before).
+  _overlaySelection(term, buf) {
+    const pos = term.getSelectionPosition?.();
+    if (!pos) return;
+    const w = term.cols * 8;
+    const startY = pos.start ? pos.start.y : pos.startRow;
+    const endY = pos.end ? pos.end.y : pos.endRow;
+    const startX = pos.start ? pos.start.x : pos.startColumn;
+    const endX = pos.end ? pos.end.x : pos.endColumn;
+    for (let ay = startY; ay <= endY; ay++) {
+      const vy = ay - buf.viewportY;
+      if (vy < 0 || vy >= term.rows) continue;
+      const x0 = ay === startY ? startX : 0;
+      const x1 = ay === endY ? endX : term.cols;
+      if (x1 > x0) invertCellBlock(this._indexed, w, x0, vy, x1 - x0);
+    }
+  }
+}
+
+function createCrtRendererAddon(options) {
+  return new CrtRendererAddon(options);
+}
+
+return { PHOSPHORS, MASKS, SCHEMA_VERSION, ANSI_TO_GRB, rgbToGrb, PALETTE_TO_GRB, cellToGrb, EXTRA_GLYPHS, TOFU_INDEX, buildGlyphs, glyphIndexFor, drawTerminalToIndexed, invertCellBlock, CrtRendererAddon, createCrtRendererAddon };
+});
+
+const { CrtRendererAddon, PHOSPHORS, MASKS } = __req("xterm/crt-xterm.js");
+window.CrtRendererAddon = CrtRendererAddon;
+window.CrtPHOSPHORS = PHOSPHORS;
+window.CrtMASKS = MASKS;
+</script>
+
+<script type="module">
+// module scripts run in document order, so the bundle above already ran
+const CrtRendererAddon = window.CrtRendererAddon;
+const PHOSPHORS = window.CrtPHOSPHORS;
+const MASKS = window.CrtMASKS;
+
+// ---- settings (persisted) --------------------------------------------------
+const STORE = 'ttyd-crt-settings';
+const settings = Object.assign({
+  phosphor: 'P22', mask: 'aperture', bright: 1.2,
+  flicker: false, strict1979: false, crtOn: true,
+}, (() => { try { return JSON.parse(localStorage.getItem(STORE)) || {}; } catch { return {}; } })());
+const save = () => { try { localStorage.setItem(STORE, JSON.stringify(settings)); } catch {} };
+
+// ---- terminal + CRT ---------------------------------------------------------
+const term = new Terminal({
+  // cursor drawing is ours; keep xterm's own blink off so the hidden layer
+  // never fights the phosphor
+  cursorBlink: false,
+  fontSize: 15,
+  fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
+  scrollback: 2000,
+  theme: { background: '#000000' },
+});
+const fitAddon = new FitAddon.FitAddon();
+term.loadAddon(fitAddon);
+term.open(document.getElementById('terminal'));
+fitAddon.fit();
+
+const crt = new CrtRendererAddon({
+  phosphor: settings.phosphor, mask: settings.mask, bright: settings.bright,
+  flicker: settings.flicker, strict1979: settings.strict1979,
+});
+term.loadAddon(crt);
+crt.setEnabled(settings.crtOn);
+term.focus();
+
+// ---- panel wiring -----------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const fill = (sel, keys, current) => {
+  for (const k of keys) {
+    const o = document.createElement('option');
+    o.value = k; o.textContent = k; o.selected = k === current;
+    sel.appendChild(o);
+  }
+};
+fill($('phosphor'), Object.keys(PHOSPHORS), settings.phosphor);
+fill($('mask'), MASKS.filter((m) => m !== 'plasma'), settings.mask);
+$('bright').value = settings.bright;
+$('flicker').checked = settings.flicker;
+$('strict').checked = settings.strict1979;
+const apply = (key, value) => { settings[key] = value; crt.setOptions({ [key]: value }); save(); };
+$('phosphor').onchange = (e) => apply('phosphor', e.target.value);
+$('mask').onchange = (e) => apply('mask', e.target.value);
+$('bright').oninput = (e) => apply('bright', +e.target.value);
+$('flicker').onchange = (e) => apply('flicker', e.target.checked);
+$('strict').onchange = (e) => apply('strict1979', e.target.checked);
+$('crtToggle').onclick = () => {
+  settings.crtOn = !settings.crtOn;
+  crt.setEnabled(settings.crtOn);
+  $('crtToggle').classList.toggle('on', settings.crtOn);
+  save();
+  term.focus();
+};
+$('crtToggle').classList.toggle('on', settings.crtOn);
+let knobsOpen = true;
+$('knobsToggle').onclick = () => {
+  knobsOpen = !knobsOpen;
+  $('body').classList.toggle('hidden', !knobsOpen);
+  $('knobsToggle').textContent = knobsOpen ? '▾' : '▸';
+};
+$('knobsToggle').onclick(); // start collapsed: the terminal is the point
+const setStatus = (text, cls) => {
+  const s = $('status');
+  s.textContent = text;
+  s.className = cls || '';
+};
+
+// ---- ttyd websocket ----------------------------------------------------------
+// URL derivation mirrors ttyd's own client (html/src/components/app.tsx):
+// token = <proto>//<host><path>/token, ws = ws(s)://<host><path>/ws.
+// ?ws=ws://... overrides for pointing a dev page at a live ttyd.
+const query = new URLSearchParams(window.location.search);
+const basePath = window.location.pathname.replace(/[/]+$/, '');
+const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const wsUrl = query.get('ws')
+  || [wsProto, '//', window.location.host, basePath, '/ws', window.location.search].join('');
+const tokenUrl = [window.location.protocol, '//', window.location.host, basePath, '/token'].join('');
+
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+let ws = null;
+let opened = false;
+let demo = false;
+
+// ttyd flow control (same constants as the stock client): past `limit`
+// buffered bytes, count pending writes and PAUSE/RESUME the pty
+const flow = { limit: 100000, highWater: 10, lowWater: 4, written: 0, pending: 0 };
+
+function sendResize() {
+  if (ws?.readyState === 1) {
+    ws.send(enc.encode('1' + JSON.stringify({ columns: term.cols, rows: term.rows })));
+  }
+}
+
+async function connect() {
+  let token = '';
+  try {
+    const resp = await fetch(tokenUrl);
+    if (resp.ok) token = (await resp.json()).token || '';
+  } catch {} // no /token endpoint (no auth, or dev server) — fine
+  setStatus('connecting…', '');
+  ws = new WebSocket(wsUrl, ['tty']);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => {
+    opened = true;
+    demo = false;
+    setStatus('connected', 'on');
+    ws.send(enc.encode(JSON.stringify({ AuthToken: token, columns: term.cols, rows: term.rows })));
+  };
+  ws.onmessage = (ev) => {
+    const raw = new Uint8Array(ev.data);
+    const cmd = String.fromCharCode(raw[0]);
+    const data = raw.subarray(1);
+    if (cmd === '0') { // OUTPUT
+      flow.written += data.length;
+      if (flow.written > flow.limit) {
+        term.write(data, () => {
+          flow.pending = Math.max(flow.pending - 1, 0);
+          if (flow.pending < flow.lowWater) ws?.send(enc.encode('3')); // RESUME
+        });
+        flow.pending++;
+        flow.written = 0;
+        if (flow.pending > flow.highWater) ws.send(enc.encode('2')); // PAUSE
+      } else {
+        term.write(data);
+      }
+    } else if (cmd === '1') { // SET_WINDOW_TITLE
+      document.title = dec.decode(data);
+    } else if (cmd === '2') { // SET_PREFERENCES (--client-option)
+      try {
+        const prefs = JSON.parse(dec.decode(data));
+        for (const [k, v] of Object.entries(prefs)) {
+          // crtPhosphor=P39 etc. steer the addon; the rest go to xterm
+          if (k.startsWith('crt')) {
+            const key = k.slice(3, 4).toLowerCase() + k.slice(4);
+            crt.setOptions({ [key]: v });
+          } else {
+            try { term.options[k] = v; } catch {}
+          }
+        }
+      } catch {}
+    }
+  };
+  ws.onclose = (ev) => {
+    ws = null;
+    if (!opened) { enterDemo(); return; } // never connected: probably no ttyd
+    setStatus('disconnected', 'err');
+    if (ev.code !== 1000) setTimeout(connect, 2000); // ttyd-style auto-reconnect
+  };
+}
+
+// No ttyd behind the page (dev preview): local echo, so the tube still glows.
+function enterDemo() {
+  demo = true;
+  setStatus('demo (no ttyd)', 'err');
+  term.write('\x1b[2J\x1b[H');
+  term.write('\x1b[7m 1979 CRT — demo mode \x1b[0m\r\n\r\n');
+  term.write('No ttyd endpoint at ' + wsUrl + '\r\n');
+  term.write('Serve this file via `ttyd --index ...` for a real shell.\r\n');
+  term.write('\x1b[31mR\x1b[32mG\x1b[34mB\x1b[33mY\x1b[35mM\x1b[36mC\x1b[0m ');
+  term.write('\x1b[7mREVERSE\x1b[0m \x1b[4mUNDER\x1b[0m \x1b[5mBLINK\x1b[0m — local echo below:\r\n\r\n$ ');
+}
+
+term.onData((d) => {
+  if (demo) { term.write(d === '\r' ? '\r\n$ ' : d); return; }
+  if (ws?.readyState === 1) ws.send(enc.encode('0' + d));
+});
+term.onBinary((d) => {
+  if (ws?.readyState !== 1) return;
+  const buf = new Uint8Array(d.length + 1);
+  buf[0] = '0'.charCodeAt(0);
+  for (let i = 0; i < d.length; i++) buf[i + 1] = d.charCodeAt(i) & 255;
+  ws.send(buf);
+});
+term.onResize(sendResize);
+window.addEventListener('resize', () => fitAddon.fit());
+
+connect();
+</script>
+</body>
+</html>
