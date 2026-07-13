@@ -53,6 +53,7 @@
   <label>BRIGHT <input type="range" id="kbright" min="0.4" max="2.5" step="0.05" value="1"></label>
   <label>PITCH <input type="range" id="kpitch" min="2" max="9" step="1" value="3"></label>
   <label>CONV <input type="range" id="kconv" min="0" max="0.02" step="0.001" value="0.0035"></label>
+  <label>BARREL <input type="range" id="kbarrel" min="-0.12" max="0.25" step="0.01" value="0.06"></label>
 </div>
 <div id="guts"></div>
 <p class="note">
@@ -262,13 +263,13 @@ const phosphor = new CrtPhosphor({ width: 640, height: 200, phosphor: PHOSPHORS.
 let phosName = 'P22';
 let tubeMode = 'aperture'; // 'off' | 'aperture' | 'shadow' | 'slot'
 let interlaced = false;
-const knobs = { focus: 1, hSize: 1, vSize: 1, bright: 1, pitch: 3, conv: 0.0035 }; // 裏のノブ
+const knobs = { focus: 1, hSize: 1, vSize: 1, bright: 1, pitch: 3, conv: 0.0035, barrel: 0.06 }; // 裏のノブ
 const tubes = {};
 function getTube() {
   if (!tubes[tubeMode]) {
     tubes[tubeMode] = new CrtTube({
       srcWidth: 640, srcHeight: 200, outWidth: 640, outHeight: 400,
-      mask: tubeMode, maskPitch: knobs.pitch, convergence: knobs.conv,
+      mask: tubeMode, maskPitch: knobs.pitch, convergence: knobs.conv, barrel: knobs.barrel,
       beamWidth: knobs.focus, hSize: knobs.hSize, vSize: knobs.vSize,
     });
   }
@@ -456,7 +457,10 @@ $('kfocus').oninput = (e) => {
 };
 const regeo = () => {
   for (const t of Object.values(tubes)) {
-    t.setGeometry({ hSize: knobs.hSize, vSize: knobs.vSize, maskPitch: knobs.pitch, convergence: knobs.conv });
+    t.setGeometry({
+      hSize: knobs.hSize, vSize: knobs.vSize, maskPitch: knobs.pitch,
+      convergence: knobs.conv, barrel: knobs.barrel,
+    });
   }
 };
 $('khsize').oninput = (e) => { knobs.hSize = +e.target.value; regeo(); };
@@ -464,6 +468,7 @@ $('kvsize').oninput = (e) => { knobs.vSize = +e.target.value; regeo(); };
 $('kbright').oninput = (e) => { knobs.bright = +e.target.value; };
 $('kpitch').oninput = (e) => { knobs.pitch = +e.target.value; regeo(); };
 $('kconv').oninput = (e) => { knobs.conv = +e.target.value; regeo(); };
+$('kbarrel').oninput = (e) => { knobs.barrel = +e.target.value; regeo(); };
 </script>
 </body>
 </html>
