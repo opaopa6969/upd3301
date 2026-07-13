@@ -75,6 +75,12 @@ const DICT = {
   '線画 (アニメ)': 'Line art (anime)',
   '27色ちらつき': '27-color flicker',
   '512色ちらつき': '512-color flicker',
+  '⏺ 録画': '⏺ REC',
+  '■ 停止': '■ Stop',
+  '録画中…': 'recording…',
+  'MP4を保存した': 'saved MP4',
+  'WebMを保存した（MP4化: ffmpeg -i in.webm out.mp4）': 'saved WebM (to MP4: ffmpeg -i in.webm out.mp4)',
+  '録画非対応のブラウザ': 'this browser cannot record',
   // rhythm
   'デモパターン': 'Demo pattern',
   'クリア': 'Clear',

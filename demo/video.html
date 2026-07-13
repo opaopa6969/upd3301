@@ -55,6 +55,7 @@
 <div class="row">
   <input type="file" id="file" accept="video/*">
   <button id="bcam">Webカメラ</button>
+  <button id="brec">⏺ 録画</button>
 </div>
 <div class="row"><span class="lbl">モード:</span>
   <button id="gex" class="on">EX 160×50 (セル毎8色)</button>
@@ -296,6 +297,50 @@ $('bcam').onclick = async () => {
   } catch (err) { say('webcam: ' + err.message); }
 };
 $('bplay').onclick = () => { video.paused ? tryPlay() : video.pause(); };
+// ---- recording: canvas → MP4 (or WebM fallback) -------------------------
+let recorder = null, recChunks = [], recCtxA = null, recDest = null, recRouted = false;
+function recAudioTracks() {
+  try {
+    recCtxA ??= new AudioContext();
+    if (!recRouted) {
+      const src = recCtxA.createMediaElementSource(video); // keeps playing to speakers below
+      recDest = recCtxA.createMediaStreamDestination();
+      src.connect(recCtxA.destination);
+      src.connect(recDest);
+      recRouted = true;
+    }
+    recCtxA.resume?.();
+    return recDest.stream.getAudioTracks();
+  } catch { return []; }
+}
+$('brec').onclick = () => {
+  if (recorder) { recorder.stop(); return; }
+  if (!canvas.captureStream || typeof MediaRecorder === 'undefined') { say(t('録画非対応のブラウザ')); return; }
+  const stream = canvas.captureStream(60);
+  for (const tr of recAudioTracks()) stream.addTrack(tr);
+  const mime = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm']
+    .find((m) => MediaRecorder.isTypeSupported(m)) ?? '';
+  recorder = new MediaRecorder(stream, { mimeType: mime || undefined, videoBitsPerSecond: 12_000_000 });
+  recChunks = [];
+  recorder.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+  recorder.onstop = () => {
+    const ext = (recorder.mimeType || mime).includes('mp4') ? 'mp4' : 'webm';
+    const blob = new Blob(recChunks, { type: recorder.mimeType || 'video/webm' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `upd3301-${Date.now()}.${ext}`;
+    a.click();
+    recorder = null;
+    $('brec').textContent = t('⏺ 録画');
+    $('brec').classList.remove('on');
+    say(ext === 'mp4' ? t('MP4を保存した') : t('WebMを保存した（MP4化: ffmpeg -i in.webm out.mp4）'));
+  };
+  recorder.start(1000);
+  $('brec').textContent = t('■ 停止');
+  $('brec').classList.add('on');
+  say(t('録画中…' ) + (mime.includes('mp4') ? ' (mp4)' : ' (webm)'));
+};
+
 
 // video bar
 const fmt = (s) => (Number.isFinite(s)
