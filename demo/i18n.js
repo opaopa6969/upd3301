@@ -74,6 +74,7 @@ const DICT = {
   'ディザ': 'Dither',
   '線画 (アニメ)': 'Line art (anime)',
   '27色ちらつき': '27-color flicker',
+  '512色ちらつき': '512-color flicker',
   // rhythm
   'デモパターン': 'Demo pattern',
   'クリア': 'Clear',

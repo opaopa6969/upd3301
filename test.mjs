@@ -906,3 +906,27 @@ test('plasma grid mask: mono square ribs, identical across channels', async () =
   }
   assert.ok(ribSeen, 'dark ribs between cells');
 });
+
+test('512-color mode: 8 duty levels per gun over a 7-frame cycle', async () => {
+  const { rgbaToSemigraphic } = await import('./semivideo.js');
+  const W = 8, H = 8;
+  const mk = (v) => {
+    const rgba = new Uint8Array(W * H * 4);
+    for (let i = 0; i < W * H; i++) { rgba[i * 4] = v; rgba[i * 4 + 3] = 255; }
+    return rgba;
+  };
+  const duty = (v) => {
+    let lit = 0, total = 0;
+    for (let ph = 0; ph < 7; ph++) {
+      const r = rgbaToSemigraphic(mk(v), W, H, { temporalPhase: ph, temporalLevels: 8 });
+      for (const c of r.codes) for (let b = 0; b < 8; b++) { total++; lit += (c >> b) & 1; }
+    }
+    return lit / total;
+  };
+  assert.equal(duty(255), 1, 'full red lit on all 7 phases');
+  assert.equal(duty(0), 0);
+  const mid = duty(128);
+  assert.ok(Math.abs(mid - 0.5) < 0.13, `mid gray ≈ half duty (${mid})`);
+  const low = duty(64), high = duty(192);
+  assert.ok(low < mid && mid < high, `duty is monotone (${low} < ${mid} < ${high})`);
+});

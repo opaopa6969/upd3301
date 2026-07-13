@@ -43,12 +43,14 @@ export function computeLevels(rgba, n) {
   return { lo, scale: 255 / (hi - lo) };
 }
 
-// temporalPhase: null = plain 2-level dither. 0/1 = 27-color flicker mode —
-// each channel quantizes to 3 levels (off / flicker / on); the middle level
-// lights only on phase 0, so alternating frames average to half brightness:
-// 3 levels ^ 3 guns = 27 colors, readable through a long-persistence
-// phosphor exactly like the Bemaga DMA trick.
-export function rgbaToSemigraphic(rgba, dotW, dotH, { gain = 1.0, autoLevels = false, temporalPhase = null } = {}) {
+// temporalPhase: null = plain 2-level dither. With temporalLevels = L and
+// phase cycling 0..L-2, each channel quantizes to L duty levels over an
+// (L-1)-frame cycle — L=3 is the 27-color flicker (Bemaga-style), L=8 gives
+// 8³ = 512 colors, which is no longer what the word "attribute" was ever
+// meant to carry ｗ. Lit frames are stride-distributed inside the cycle so
+// mid levels shimmer instead of strobing; watch through a long-persistence
+// phosphor.
+export function rgbaToSemigraphic(rgba, dotW, dotH, { gain = 1.0, autoLevels = false, temporalPhase = null, temporalLevels = 3 } = {}) {
   const cols = dotW >> 1, rows = dotH >> 2;
   let lo = 0, scale = 1;
   if (autoLevels) ({ lo, scale } = computeLevels(rgba, dotW * dotH));
@@ -71,10 +73,12 @@ export function rgbaToSemigraphic(rgba, dotW, dotH, { gain = 1.0, autoLevels = f
           if ((rgba[o + 1] - lo) * scale / 255 * gain > th) d |= 4; // G
           if ((rgba[o + 2] - lo) * scale / 255 * gain > th) d |= 1; // B
         } else {
+          const N = temporalLevels - 1; // frames per cycle
+          const ord = (temporalPhase * (N === 2 ? 1 : 3)) % N; // stride-spread
           for (let c = 0; c < 3; c++) {
             const v = Math.min(1, Math.max(0, (rgba[o + c] - lo) * scale / 255 * gain));
-            const lv = v * 2, q = Math.min(2, Math.floor(lv) + ((lv - Math.floor(lv)) > th ? 1 : 0));
-            if (q === 2 || (q === 1 && temporalPhase === 0)) d |= [2, 4, 1][c];
+            const lv = v * N, q = Math.min(N, Math.floor(lv) + ((lv - Math.floor(lv)) > th ? 1 : 0));
+            if (ord < q) d |= [2, 4, 1][c]; // duty q/N over the cycle
           }
         }
         dots.push(d);
