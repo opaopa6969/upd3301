@@ -68,6 +68,10 @@ NEC PC-8001（1979）の画面に文字を出していた張本人、μPD3301 CR
   統合テストはキーボードマトリクス経由で `PRINT 3301` を打って答えを
   検証する。ROMはBYO（gitignore済み）— NECの著作権は2049年まで。
 
+他エミュ（QUASI88 / MAME / M88）とのソースレベル比較 — MAMEとM88も同じく
+チップレベルだった。うちが唯一持つのはその下の物理層:
+[docs/comparison.ja.md](./docs/comparison.ja.md)。
+
 チップレベルの技術資料（データシート風、mermaidブロック図つき）:
 [docs/datasheet.ja.md](./docs/datasheet.ja.md)。
 

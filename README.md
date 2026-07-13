@@ -74,6 +74,10 @@ on a long-persistence tube. Which is why there's a physical layer:
   assert the answer. ROMs are BYO (gitignored) — NEC's copyright runs to
   2049.
 
+How this compares to QUASI88 / MAME / M88 (we read their sources — MAME and
+M88 are chip-level too; what's unique here is the physics below):
+[docs/comparison.md](./docs/comparison.md).
+
 Chip-level reference (datasheet-style, mermaid block diagrams):
 [docs/datasheet.md](./docs/datasheet.md).
 
