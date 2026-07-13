@@ -59,8 +59,23 @@ export class Z80 {
     return {
       schemaVersion: SCHEMA_VERSION,
       a, f, b, c, d, e, h, l, ix, iy, sp, pc, i, r, iff1, iff2, im, halted,
+      eiDelay: this._eiDelay,
       shadow: { a: this.a_, f: this.f_, b: this.b_, c: this.c_, d: this.d_, e: this.e_, h: this.h_, l: this.l_ },
     };
+  }
+
+  // exact inverse of getState — the pair is what makes deterministic
+  // time-travel possible (snapshot, run ahead, restore, run again: identical)
+  setState(s) {
+    for (const k of ['a', 'f', 'b', 'c', 'd', 'e', 'h', 'l', 'ix', 'iy', 'sp', 'pc', 'i', 'r', 'im']) {
+      this[k] = s[k];
+    }
+    this.iff1 = s.iff1; this.iff2 = s.iff2; this.halted = s.halted;
+    this._eiDelay = s.eiDelay ?? 0;
+    const sh = s.shadow;
+    this.a_ = sh.a; this.f_ = sh.f; this.b_ = sh.b; this.c_ = sh.c;
+    this.d_ = sh.d; this.e_ = sh.e; this.h_ = sh.h; this.l_ = sh.l;
+    return this;
   }
 
   // ---- register pair helpers ------------------------------------------

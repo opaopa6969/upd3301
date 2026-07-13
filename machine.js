@@ -14,6 +14,7 @@
 
 import { Z80 } from './z80.js';
 import { Pc8001TextSystem } from './pc8001.js';
+import { snapObj, restoreObj } from './snap.js';
 
 export const SCHEMA_VERSION = 1;
 
@@ -152,6 +153,45 @@ export class Pc8001Machine {
   // PC-8001 matrix: port = row (00h-09h), bit = column, active low.
   keyDown(row, bit) { this.keys[row] &= ~(1 << bit); return this; }
   keyUp(row, bit) { this.keys[row] |= 1 << bit; return this; }
+
+  // ---- time travel ---------------------------------------------------------
+  // The machine is deterministic, so a snapshot + replayed inputs land on
+  // the exact same timeline. Restore writes into the live objects.
+  snapshot() {
+    return {
+      cpu: this.cpu.getState(),
+      memory: this.sys.memory.slice(),
+      crtc: snapObj(this.sys.crtc),
+      dmac: snapObj(this.sys.dmac),
+      width80: this.sys.width80,
+      colorMode: this.sys.colorMode,
+      keys: this.keys.slice(),
+      extRam: this.exMode
+        ? [...this.extRam.entries()].map(([b, ram]) => [b, ram.slice()])
+        : this.extRam.map((ram) => ram && ram.slice()),
+      readEn: this.readEn, writeEn: this.writeEn, bankIndex: this.bankIndex,
+      tInFrame: this.tInFrame, frame: this.frame, acc: this._acc ?? 0,
+    };
+  }
+
+  restore(s) {
+    this.cpu.setState(s.cpu);
+    this.sys.memory.set(s.memory);
+    restoreObj(this.sys.crtc, s.crtc);
+    restoreObj(this.sys.dmac, s.dmac);
+    this.sys.width80 = s.width80;
+    this.sys.colorMode = s.colorMode;
+    this.keys.set(s.keys);
+    if (this.exMode) {
+      this.extRam.clear();
+      for (const [b, ram] of s.extRam) this.extRam.set(b, ram.slice());
+    } else {
+      this.extRam = s.extRam.map((ram) => ram && ram.slice());
+    }
+    this.readEn = s.readEn; this.writeEn = s.writeEn; this.bankIndex = s.bankIndex;
+    this.tInFrame = s.tInFrame; this.frame = s.frame; this._acc = s.acc;
+    return this;
+  }
 
   // ---- observation ---------------------------------------------------------
   screenText() {

@@ -24,6 +24,7 @@ import { Upd8257 } from './upd8257.js';
 import { renderScreen } from './pc8001.js';
 import { I8255, crossWire } from './i8255.js';
 import { Pc80s31 } from './pc80s31.js';
+import { snapObj, restoreObj } from './snap.js';
 
 export const SCHEMA_VERSION = 1;
 
@@ -291,6 +292,93 @@ export class Pc8801Machine {
 
   keyDown(row, bit) { this.keys[row] &= ~(1 << bit); return this; }
   keyUp(row, bit) { this.keys[row] |= 1 << bit; return this; }
+
+  // ---- time travel ---------------------------------------------------------
+  // Deterministic machine + full state copy = rewindable execution, sub
+  // board and FDC included. One caveat, documented rather than hidden:
+  // mounted disk IMAGES are captured by reference, so sector writes are
+  // not rewound (copying whole D88s per snapshot would cost megabytes).
+  snapshot() {
+    const s = {
+      cpu: this.cpu.getState(),
+      ram: this.ram.slice(),
+      gvram: this.gvram.map((p) => p.slice()),
+      palette: this.palette.slice(),
+      keys: this.keys.slice(),
+      dipsw: [...this.dipsw],
+      crtc: snapObj(this.crtc),
+      dmac: snapObj(this.dmac),
+      bank: {
+        romEnabled: this.romEnabled, extMapped: this.extMapped, port32: this._port32,
+        gvramWindow: this.gvramWindow, gvramOn: this.gvramOn,
+        mono: this.mono, line400: this.line400, width80: this.width80,
+      },
+      ints: { levels: this.intLevels, mask: this.intMaskBits, pending: this.intPending },
+      pioPoll: { last: this._pioLast, count: this._pioPoll },
+      tInFrame: this.tInFrame, frame: this.frame, acc: this._acc ?? 0,
+    };
+    if (this.sub) {
+      s.pio = snapObj(this.pio);
+      s.sub = {
+        cpu: this.sub.cpu.getState(),
+        mem: this.sub.mem.slice(),
+        motor: this.sub.motor,
+        pio: snapObj(this.sub.pio),
+        fdc: this._snapFdc(),
+      };
+    }
+    return s;
+  }
+
+  _snapFdc() {
+    // explicit field list — snapObj would deep-copy whole mounted D88s.
+    // drives/_multi/execBuf hold views INTO the disk images: reference them.
+    const f = this.sub.fdc;
+    return {
+      phase: f.phase, cmdLen: f.cmdLen, cmd: [...f.cmd],
+      result: [...f.result], resultPos: f.resultPos,
+      execPos: f.execPos, execWrite: f.execWrite, int: f.int,
+      seekEnd: f.seekEnd.map((p) => ({ ...p })), us: f.us, hd: f.hd,
+      drives: f.drives.map((d) => ({ cyl: d.cyl, _idx: d._idx, disk: d.disk })),
+      execBuf: f.execBuf,
+      _multi: f._multi,
+    };
+  }
+
+  restore(s) {
+    this.cpu.setState(s.cpu);
+    this.ram.set(s.ram);
+    s.gvram.forEach((p, i) => this.gvram[i].set(p));
+    this.palette.set(s.palette);
+    this.keys.set(s.keys);
+    this.dipsw = [...s.dipsw];
+    restoreObj(this.crtc, s.crtc);
+    restoreObj(this.dmac, s.dmac);
+    const b = s.bank;
+    this.romEnabled = b.romEnabled; this.extMapped = b.extMapped; this._port32 = b.port32;
+    this.gvramWindow = b.gvramWindow; this.gvramOn = b.gvramOn;
+    this.mono = b.mono; this.line400 = b.line400; this.width80 = b.width80;
+    this.intLevels = s.ints.levels; this.intMaskBits = s.ints.mask; this.intPending = s.ints.pending;
+    this._pioLast = s.pioPoll.last; this._pioPoll = s.pioPoll.count;
+    this.tInFrame = s.tInFrame; this.frame = s.frame; this._acc = s.acc;
+    if (this.sub && s.sub) {
+      restoreObj(this.pio, s.pio);
+      this.sub.cpu.setState(s.sub.cpu);
+      this.sub.mem.set(s.sub.mem);
+      this.sub.motor = s.sub.motor;
+      restoreObj(this.sub.pio, s.sub.pio);
+      const f = this.sub.fdc;
+      const fs = s.sub.fdc;
+      for (const k of Object.keys(fs)) {
+        if (k === 'drives' || k === 'execBuf' || k === '_multi') continue;
+        f[k] = Array.isArray(fs[k]) ? fs[k].map((x) => (x && typeof x === 'object' ? { ...x } : x)) : fs[k];
+      }
+      f.drives.forEach((d, i) => { d.cyl = fs.drives[i].cyl; d._idx = fs.drives[i]._idx; d.disk = fs.drives[i].disk; });
+      f.execBuf = fs.execBuf;
+      f._multi = fs._multi;
+    }
+    return this;
+  }
 
   // ---- video --------------------------------------------------------------
   // Composite: graphics planes (palette-indexed) under the text layer.
