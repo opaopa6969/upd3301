@@ -60,6 +60,10 @@ Name things, lift them to source, put them somewhere else — the firmware
 era's stone tools, upgraded from *prayer* to *verification* by living
 inside an emulator.
 
+> Etymology: the author typo'd 機器 (equipment) as 石器 (stone tools). It
+> was too accurate to fix — primitive like flint axes, and no civilization
+> starts without them — so it became the official term.
+
 1. **Label DB** — name addresses in the disassembly; localStorage plus JSON
    export/import; merges with z80asm symbols; resolved everywhere
    (disassembly, profiler, breakpoints).

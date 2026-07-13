@@ -100,6 +100,58 @@ const DICT = {
   'MP4を保存した': 'saved MP4',
   'WebMを保存した（MP4化: ffmpeg -i in.webm out.mp4）': 'saved WebM (to MP4: ffmpeg -i in.webm out.mp4)',
   '録画非対応のブラウザ': 'this browser cannot record',
+  // ICE debugger (ice.html)
+  '🔬 ICE — Z80インサーキットデバッガ': '🔬 ICE — Z80 in-circuit debugger',
+  'メインCPU': 'Main CPU',
+  'サブCPU (FDD)': 'Sub CPU (FDD)',
+  '⏸ 停止': '⏸ Pause',
+  '▶ 続行': '▶ Continue',
+  'ステップ': 'Step',
+  'ステップオーバー': 'Step over',
+  '+1フレーム': '+1 frame',
+  '構文:': 'Syntax:',
+  'レジスタ（pause中にクリックで編集）': 'Registers (click to edit while paused)',
+  '逆アセンブル（▶=PC ●=BP）': 'Disassembly (▶=PC ●=BP)',
+  'FDCサブ基板の状態': 'FDC sub-board state',
+  'メモリ': 'Memory',
+  'アドレス': 'Address',
+  '書込先': 'Write to',
+  '書込': 'Write',
+  'ブレークポイント（このタブのCPUに付く）': 'Breakpoints (attach to this tab\'s CPU)',
+  'アセンブラ（Z80マクロアセンブラ → メモリ直書き）': 'Assembler (Z80 macro assembler → poke into memory)',
+  'ASM→メモリ': 'ASM→memory',
+  'PCセット': 'Set PC',
+  '▶ 実行': '▶ Run',
+  '切断（親ウィンドウが閉じられた）': 'disconnected (opener window is gone)',
+  'マシン待ち — machine.htmlでROMを読み込んで': 'waiting for the machine — load a ROM in machine.html',
+  '一時停止中': 'paused',
+  '実行中': 'running',
+  '無効': 'disabled',
+  '（なし — アドレスを入れて±で追加）': '(none — type an address and hit ±)',
+  '条件式エラー': 'condition error',
+  '書き込み先': 'target',
+  'ルーチン / 破壊 / 入力 / 保存 / I/O / mem / T / 警告': 'routine / destroys / inputs / saves / I/O / mem / T / warnings',
+  '逆アセンブル（▶=PC ●=BP、行クリックでラベル付け）': 'Disassembly (▶=PC ●=BP, click a line to label it)',
+  'タイムトラベル（30フレーム毎に自動snap・分岐ツリー）': 'Time travel (auto-snapshot every 30 frames, branch tree)',
+  '⏪ 1フレーム戻る': '⏪ 1 frame back',
+  '⏩ 1フレーム進む': '⏩ 1 frame forward',
+  '📸 今すぐsnap': '📸 snap now',
+  'プロファイラ（シャドウコールスタック、CPU毎）': 'Profiler (shadow call stack, per CPU)',
+  '⏱ 計測': '⏱ Profile',
+  'ラベル±': 'Label ±',
+  'JSON書出': 'Export JSON',
+  '読込': 'Import',
+  'ソース書き出し / リロケート（逆アセン→ラベル反映→再アセンブル可）': 'Source export / relocate (disassembly with labels, reassemblable)',
+  '範囲': 'Range',
+  '新ORG': 'new ORG',
+  'ソース化': 'To source',
+  '.z80保存': 'Save .z80',
+  '再ASM→メモリ': 'ReASM→memory',
+  'coreがsnapshot/restore未対応（古いmachine.js）': 'core has no snapshot/restore (old machine.js)',
+  'D88へのセクタ書込は巻き戻らない': 'sector writes to a mounted D88 do not rewind',
+  '（OFF — ⏱で計測開始）': '(off — hit ⏱ to start)',
+  'ルーチン': 'routine',
+  '範囲を addr,addr で入れて（終了は含む）': 'give a range (end inclusive)',
   // tour / help chrome (tour.js)
   '次へ': 'Next',
   '▶ サンプル': '▶ Sample',
@@ -129,6 +181,13 @@ const DICT = {
 };
 
 const NOTES_EN = {
+  'note-ice': `Opened from machine.html's "🔬 ICE" button, this window clamps onto the live
+    machine (window.opener.__machine) from the outside. Pause, single-step, conditional
+    breakpoints (a JS expression that sees the registers and mem(addr)), register editing,
+    memory pokes, and code injection through the built-in Z80 macro assembler. The
+    disassembly toggles between Zilog and Intel 8080 spellings (the PC-88 monitor culture).
+    A successful assemble also prints per-routine static analysis below: destroyed
+    registers, I/O port names, stack lint, T-states.`,
   'note-main': `27-color mode = port 65h ← 8000h+5999 (two screens alternate; the Bemaga 1990-07 trick).
     3-plane mode = 8000h+8999 (three screens) showing R/G/B one frame each — logically full
     per-dot color at 1/3 duty per gun. On short-persistence P22 it is flicker hell; on the
@@ -162,7 +221,7 @@ export const t = (s) => (lang === 'ja' ? s : (DICT[s] ?? s));
 
 export function applyI18n() {
   if (lang === 'ja') return;
-  for (const el of document.querySelectorAll('button, span, label, h1, a, td')) {
+  for (const el of document.querySelectorAll('button, span, label, h1, h2, a, td')) {
     for (const node of el.childNodes) {
       if (node.nodeType === 3) {
         const k = node.textContent.trim();

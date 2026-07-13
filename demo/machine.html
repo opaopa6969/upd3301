@@ -39,6 +39,7 @@
   <label style="color:#778;font-size:12px">FONT.ROM (任意): <input type="file" id="ffont" style="font-size:11px"></label>
   <button id="breset">リセット</button>
   <button id="bfull">⛶ 全画面</button>
+  <button id="bice">🔬 ICE</button>
 </div>
 <div class="row"><span class="lbl">起動モード:</span>
   <button id="mn80" class="on">N-BASIC (N80)</button>
@@ -72,6 +73,7 @@ const { cgrom } = buildFont();
 addPlaceholderUpperHalf(cgrom);
 
 let machine = null, romBytes = null;
+Object.defineProperty(window, '__machine', { get: () => machine }); // live handle for the ICE window (demo/ice.html)
 
 // auto-load: if a ROM sits in the served dir, boot without asking. On the
 // public site none is present (NEC copyright → BYO), so this 404s quietly
@@ -191,6 +193,7 @@ $('bfull').onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen();
   else stage.requestFullscreen?.();
 };
+$('bice').onclick = () => window.open('ice.html', 'upd3301-ice', 'width=1200,height=900');
 
 let bootMode = 'n80';
 const dipOf = (id, dflt) => {

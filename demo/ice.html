@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>ICE — Z80 in-circuit debugger</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#101014; color:#ccd; font-family:ui-monospace,monospace; margin:16px; font-size:13px; }
+  h1 { font-size:16px; color:#8fd; margin:0 0 8px; }
+  .row { margin:8px 0; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  button { background:#223; color:#cde; border:1px solid #446; border-radius:4px; padding:4px 10px; cursor:pointer; font-family:inherit; font-size:12px; }
+  button.on, .tab.on { background:#265; border-color:#4a8; }
+  input, textarea { background:#181820; color:#cde; border:1px solid #446; border-radius:3px; font-family:inherit; font-size:12px; padding:3px 6px; }
+  pre { margin:0; white-space:pre; overflow-x:auto; }
+  .panel { background:#16161c; border:1px solid #2a3140; border-radius:6px; padding:8px 10px; }
+  .panel h2 { font-size:12px; color:#778; margin:0 0 6px; font-weight:normal; }
+  .conn { padding:2px 10px; border-radius:10px; font-size:12px; }
+  .conn.run { background:#143; color:#7fa; }
+  .conn.pause { background:#431; color:#fa7; }
+  .conn.bad { background:#413; color:#f7a; }
+  #grid { display:grid; grid-template-columns: minmax(430px, 1fr) minmax(430px, 1fr); gap:10px; align-items:start; }
+  @media (max-width: 940px) { #grid { grid-template-columns: 1fr; } }
+  #dis { font-size:12px; line-height:1.5; min-height:26em; color:#9db; font-family:inherit; white-space:pre; overflow-x:auto; }
+  .disline { cursor:pointer; min-height:1.2em; }
+  .disline:hover { background:#1c2430; }
+  .disline.discur { color:#8fd; }
+  .disline.dislabel { color:#da8; }
+  .treerow { cursor:pointer; font-size:11px; line-height:1.5; color:#9ab; white-space:pre; }
+  .treerow:hover { color:#8fd; }
+  .treerow.on { color:#8fd; }
+  #prof { font-size:11px; line-height:1.5; color:#9ab; }
+  #ttinfo { color:#667; font-size:11px; margin-top:4px; }
+  #clock { color:#8d9; font-size:12px; }
+  #exptext { width:100%; min-height:9em; box-sizing:border-box; white-space:pre; }
+  #mem { font-size:12px; line-height:1.5; color:#9ab; }
+  #regs { display:flex; gap:12px; flex-wrap:wrap; font-size:13px; }
+  .regcell { cursor:pointer; color:#cde; border-bottom:1px dotted #446; }
+  .regcell:hover { color:#8fd; }
+  .regedit { width:4.5em; }
+  #reginfo, #regshadow { color:#889; font-size:12px; margin-top:4px; }
+  #bplist, #aout { color:#9ab; font-size:12px; min-height:1.4em; }
+  #fdc { font-size:11px; color:#9ab; max-height:16em; overflow-y:auto; }
+  #asrc { width:100%; min-height:11em; box-sizing:border-box; white-space:pre; }
+  .analhead { color:#778; font-size:11px; border-bottom:1px solid #2a3140; padding-bottom:2px; margin-bottom:3px; }
+  .analrow { cursor:pointer; font-size:11px; line-height:1.6; color:#9db; white-space:pre; overflow-x:auto; }
+  .analrow:hover { color:#8fd; }
+  .analrow.warn { color:#da8; }
+  .note { color:#778; font-size:12px; max-width:900px; }
+</style>
+</head>
+<body>
+<h1>🔬 ICE — Z80インサーキットデバッガ</h1>
+<div class="row">
+  <span id="conn" class="conn bad">…</span>
+  <span id="minfo" style="color:#778;font-size:12px"></span>
+  <span id="clock"></span>
+</div>
+<div class="row">
+  <button id="tabmain" class="tab on">メインCPU</button>
+  <button id="tabsub" class="tab">サブCPU (FDD)</button>
+  <span style="width:12px"></span>
+  <button id="bpause">⏸ 停止</button>
+  <button id="bcont">▶ 続行</button>
+  <button id="bstep">ステップ</button>
+  <button id="bover">ステップオーバー</button>
+  <button id="bframe">+1フレーム</button>
+  <span style="width:12px"></span>
+  <span class="lbl" style="color:#778;font-size:12px">構文:</span>
+  <button id="bsyntax">Zilog</button>
+</div>
+
+<div id="grid">
+  <div style="display:flex;flex-direction:column;gap:10px">
+    <div class="panel">
+      <h2>レジスタ（pause中にクリックで編集）</h2>
+      <div id="regs"></div>
+      <div id="reginfo"></div>
+      <div id="regshadow"></div>
+    </div>
+    <div class="panel">
+      <h2>逆アセンブル（▶=PC ●=BP、行クリックでラベル付け）</h2>
+      <div id="dis"></div>
+      <div class="row" style="margin-bottom:0">
+        <input id="laddr" size="6" placeholder="addr">
+        <input id="lname" size="12" placeholder="label">
+        <button id="bladd">ラベル±</button>
+        <button id="blexport">JSON書出</button>
+        <label style="color:#778;font-size:11px">読込 <input type="file" id="blimport" accept=".json" style="font-size:10px;width:12em"></label>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>タイムトラベル（30フレーム毎に自動snap・分岐ツリー）</h2>
+      <div class="row" style="margin-top:0">
+        <button id="btundo">⏪ 1フレーム戻る</button>
+        <button id="btredo">⏩ 1フレーム進む</button>
+        <button id="btsnap">📸 今すぐsnap</button>
+      </div>
+      <div id="tree"></div>
+      <div id="ttinfo"></div>
+    </div>
+    <div class="panel">
+      <h2>プロファイラ（シャドウコールスタック、CPU毎）</h2>
+      <div class="row" style="margin-top:0">
+        <button id="bprof">⏱ 計測</button>
+        <button id="bprofreset">リセット</button>
+      </div>
+      <pre id="prof"></pre>
+    </div>
+    <div class="panel" id="fdcbox" style="display:none">
+      <h2>FDCサブ基板の状態</h2>
+      <pre id="fdc"></pre>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:10px">
+    <div class="panel">
+      <h2>メモリ</h2>
+      <div class="row" style="margin-top:0">
+        <label style="color:#778;font-size:12px">アドレス <input id="memaddr" value="0000" size="6"></label>
+        <label style="color:#778;font-size:12px">書込先 <input id="waddr" size="6"></label>
+        <input id="wdata" size="18" placeholder="AA 55 01 …">
+        <button id="bwrite">書込</button>
+      </div>
+      <pre id="mem"></pre>
+    </div>
+    <div class="panel">
+      <h2>ブレークポイント（このタブのCPUに付く）</h2>
+      <div class="row" style="margin-top:0">
+        <input id="bpaddr" size="6" placeholder="addr">
+        <input id="bpcond" size="24" placeholder="条件式: bc==0x100 && mem(hl)!=0">
+        <button id="bpbtn">±</button>
+      </div>
+      <pre id="bplist"></pre>
+    </div>
+    <div class="panel">
+      <h2>アセンブラ（Z80マクロアセンブラ → メモリ直書き）</h2>
+      <textarea id="asrc" spellcheck="false">        ORG 9000h
+start:  LD B,8
+.loop:  DJNZ .loop
+        RET
+</textarea>
+      <div class="row">
+        <label style="color:#778;font-size:12px">ORG <input id="aorg" value="9000" size="6"></label>
+        <button id="basm">ASM→メモリ</button>
+        <button id="bsetpc">PCセット</button>
+        <button id="brun">▶ 実行</button>
+      </div>
+      <pre id="aout"></pre>
+      <div id="anal" style="margin-top:6px"></div>
+    </div>
+    <div class="panel">
+      <h2>ソース書き出し / リロケート（逆アセン→ラベル反映→再アセンブル可）</h2>
+      <div class="row" style="margin-top:0">
+        <label style="color:#778;font-size:12px">範囲 <input id="exps" size="6" placeholder="9000"> 〜 <input id="expe" size="6" placeholder="90FF"></label>
+        <label style="color:#778;font-size:12px">新ORG <input id="expo" size="6" placeholder="(同じ)"></label>
+        <button id="bexp">ソース化</button>
+        <button id="bexpsave">.z80保存</button>
+        <button id="bexpwrite">再ASM→メモリ</button>
+      </div>
+      <textarea id="exptext" spellcheck="false" placeholder="; 範囲を指定してソース化 — 出力はそのまま再アセンブル可能（範囲外への絶対参照はそのまま残る）"></textarea>
+    </div>
+  </div>
+</div>
+
+<p class="note" id="note-ice">
+  machine.html の「🔬 ICE」から開くと、走ってる実機（window.opener.__machine）に
+  外から食い込む。停止・ステップ・条件付きブレーク（JS式でレジスタとmem(addr)が見える）、
+  レジスタ書き換え、メモリ編集、アセンブラで組んだコードの注入まで。
+  逆アセンブルはZilog/Intel 8080表記を切替可（88実機のモニタ文化）。
+  アセンブル成功時はルーチン毎の静的解析（破壊レジスタ・I/Oポート名・スタックlint・Tステート）が下に出る。
+</p>
+
+<script type="module">
+import { applyI18n, t } from './i18n.js';
+applyI18n();
+import { mountIcePage } from './ice.js';
+
+const page = mountIcePage(document, {
+  t,
+  raf: (cb) => requestAnimationFrame(cb),
+  getMachine: () => (window.opener && !window.opener.closed ? window.opener.__machine ?? null : null),
+  openerAlive: () => !!(window.opener && !window.opener.closed),
+  storage: {
+    get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch { } },
+  },
+  download: (name, text) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  },
+});
+
+// closing the ICE must never leave the machine frozen or wrapped
+addEventListener('pagehide', () => page.ctrl.detach());
+</script>
+</body>
+</html>
