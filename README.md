@@ -67,6 +67,13 @@ on a long-persistence tube. Which is why there's a physical layer:
   fantasy silicon rev (`resetEx`/`setChannelEx`) with arbitrary cols×rows
   and per-cell attributes — a usable terminal. Try `demo/terminal.html`.
 
+- **The whole machine** (`machine.js` + `demo/machine.html`): Z80 + your
+  own N-BASIC ROM dump + the chips above = a booting PC-8001.
+  `node tools/boot-nbasic.mjs roms/N80.ROM` prints the screen after boot;
+  the integration tests type `PRINT 3301` through the keyboard matrix and
+  assert the answer. ROMs are BYO (gitignored) — NEC's copyright runs to
+  2049.
+
 Chip-level reference (datasheet-style, mermaid block diagrams):
 [docs/datasheet.md](./docs/datasheet.md).
 

@@ -41,6 +41,9 @@ const DICT = {
   'PC-8031ドラムマシン': 'PC-8031 drum machine',
   'ドラムマシン': 'Drum machine',
   'CRT動画プレイヤー': 'CRT video player',
+  'PC-8001実機': 'PC-8001 (the machine)',
+  'リセット': 'Reset',
+  'CRT物理': 'CRT physics',
   // index
   'テキスト (80桁)': 'Text (80 col)',
   'テキスト (40桁)': 'Text (40 col)',

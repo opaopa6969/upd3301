@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>PC-8001 — the whole machine</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#101014; color:#ccd; font-family:ui-monospace,monospace; margin:24px; }
+  h1 { font-size:18px; color:#8fd; }
+  canvas { image-rendering:pixelated; border:12px solid #222; border-radius:8px; background:#000; outline:none; max-width:100%; }
+  .row { margin:10px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .row .lbl { color:#778; }
+  button { background:#223; color:#cde; border:1px solid #446; border-radius:4px; padding:6px 12px; cursor:pointer; }
+  button.on { background:#265; border-color:#4a8; }
+  #guts { font-size:12px; color:#889; white-space:pre; }
+  .note { color:#778; font-size:12px; max-width:700px; }
+  #stage { position:relative; display:inline-block; max-width:100%; }
+  #stage:fullscreen { display:flex; align-items:center; justify-content:center; width:100%; height:100%; background:#000; }
+  #stage:fullscreen canvas { width:min(100vw, calc(100vh * 8 / 5)); height:auto; border:none; border-radius:0; }
+</style>
+<script type="importmap">
+{"imports":{
+ "/index.js":"/index.js?v=cache1","/upd8257.js":"/upd8257.js?v=cache1",
+ "/pc8001.js":"/pc8001.js?v=cache1","/crt.js":"/crt.js?v=cache1",
+ "/tube.js":"/tube.js?v=cache1","/term.js":"/term.js?v=cache1",
+ "/semivideo.js":"/semivideo.js?v=cache1","/z80.js":"/z80.js?v=cache1",
+ "/demo/font.js":"/demo/font.js?v=cache1"
+}}
+</script>
+</head>
+<body>
+<h1>PC-8001 — Z80 + N-BASIC ROM + μPD8257 + μPD3301（フルマシン）</h1>
+<p class="note">▶ <a href="./index.html" style="color:#8fd">CRT物理デモ</a> · <a href="./terminal.html" style="color:#8fd">ターミナル</a> · <a href="./video.html" style="color:#8fd">動画セミグラ</a> · <a href="./crt-player.html" style="color:#8fd">CRT動画プレイヤー</a></p>
+<div id="stage"><canvas id="crt" tabindex="0" width="640" height="400"></canvas></div>
+<div class="row">
+  <label style="color:#778;font-size:12px">N-BASIC ROM (32KB/24KB): <input type="file" id="from" style="font-size:11px"></label>
+  <label style="color:#778;font-size:12px">FONT.ROM (任意): <input type="file" id="ffont" style="font-size:11px"></label>
+  <button id="breset">リセット</button>
+  <button id="btube" class="on">CRT物理</button>
+  <button id="bfull">⛶ 全画面</button>
+</div>
+<div id="guts">ROMを選ぶと起動する（ROMは実機からの吸い出しを。配布物には含まれない）</div>
+<p class="note" id="note-machine">
+  キャンバスをクリックしてキー入力（英数・記号・Enter・Space・Shift対応、
+  ESC=STOP）。このページは論理スタックの完成形：君のROMのN-BASICが
+  今日実装したZ80で走り、μPD8257が毎フレーム3000バイトをDMAし、
+  μPD3301がアトリビュートを展開して、蛍光体と管がそれを光にする。
+  試しに <b>PRINT 3301</b> と打ってみて。
+</p>
+<script type="module">
+import { applyI18n } from './i18n.js';
+applyI18n();
+import { Pc8001Machine } from '../machine.js';
+import { CrtPhosphor, PHOSPHORS } from '../crt.js';
+import { CrtTube } from '../tube.js';
+import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
+
+const canvas = document.getElementById('crt');
+const ctx = canvas.getContext('2d');
+const guts = document.getElementById('guts');
+const img = ctx.createImageData(640, 400);
+const { cgrom } = buildFont();
+addPlaceholderUpperHalf(cgrom);
+
+let machine = null, romBytes = null, tubeOn = true;
+const phosphor = new CrtPhosphor({ width: 640, height: 200, phosphor: PHOSPHORS.P22 });
+const tube = new CrtTube({ srcWidth: 640, srcHeight: 200, outWidth: 640, outHeight: 400, mask: 'aperture' });
+const idxBuf = new Uint8Array(640 * 200);
+let rgbaBuf = null;
+
+const $ = (id) => document.getElementById(id);
+$('from').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  romBytes = new Uint8Array(await f.arrayBuffer());
+  boot();
+};
+$('ffont').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const b = new Uint8Array(await f.arrayBuffer());
+  applyFontRom(cgrom, b); // 2KB sets take the whole map; 6KB 88 sets use the head
+};
+$('breset').onclick = () => boot();
+$('btube').onclick = () => { tubeOn = !tubeOn; $('btube').classList.toggle('on', tubeOn); };
+const stage = $('stage');
+$('bfull').onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else stage.requestFullscreen?.();
+};
+
+function boot() {
+  if (!romBytes) return;
+  machine = new Pc8001Machine({ rom: romBytes });
+  canvas.focus();
+}
+
+// PC-8001 keyboard matrix
+const KEY = {
+  '@': [2, 0], a: [2, 1], b: [2, 2], c: [2, 3], d: [2, 4], e: [2, 5], f: [2, 6], g: [2, 7],
+  h: [3, 0], i: [3, 1], j: [3, 2], k: [3, 3], l: [3, 4], m: [3, 5], n: [3, 6], o: [3, 7],
+  p: [4, 0], q: [4, 1], r: [4, 2], s: [4, 3], t: [4, 4], u: [4, 5], v: [4, 6], w: [4, 7],
+  x: [5, 0], y: [5, 1], z: [5, 2], '[': [5, 3], '\\': [5, 4], ']': [5, 5], '^': [5, 6], '-': [5, 7],
+  0: [6, 0], 1: [6, 1], 2: [6, 2], 3: [6, 3], 4: [6, 4], 5: [6, 5], 6: [6, 6], 7: [6, 7],
+  8: [7, 0], 9: [7, 1], ':': [7, 2], ';': [7, 3], ',': [7, 4], '.': [7, 5], '/': [7, 6],
+  Enter: [1, 7], ' ': [9, 6], Escape: [9, 0],
+  Shift: [8, 6], Control: [8, 7],
+  ArrowUp: [8, 1], ArrowRight: [8, 2], Backspace: [8, 3],
+};
+function matrixKey(e) {
+  if (KEY[e.key] !== undefined) return KEY[e.key];
+  const lower = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  return KEY[lower];
+}
+canvas.addEventListener('keydown', (e) => {
+  if (!machine) return;
+  const k = matrixKey(e);
+  if (e.shiftKey) machine.keyDown(8, 6); else machine.keyUp(8, 6);
+  if (k) { machine.keyDown(k[0], k[1]); e.preventDefault(); }
+});
+canvas.addEventListener('keyup', (e) => {
+  if (!machine) return;
+  const k = matrixKey(e);
+  if (!e.shiftKey) machine.keyUp(8, 6);
+  if (k) { machine.keyUp(k[0], k[1]); e.preventDefault(); }
+});
+
+const FR = 1 / 60;
+let last = performance.now(), workMs = 0;
+function loop(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  const t0 = performance.now();
+  if (machine) {
+    machine.update(dt);
+    machine.sys.render({ cgrom, out: idxBuf });
+    phosphor.step(idxBuf, FR);
+    const d = img.data;
+    if (tubeOn) {
+      tube.apply(phosphor.composite(), d);
+    } else {
+      rgbaBuf = phosphor.toRGBA(rgbaBuf);
+      for (let y = 0; y < 200; y++) {
+        for (let x = 0; x < 640; x++) {
+          const s = (y * 640 + x) * 4;
+          let o = (y * 2 * 640 + x) * 4;
+          d[o] = rgbaBuf[s]; d[o + 1] = rgbaBuf[s + 1]; d[o + 2] = rgbaBuf[s + 2]; d[o + 3] = 255;
+          o += 640 * 4;
+          d[o] = rgbaBuf[s] * .55; d[o + 1] = rgbaBuf[s + 1] * .55; d[o + 2] = rgbaBuf[s + 2] * .55; d[o + 3] = 255;
+        }
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    workMs = workMs * 0.9 + (performance.now() - t0) * 0.1;
+    guts.textContent = `${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
+      + `  ${machine.sys.crtc.cols}x${machine.sys.crtc.rows}  hsync=${machine.sys.crtc.hsyncHz()}Hz`;
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

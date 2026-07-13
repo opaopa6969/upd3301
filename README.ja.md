@@ -62,6 +62,12 @@ NEC PC-8001（1979）の画面に文字を出していた張本人、μPD3301 CR
   （`resetEx`/`setChannelEx` の架空シリコン改版。任意の桁×行＋セル単位
   アトリビュート）の両対応 — ターミナルとして使える。`demo/terminal.html`。
 
+- **フルマシン**（`machine.js`＋`demo/machine.html`）: Z80＋手持ちの
+  N-BASIC ROM吸い出し＋上記チップ群＝起動するPC-8001。
+  `node tools/boot-nbasic.mjs roms/N80.ROM` で起動画面をダンプ、
+  統合テストはキーボードマトリクス経由で `PRINT 3301` を打って答えを
+  検証する。ROMはBYO（gitignore済み）— NECの著作権は2049年まで。
+
 チップレベルの技術資料（データシート風、mermaidブロック図つき）:
 [docs/datasheet.ja.md](./docs/datasheet.ja.md)。
 
