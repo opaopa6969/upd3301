@@ -1,0 +1,9 @@
+WARNING: KICAD6_SYMBOL_DIR environment variable is missing, so the default KiCad symbol libraries won't be searched. @ [/home/opa/work/game-workspace/upd3301/<frozen importlib._bootstrap_external>:883=>/home/opa/work/game-workspace/upd3301/<frozen importlib._bootstrap>:241]
+WARNING: KICAD7_SYMBOL_DIR environment variable is missing, so the default KiCad symbol libraries won't be searched. @ [/home/opa/work/game-workspace/upd3301/<frozen importlib._bootstrap_external>:883=>/home/opa/work/game-workspace/upd3301/<frozen importlib._bootstrap>:241]
+WARNING: KICAD8_SYMBOL_DIR environment variable is missing, so the default KiCad symbol libraries won't be searched. @ [/home/opa/work/game-workspace/upd3301/<frozen importlib._bootstrap_external>:883=>/home/opa/work/game-workspace/upd3301/<frozen importlib._bootstrap>:241]
+WARNING: KICAD9_SYMBOL_DIR environment variable is missing, so the default KiCad symbol libraries won't be searched. @ [/home/opa/work/game-workspace/upd3301/<frozen importlib._bootstrap_external>:883=>/home/opa/work/game-workspace/upd3301/<frozen importlib._bootstrap>:241]
+WARNING: KICAD_SYMBOL_DIR environment variable is missing, so the default KiCad symbol libraries won't be searched. @ [/home/opa/work/game-workspace/upd3301/<frozen importlib._bootstrap_external>:883=>/home/opa/work/game-workspace/upd3301/<frozen importlib._bootstrap>:241]
+WARNING: fp-lib-table file was not found. Component footprints are not available.
+WARNING: fp-lib-table file was not found. Component footprints are not available.
+WARNING: fp-lib-table file was not found. Component footprints are not available.
+WARNING: fp-lib-table file was not found. Component footprints are not available.

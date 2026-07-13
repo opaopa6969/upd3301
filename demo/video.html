@@ -49,6 +49,7 @@
     <span id="vtime">--:-- / --:--</span>
     <button id="bmute">🔇</button>
     <input type="range" id="kvol" min="0" max="1" step="0.05" value="0.8">
+    <label style="font-size:11px;color:#9ab">BEEP<input type="checkbox" id="cbeep" style="margin:2px"></label>
     <button id="bfull">⛶ 全画面</button>
   </div>
 </div>
@@ -371,19 +372,41 @@ $('bcam').onclick = async () => {
 $('bplay').onclick = () => { video.paused ? tryPlay() : video.pause(); };
 // ---- recording: canvas → MP4 (or WebM fallback) -------------------------
 let recorder = null, recChunks = [], recCtxA = null, recDest = null, recRouted = false;
+let beepOn = false, directGain = null, beepGain = null;
 function recAudioTracks() {
   try {
     recCtxA ??= new AudioContext();
     if (!recRouted) {
-      const src = recCtxA.createMediaElementSource(video); // keeps playing to speakers below
+      const src = recCtxA.createMediaElementSource(video);
       recDest = recCtxA.createMediaStreamDestination();
-      src.connect(recCtxA.destination);
-      src.connect(recDest);
+      // two paths: direct, and 1-bit BEEP (comparator waveshaper — the
+      // whole soundtrack becomes the port-40h square-wave family ｗ)
+      directGain = recCtxA.createGain();
+      beepGain = recCtxA.createGain();
+      const shaper = recCtxA.createWaveShaper();
+      const curve = new Float32Array(256);
+      for (let i = 0; i < 256; i++) curve[i] = i < 128 ? -1 : 1;
+      shaper.curve = curve;
+      const beepVol = recCtxA.createGain();
+      beepVol.gain.value = 0.12; // 1-bit is LOUD
+      src.connect(directGain);
+      src.connect(shaper).connect(beepVol).connect(beepGain);
+      for (const g of [directGain, beepGain]) {
+        g.connect(recCtxA.destination);
+        g.connect(recDest);
+      }
+      directGain.gain.value = beepOn ? 0 : 1;
+      beepGain.gain.value = beepOn ? 1 : 0;
       recRouted = true;
     }
     recCtxA.resume?.();
     return recDest.stream.getAudioTracks();
   } catch { return []; }
+}
+function setBeep(on) {
+  beepOn = on;
+  recAudioTracks(); // wire the graph if not yet
+  if (directGain) { directGain.gain.value = on ? 0 : 1; beepGain.gain.value = on ? 1 : 0; }
 }
 $('brec').onclick = () => {
   if (recorder) { recorder.stop(); return; }
@@ -441,6 +464,7 @@ $('seek').onchange = () => {
 };
 function syncMute() { $('bmute').textContent = video.muted || video.volume === 0 ? '🔇' : '🔊'; }
 $('bmute').onclick = () => { video.muted = !video.muted; syncMute(); };
+$('cbeep').onchange = (e) => setBeep(e.target.checked);
 $('kvol').oninput = (e) => { video.volume = +e.target.value; video.muted = video.volume === 0; syncMute(); };
 
 // fullscreen

@@ -1,0 +1,43 @@
+WARNING: KICAD6_SYMBOL_DIR environment variable is missing, so the default KiCad symbol libraries won't be searched. @ [/home/opa/work/game-workspace/upd3301/hw/<frozen importlib._bootstrap_external>:883=>/home/opa/work/game-workspace/upd3301/hw/<frozen importlib._bootstrap>:241]
+WARNING: KICAD7_SYMBOL_DIR environment variable is missing, so the default KiCad symbol libraries won't be searched. @ [/home/opa/work/game-workspace/upd3301/hw/<frozen importlib._bootstrap_external>:883=>/home/opa/work/game-workspace/upd3301/hw/<frozen importlib._bootstrap>:241]
+WARNING: KICAD8_SYMBOL_DIR environment variable is missing, so the default KiCad symbol libraries won't be searched. @ [/home/opa/work/game-workspace/upd3301/hw/<frozen importlib._bootstrap_external>:883=>/home/opa/work/game-workspace/upd3301/hw/<frozen importlib._bootstrap>:241]
+WARNING: KICAD9_SYMBOL_DIR environment variable is missing, so the default KiCad symbol libraries won't be searched. @ [/home/opa/work/game-workspace/upd3301/hw/<frozen importlib._bootstrap_external>:883=>/home/opa/work/game-workspace/upd3301/hw/<frozen importlib._bootstrap>:241]
+WARNING: KICAD_SYMBOL_DIR environment variable is missing, so the default KiCad symbol libraries won't be searched. @ [/home/opa/work/game-workspace/upd3301/hw/<frozen importlib._bootstrap_external>:883=>/home/opa/work/game-workspace/upd3301/hw/<frozen importlib._bootstrap>:241]
+WARNING: fp-lib-table file was not found. Component footprints are not available.
+WARNING: fp-lib-table file was not found. Component footprints are not available.
+WARNING: fp-lib-table file was not found. Component footprints are not available.
+WARNING: fp-lib-table file was not found. Component footprints are not available.
+WARNING: Missing tag on PC8001_EXPANSION instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag 5zfDGvNIKV generated for PC8001_EXPANSION.
+WARNING: Missing tag on RPi_Pico instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag XhuS7CtFbb generated for RPi_Pico.
+WARNING: Missing tag on 74LVC245A instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag 3oaQAv0qzf generated for 74LVC245A.
+WARNING: Missing tag on 74LVC245A instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag 8dy9isdDkg generated for 74LVC245A.
+WARNING: Missing tag on 74HC688 instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag Hfw_Z7bSqI generated for 74HC688.
+WARNING: Missing tag on 74HC32 instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag pID6eMj4V0 generated for 74HC32.
+WARNING: Missing tag on 2N7002 instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag aBmNj_VKCV generated for 2N7002.
+WARNING: Missing tag on R_4k7 instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag GM0PIaFPOS generated for R_4k7.
+WARNING: Missing tag on R_10k instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag 5Cx3PMabFf generated for R_10k.
+WARNING: Missing tag on microSD_SPI instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag gLG6XzQUXr generated for microSD_SPI.
+WARNING: Missing tag on C_100n instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag f7KFji72kQ generated for C_100n.
+WARNING: Missing tag on C_100n instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag 8l6ZCdc1pq generated for C_100n.
+WARNING: Missing tag on C_100n instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag bYkQMe0wE8 generated for C_100n.
+WARNING: Missing tag on C_100n instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag n0kV3GZU96 generated for C_100n.
+WARNING: Missing tag on C_10u instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
+WARNING: Random tag wm1075oS9p generated for C_10u.
+WARNING: Missing tag on  instantiated at /home/opa/work/game-workspace/upd3301/hw/<frozen importlib._bootstrap>:241.
+INFO: 35 warnings found while generating netlist.
+INFO: 0 errors found while generating netlist.
+
