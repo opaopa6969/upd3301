@@ -37,9 +37,16 @@
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">FONT.ROM (任意): <input type="file" id="ffont" style="font-size:11px"></label>
   <button id="breset">リセット</button>
-  <button id="btube" class="on">CRT物理</button>
   <button id="bfull">⛶ 全画面</button>
 </div>
+<div class="row"><span class="lbl">起動モード:</span>
+  <button id="mn80" class="on">N-BASIC (N80)</button>
+  <button id="mn88">N88-BASIC (WIP)</button>
+  <label style="color:#778;font-size:12px">DIPSW1 <input id="dip1" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:34px;text-align:center"></label>
+  <label style="color:#778;font-size:12px">DIPSW2 <input id="dip2" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:34px;text-align:center"></label>
+  <span id="dipnote" style="color:#667;font-size:11px"></span>
+</div>
+<div id="panel"></div>
 <div id="guts">ROMを選ぶと起動する（ROMは実機からの吸い出しを。配布物には含まれない）</div>
 <p class="note" id="note-machine">
   キャンバスをクリックしてキー入力（英数・記号・Enter・Space・Shift対応、
@@ -52,8 +59,8 @@
 import { applyI18n } from './i18n.js';
 applyI18n();
 import { Pc8001Machine } from '../machine.js';
-import { CrtPhosphor, PHOSPHORS } from '../crt.js';
-import { CrtTube } from '../tube.js';
+import { Pc8801Machine } from '../machine88.js';
+import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 
 const canvas = document.getElementById('crt');
@@ -62,7 +69,7 @@ const guts = document.getElementById('guts');
 const { cgrom } = buildFont();
 addPlaceholderUpperHalf(cgrom);
 
-let machine = null, romBytes = null, tubeOn = true;
+let machine = null, romBytes = null;
 
 // auto-load: if a ROM sits in the served dir, boot without asking. On the
 // public site none is present (NEC copyright → BYO), so this 404s quietly
@@ -113,18 +120,16 @@ async function autoLoad() {
     loadMachine(def);
   }
 }
-// The screen geometry comes from the ROM: N-BASIC runs 80x20 (=640x160),
-// N88 80x25 (=640x200). Rebuild the physical layer whenever the CRTC's
-// programmed geometry changes — assuming 640x200 silently fed the phosphor
-// an empty buffer (renderScreen allocates its own when the out array's size
-// doesn't match) and the screen stayed black.
-let phosphor = null, tube = null, img = null, rgbaBuf = null;
-let phosW = 0, phosH = 0;
+// The CRT's control surface is a component now (demo/crt-panel.js) — the
+// same panel every page uses, collapsible so a machine emulator isn't
+// buried under knobs. It owns the phosphor/tube; we own the geometry.
+const panel = mountCrtPanel(document.getElementById('panel'), {
+  storageKey: 'crt-panel-machine', collapsed: true,
+});
+let img = null, rgbaBuf = null, phosW = 0, phosH = 0;
 function fitTo(w, h) {
   if (w === phosW && h === phosH) return;
   phosW = w; phosH = h;
-  phosphor = new CrtPhosphor({ width: w, height: h, phosphor: PHOSPHORS.P22 });
-  tube = new CrtTube({ srcWidth: w, srcHeight: h, outWidth: w, outHeight: h * 2, mask: 'aperture' });
   canvas.width = w; canvas.height = h * 2;
   img = ctx.createImageData(w, h * 2);
   rgbaBuf = null;
@@ -144,16 +149,38 @@ $('ffont').onchange = async (e) => {
   applyFontRom(cgrom, b); // 2KB sets take the whole map; 6KB 88 sets use the head
 };
 $('breset').onclick = () => boot();
-$('btube').onclick = () => { tubeOn = !tubeOn; $('btube').classList.toggle('on', tubeOn); };
+$('mn80').onclick = () => {
+  bootMode = 'n80';
+  $('mn80').classList.add('on'); $('mn88').classList.remove('on');
+  $('dipnote').textContent = '';
+  boot();
+};
+$('mn88').onclick = () => {
+  bootMode = 'n88';
+  $('mn88').classList.add('on'); $('mn80').classList.remove('on');
+  $('dipnote').textContent = t('N88起動はFDDサブCPU待ちで停止する（issue #4）');
+};
+for (const id of ['dip1', 'dip2']) $(id).onchange = () => boot();
 const stage = $('stage');
 $('bfull').onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen();
   else stage.requestFullscreen?.();
 };
 
+let bootMode = 'n80';
+const dipOf = (id, dflt) => {
+  const v = parseInt($(id).value.trim(), 16);
+  return Number.isFinite(v) ? (v & 0xff) : dflt;
+};
 function boot() {
   if (!romBytes) return;
   machine = new Pc8001Machine({ rom: romBytes });
+  // DIP switches are read through port 30h/31h on the 88 (and the mkII);
+  // on the 8001 machine they ride along as the same reads.
+  machine.dipsw = [dipOf('dip1', 0xff), dipOf('dip2', 0xff)];
+  const origIn = machine._in.bind(machine);
+  machine._in = (p) => (p === 0x30 || p === 0x31
+    ? machine.dipsw[p - 0x30] : origIn(p));
   canvas.focus();
 }
 autoLoad();
@@ -198,21 +225,25 @@ function loop(now) {
     machine.update(dt);
     const frame = machine.sys.render({ cgrom });
     if (!frame.width || !frame.height) { requestAnimationFrame(loop); return; }
-    fitTo(frame.width, frame.height);
-    phosphor.step(frame.pixels, FR);
+    const W = frame.width, H = frame.height;
+    fitTo(W, H);
+    const phosphor = panel.phosphor(W, H);
+    const src = panel.applyDeflection(frame.pixels, W, H, machine.frame);
+    phosphor.step(src, FR, { fieldParity: panel.interlaced ? machine.frame & 1 : null });
     const d = img.data;
-    const W = phosW, H = phosH;
-    if (tubeOn) {
-      tube.apply(phosphor.composite(), d);
+    const opts = panel.plotOpts();
+    if (panel.tubeMode !== 'none') {
+      panel.tube(W, H).apply(phosphor.composite(), d, opts);
     } else {
-      rgbaBuf = phosphor.toRGBA(rgbaBuf);
+      rgbaBuf = phosphor.toRGBA(rgbaBuf, opts);
+      const l2 = panel.line2;
       for (let y = 0; y < H; y++) {
         for (let x = 0; x < W; x++) {
           const s = (y * W + x) * 4;
           let o = (y * 2 * W + x) * 4;
           d[o] = rgbaBuf[s]; d[o + 1] = rgbaBuf[s + 1]; d[o + 2] = rgbaBuf[s + 2]; d[o + 3] = 255;
           o += W * 4;
-          d[o] = rgbaBuf[s] * .55; d[o + 1] = rgbaBuf[s + 1] * .55; d[o + 2] = rgbaBuf[s + 2] * .55; d[o + 3] = 255;
+          d[o] = rgbaBuf[s] * l2; d[o + 1] = rgbaBuf[s + 1] * l2; d[o + 2] = rgbaBuf[s + 2] * l2; d[o + 3] = 255;
         }
       }
     }

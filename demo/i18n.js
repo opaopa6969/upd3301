@@ -45,7 +45,11 @@ const DICT = {
   'リセット': 'Reset',
   '機種:': 'Machine:',
   'またはROMを選ぶ:': 'or pick a ROM:',
-  'CRT物理': 'CRT physics',
+  'CRT設定': 'CRT settings',
+  '起動モード:': 'Boot mode:',
+  'N-BASIC (N80)': 'N-BASIC (N80)',
+  'N88-BASIC (WIP)': 'N88-BASIC (WIP)',
+  'N88起動はFDDサブCPU待ちで停止する（issue #4）': 'N88 boot stalls waiting for the FDD sub-CPU (issue #4)',
   // index
   'テキスト (80桁)': 'Text (80 col)',
   'テキスト (40桁)': 'Text (40 col)',
