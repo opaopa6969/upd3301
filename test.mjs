@@ -815,17 +815,24 @@ test('line-art mode: flat regions go dark, boundaries light up in region color',
   assert.deepEqual(r.codes, r2.codes, 'deterministic');
 });
 
-test('UEX 320x100: fantasy RAM + extended DMA drive 640x400 dots', async () => {
+test('UEX 320x100: per-cell attributes keep columns ≥256 coherent', async () => {
   const { Terminal } = await import('./term.js');
-  const t = new Terminal({ cols: 320, rows: 100, ex: true, attrsPerRow: 320, showCursor: false });
+  const t = new Terminal({ cols: 320, rows: 100, ex: true, showCursor: false });
   assert.ok(t.sys.memory.length > 0x10000, 'expanded RAM');
-  t.chars[99 * 320 + 319] = 0xff; // bottom-right cell, full semigraphic block
-  t.colorA[99 * 320 + 319] = (5 << 5) | 0x10 | 0x08; // cyan semigraphic
+  assert.ok(t.attrPerCell, 'widths past 255 switch to per-cell attributes');
+  const row = 99 * 320;
+  t.chars[row + 100] = 0xff;
+  t.colorA[row + 100] = (2 << 5) | 0x10 | 0x08; // red semigraphic at x=100
+  t.chars[row + 319] = 0xff;
+  t.colorA[row + 319] = (5 << 5) | 0x10 | 0x08; // cyan semigraphic at x=319
   t.flush().update(1 / 60);
   const img = t.render({ cgrom: new Uint8Array(256 * 16) });
   assert.equal(img.width, 2560);
   assert.equal(img.height, 800);
-  assert.equal(img.pixels[(99 * 8) * 2560 + 319 * 8], 5, 'cyan block in the corner');
+  const px = (cell) => img.pixels[(99 * 8) * 2560 + cell * 8];
+  assert.equal(px(100), 2, 'red block at x=100');
+  assert.equal(px(319), 5, 'cyan block at x=319 — no mod-256 position wrap');
+  assert.equal(px(200), 0, 'default cells between them stay dark (was smeared by the pair-wrap bug)');
 });
 
 test('27-color flicker: middle levels alternate between phases', async () => {

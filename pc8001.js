@@ -109,6 +109,7 @@ export function renderScreen(screen, {
   out = null,
 } = {}) {
   const { cols, rows, linesPerChar, cells, attrPairs, attrsPerRow } = screen;
+  const abpr = screen.attrBytesPerRow ?? attrsPerRow * 2;
   const dotW = width80 ? 1 : 2;
   const width = cols * 8 * dotW;
   const height = rows * linesPerChar;
@@ -121,9 +122,18 @@ export function renderScreen(screen, {
   const cursor = screen.cursor;
 
   for (let y = 0; y < rows; y++) {
-    expandRowStates(
-      attrPairs.subarray(y * attrsPerRow * 2, (y + 1) * attrsPerRow * 2),
-      attrsPerRow, cols, colorRow, funcRow);
+    const rowAttrs = attrPairs.subarray(y * abpr, (y + 1) * abpr);
+    if (screen.attrPerCell) {
+      // one byte per cell: bit3 picks which state it carries, the other
+      // state stays at its default for that cell
+      for (let x = 0; x < cols; x++) {
+        const b = rowAttrs[x];
+        if (b & ATTR.COLOR_FLAG) { colorRow[x] = b; funcRow[x] = 0; }
+        else { colorRow[x] = DEFAULT_COLOR_SPEC; funcRow[x] = b; }
+      }
+    } else {
+      expandRowStates(rowAttrs, attrsPerRow, cols, colorRow, funcRow);
+    }
     for (let x = 0; x < cols; x++) {
       const code = cells[y * cols + x];
       const colorSpec = colorRow[x];
@@ -255,16 +265,17 @@ export class Pc8001TextSystem {
   // control (fantasy silicon rev on both chips — see resetEx/setChannelEx).
   initTextModeEx({
     cols = 80, rows = 25, linesPerChar = 8,
-    attrsPerRow = null, vramBase = 0x4000,
+    attrsPerRow = null, attrPerCell = false, vramBase = 0x4000,
   } = {}) {
-    const attrs = attrsPerRow ?? cols * 2; // worst case: color+func change every cell
+    const attrs = attrPerCell ? 0 : (attrsPerRow ?? cols * 2); // worst case: color+func change every cell
+    const attrBytes = attrPerCell ? cols : attrs * 2;
     this.width80 = true;
     this.colorMode = true;
-    this.crtc.resetEx({ cols, rows, linesPerChar, attrsPerRow: attrs });
-    this.dmac.setChannelEx(2, { addr: vramBase, count: rows * (cols + attrs * 2) });
+    this.crtc.resetEx({ cols, rows, linesPerChar, attrsPerRow: attrs, attrPerCell });
+    this.dmac.setChannelEx(2, { addr: vramBase, count: rows * (cols + attrBytes) });
     this.out(0x51, 0x40); // unmask VRTC interrupt
     this.out(0x51, 0x20); // start display
-    this.ex = { cols, rows, attrsPerRow: attrs, vramBase };
+    this.ex = { cols, rows, attrsPerRow: attrs, attrPerCell, attrBytesPerRow: attrBytes, vramBase };
     return this.ex;
   }
 

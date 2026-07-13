@@ -83,6 +83,8 @@ export class Upd3301 {
     this.dmaBurstMode = 0; // param byte 0 bit 7
     this.attrMode = 0; // param byte 4 bits 7-5 (AT1 AT0 SC), interpretation is downstream
     this.attrsPerRow = 0; // attribute pairs fetched per row (0..20)
+    this.attrPerCell = false; // EX: one attribute byte per cell instead of pairs
+    this.attrBytesPerRow = 0;
 
     this.ve = false; // display started
     this.reverseDisplay = false;
@@ -210,6 +212,7 @@ export class Upd3301 {
     this.hblankChars = (p[3] & 0x1f) + 2;
     this.attrMode = (p[4] >> 5) & 7;
     this.attrsPerRow = this.attrMode === 1 ? 0 : Math.min((p[4] & 0x1f) + 1, MAX_ATTRS_PER_ROW);
+    this.attrPerCell = false;
     this._applyGeometry();
   }
 
@@ -218,13 +221,18 @@ export class Upd3301 {
   // the port encoding for terminal-style use (arbitrary XY, per-cell
   // attributes). Everything downstream — DMA row size, expansion, render —
   // works unchanged.
-  resetEx({ cols, rows, linesPerChar = 8, attrsPerRow = 0, blinkPeriod = 32, cursorMode = 0 } = {}) {
+  // attrPerCell: EX-only — instead of (position, value) pairs, the row's
+  // attribute block is one byte per cell, in order. Pairs carry an 8-bit
+  // position, so pair mode cannot address columns ≥ 256; per-cell mode is
+  // how UEX widths (e.g. 320) stay coherent.
+  resetEx({ cols, rows, linesPerChar = 8, attrsPerRow = 0, attrPerCell = false, blinkPeriod = 32, cursorMode = 0 } = {}) {
     this.ve = false;
     this.status &= ~STATUS.VE;
     this.cols = cols;
     this.rows = rows;
     this.linesPerChar = linesPerChar;
-    this.attrsPerRow = attrsPerRow;
+    this.attrPerCell = attrPerCell;
+    this.attrsPerRow = attrPerCell ? 0 : attrsPerRow;
     this.blinkPeriod = blinkPeriod;
     this.cursorMode = cursorMode;
     this.vblankRows = 7;
@@ -235,10 +243,11 @@ export class Upd3301 {
   }
 
   _applyGeometry() {
+    this.attrBytesPerRow = this.attrPerCell ? this.cols : this.attrsPerRow * 2;
     this.cells = new Uint8Array(this.cols * this.rows);
     this.attrs = new Uint8Array(this.cols * this.rows);
-    this.attrPairs = new Uint8Array(this.rows * this.attrsPerRow * 2);
-    this._rowBuf = new Uint8Array(this.cols + this.attrsPerRow * 2);
+    this.attrPairs = new Uint8Array(this.rows * this.attrBytesPerRow);
+    this._rowBuf = new Uint8Array(this.cols + this.attrBytesPerRow);
   }
 
   // ---- timing --------------------------------------------------------
@@ -254,7 +263,8 @@ export class Upd3301 {
   stepFrame() {
     this.frame++;
     if (this.ve && this.rows > 0) {
-      const rowLen = this.cols + this.attrsPerRow * 2;
+      const abpr = this.attrBytesPerRow;
+      const rowLen = this.cols + abpr;
       for (let y = 0; y < this.rows; y++) {
         const buf = this._rowBuf.subarray(0, rowLen);
         let got = 0;
@@ -264,10 +274,14 @@ export class Upd3301 {
           buf.fill(0, got);
         }
         this.cells.set(buf.subarray(0, this.cols), y * this.cols);
-        const pairs = buf.subarray(this.cols, rowLen);
-        this.attrPairs.set(pairs, y * this.attrsPerRow * 2);
-        expandAttrRow(pairs, this.attrsPerRow, this.cols,
-          this.attrs.subarray(y * this.cols, (y + 1) * this.cols));
+        const attrBytes = buf.subarray(this.cols, rowLen);
+        this.attrPairs.set(attrBytes, y * abpr);
+        if (this.attrPerCell) {
+          this.attrs.set(attrBytes, y * this.cols);
+        } else {
+          expandAttrRow(attrBytes, this.attrsPerRow, this.cols,
+            this.attrs.subarray(y * this.cols, (y + 1) * this.cols));
+        }
       }
     }
     // VRTC: end-of-frame interrupt
@@ -323,6 +337,8 @@ export class Upd3301 {
       attrs: this.attrs,
       attrPairs: this.attrPairs,
       attrsPerRow: this.attrsPerRow,
+      attrBytesPerRow: this.attrBytesPerRow,
+      attrPerCell: this.attrPerCell,
       attrMode: this.attrMode,
       cursor: {
         x: this.cursorX,

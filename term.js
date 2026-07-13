@@ -41,21 +41,30 @@ export class Terminal {
     this.ex = ex;
     this.showCursor = showCursor;
     const base = vramBase ?? 0x4000;
-    const attrs = attrsPerRow ?? cols * 2;
+    // pair positions are single bytes: widths past 255 columns MUST use the
+    // per-cell attribute layout or positions wrap mod 256 and the screen
+    // shreds (the UEX 320 bug)
+    this.attrPerCell = ex && cols > 255;
+    const attrs = this.attrPerCell ? 0 : (attrsPerRow ?? cols * 2);
+    const attrBytes = this.attrPerCell ? cols : attrs * 2;
     let memoryBytes = 0x10000;
     if (ex) {
-      const need = base + rows * (cols + attrs * 2);
+      const need = base + rows * (cols + attrBytes);
       while (memoryBytes < need) memoryBytes *= 2; // UEX: fantasy RAM expansion
     }
     this.sys = sys ?? new Pc8001TextSystem({ frameHz, memoryBytes });
     if (ex) {
-      const geo = this.sys.initTextModeEx({ cols, rows, attrsPerRow: attrs, vramBase: base });
-      this.attrSlots = geo.attrsPerRow;
+      const geo = this.sys.initTextModeEx({
+        cols, rows, attrsPerRow: attrs, attrPerCell: this.attrPerCell, vramBase: base,
+      });
+      this.attrSlots = this.attrPerCell ? cols : geo.attrsPerRow;
+      this.attrBytesPerRow = geo.attrBytesPerRow;
       this.vramBase = geo.vramBase;
     } else {
       if (cols !== 80 && cols !== 40) throw new Error('original mode: cols must be 80 or 40');
       this.sys.initTextMode({ cols, rows, vramBase: vramBase ?? PC8001.TEXT_VRAM });
       this.attrSlots = 20;
+      this.attrBytesPerRow = 40;
       this.vramBase = vramBase ?? PC8001.TEXT_VRAM;
     }
     const n = cols * rows;
@@ -250,12 +259,24 @@ export class Terminal {
   // function pair (same position twice is fine — the expansion applies both).
   flush() {
     const { cols, attrSlots } = this;
-    const stride = cols + attrSlots * 2;
+    const stride = cols + this.attrBytesPerRow;
     const mem = this.sys.memory;
     for (let y = 0; y < this.rows; y++) {
       const rowBase = this.vramBase + y * stride;
       const ci = y * cols;
       mem.set(this.chars.subarray(ci, ci + cols), rowBase);
+      if (this.attrPerCell) {
+        // one byte per cell: a cell can carry its color OR its function
+        // spec; when both are non-default the color wins (counted below)
+        let clash = 0;
+        for (let x = 0; x < cols; x++) {
+          const c = this.colorA[ci + x], f = this.funcA[ci + x];
+          if (f !== DEFAULT_FUNC && c !== DEFAULT_COLOR_SPEC) clash++;
+          mem[rowBase + cols + x] = (f !== DEFAULT_FUNC && c === DEFAULT_COLOR_SPEC) ? f : c;
+        }
+        if (clash) this.stats.overflowRows++;
+        continue;
+      }
       // encode attribute runs
       let slot = 0;
       let overflowed = false;

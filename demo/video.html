@@ -158,7 +158,7 @@ let rollPos = 0;
 
 function boot() {
   term = geometry === 'ex' ? new Terminal({ cols: 160, rows: 50, ex: true, showCursor: false })
-    : geometry === 'uex' ? new Terminal({ cols: 320, rows: 100, ex: true, attrsPerRow: 320, showCursor: false })
+    : geometry === 'uex' ? new Terminal({ cols: 320, rows: 100, ex: true, showCursor: false })
     : new Terminal({ cols: 80, rows: 25, ex: false, showCursor: false });
   W = term.cols * 8; H = term.rows * 8;
   canvas.width = W; canvas.height = H * 2;
