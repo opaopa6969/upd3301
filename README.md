@@ -40,7 +40,24 @@ bytes, exactly like the real bus. That's also why the *Bemaga* July 1990
 "MAGICAL COLOR" trick works in this emulator unmodified: program the DMA
 count to two frames' worth (port 65h ← 8000h + 5999) and two screens
 alternate every frame, flicker-mixing 8 colors into 27. There's a test
-for it.
+for it. Push it to *three* frames' worth and you get RGB plane mode:
+logically full per-dot color, at 1/3 duty per gun — dim, and only watchable
+on a long-persistence tube. Which is why there's a physical layer:
+
+- **Phosphor physics** (`crt.js`): two-component decay per gun (fast flash +
+  slow afterglow, approximating hyperbolic decay), differential persistence
+  (P22's blue dies first, so white ghosts decay through orange), emission
+  primaries (P39 renders everything green; P7 radar phosphor flashes
+  blue-white and afterglows yellow), burn-in (accumulated dose lowers
+  efficiency), and interlaced excitation (per-field line parity).
+- **Tube physics** (`tube.js`): shadow-mask/aperture-grille/slot-mask
+  transmission patterns with Gaussian beam-spot pre-blur (the mask is where
+  color bleed — *nijimi* — comes from), barrel distortion from the curved
+  faceplate, a faint ghost image from the inner-glass reflection, and
+  corner vignette. All precomputed into LUTs; deterministic.
+- **The whine**: `crtc.hsyncHz()` derives the horizontal deflection
+  frequency from the programmed geometry — (25+7 rows) × 8 lines × 60 Hz =
+  15360 Hz — and the demo can play it. You know the sound.
 
 ## Use
 
@@ -58,9 +75,13 @@ Or drive the bare chip through ports: `crtc.writePort(1, 0x00)` … see
 `test.mjs` for full sequences.
 
 ```sh
-node --test          # 16 deterministic tests
-python3 -m http.server   # then open /demo/ — 27-color mode included
+node --test              # 30 deterministic tests
+python3 -m http.server   # from the repo root, then open http://localhost:8000/demo/
 ```
+
+The demo has buttons for every layer: text/27-color/RGB-plane modes, 40/80
+columns, reverse video, the four phosphors, burn-in, mask type, interlace,
+and the 15 kHz whine (browser autoplay rules require the click).
 
 ## Accuracy notes
 

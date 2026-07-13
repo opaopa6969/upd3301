@@ -9,6 +9,7 @@
   h1 { font-size:18px; color:#8fd; }
   canvas { image-rendering:pixelated; border:12px solid #222; border-radius:8px; background:#000; }
   .row { margin:10px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .row .lbl { color:#778; }
   button { background:#223; color:#cde; border:1px solid #446; border-radius:4px; padding:6px 12px; cursor:pointer; }
   button.on { background:#265; border-color:#4a8; }
   #guts { font-size:12px; color:#889; white-space:pre; }
@@ -18,22 +19,42 @@
 <body>
 <h1>μPD3301 CRTC + μPD8257 DMAC — PC-8001 text pipeline emulator</h1>
 <canvas id="crt" width="640" height="400"></canvas>
-<div class="row">
-  <button id="b80" class="on">80桁</button>
-  <button id="b40">40桁</button>
-  <button id="bcolor" class="on">カラー</button>
+<div class="row"><span class="lbl">表示:</span>
+  <button id="mtext" class="on">テキスト (80桁)</button>
+  <button id="m40">テキスト (40桁)</button>
+  <button id="m27">27色 (DMA 2画面)</button>
+  <button id="mplanes">RGB 3プレーン (DMA 3画面)</button>
   <button id="brev">画面反転 (RVV)</button>
-  <button id="b27">27色モード (DMAカウント2倍)</button>
+  <button id="bcolor" class="on">カラー</button>
+</div>
+<div class="row"><span class="lbl">蛍光体:</span>
+  <button id="pP22" class="on">P22 (青が先に死ぬ)</button>
+  <button id="pLONG">長残光カラー (仮想)</button>
+  <button id="pP39">P39 緑モノクロ</button>
+  <button id="pP7">P7 レーダー管</button>
+  <button id="bburn">焼き付き (加速)</button>
+</div>
+<div class="row"><span class="lbl">管:</span>
+  <button id="tnone">物理OFF</button>
+  <button id="taperture" class="on">アパーチャグリル</button>
+  <button id="tshadow">シャドウマスク</button>
+  <button id="tslot">スロットマスク</button>
+  <button id="binterlace">インターレース</button>
+  <button id="baudio">15kHz 音鳴り</button>
 </div>
 <div id="guts"></div>
 <p class="note">
-  下のレイヤはチップそのもの：VRAM (F3C8h) → μPD8257 ch2 が1行120バイト
-  (80文字+アトリビュート20ペア) をバースト転送 → μPD3301 が行バッファから描画。
-  27色モードはベーマガ1990年7月号の技の再現 — port 65h に 8000h+5999 を書くと
-  autoload で2画面が交互表示になり、ちらつき混色で中間色が見える。
+  27色モード＝port 65h に 8000h+5999（2画面交互、ベーマガ1990-07の技）。
+  3プレーンモード＝8000h+8999（3画面交互）で R/G/B を1フレームずつ表示 —
+  論理的にはドット単位フルカラー、ただし各色のデューティは 1/3。
+  短残光 P22 だとチカチカのフリッカー地獄、長残光ならグロウが暗フレームを
+  橋渡しして「暗いけど安定したフルカラー」が見える。物理層（crt.js の
+  蛍光体減衰モデル）がその差を作っている。
 </p>
 <script type="module">
 import { Pc8001TextSystem, PC8001 } from '../pc8001.js';
+import { CrtPhosphor, PHOSPHORS } from '../crt.js';
+import { CrtTube } from '../tube.js';
 
 // ---- 5x7 font → CGROM ------------------------------------------------
 const G = {
@@ -63,16 +84,15 @@ Y:'10001 10001 01010 00100 00100 00100 00100',Z:'11111 00001 00010 00100 01000 1
 '?':'01110 10001 00001 00010 00100 00000 00100',
 };
 const cgrom = new Uint8Array(256 * 16);
+const glyphRows = {};
 for (const [ch, rows] of Object.entries(G)) {
-  const code = ch.charCodeAt(0);
-  rows.trim().split(/\s+/).forEach((bits, line) => {
-    cgrom[code * 16 + line] = parseInt(bits, 2) << 3;
-  });
+  const r = rows.trim().split(/\s+/);
+  glyphRows[ch] = r;
+  r.forEach((bits, line) => { cgrom[ch.charCodeAt(0) * 16 + line] = parseInt(bits, 2) << 3; });
 }
 
-// ---- semigraphic art packer ------------------------------------------
-// dot rows ('0'/'1' strings, width even, height multiple of 4) → cell codes
-function packSemigraphic(dotRows) {
+// ---- semigraphic packers ----------------------------------------------
+function packSemigraphic(dotRows) { // '0'/'1' strings → cell code rows
   const w = dotRows[0].length / 2, h = dotRows.length / 4;
   const cells = [];
   for (let cy = 0; cy < h; cy++) {
@@ -98,16 +118,32 @@ const MUG = packSemigraphic([
   '1111111111111100', '1111111111111100', '0000000000000000', '0000000000000000',
 ]);
 
+// dot bitmap (Uint8Array 160x100) → 80x25 semigraphic cell codes
+function packDots(bits, W = 160) {
+  const rows = [];
+  for (let cy = 0; cy < 25; cy++) {
+    const row = [];
+    for (let cx = 0; cx < 80; cx++) {
+      let code = 0;
+      for (let band = 0; band < 4; band++) {
+        if (bits[(cy * 4 + band) * W + cx * 2]) code |= 1 << band;
+        if (bits[(cy * 4 + band) * W + cx * 2 + 1]) code |= 1 << (4 + band);
+      }
+      row.push(code);
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
 // ---- scenes -----------------------------------------------------------
 const sys = new Pc8001TextSystem();
 const A = PC8001.TEXT_VRAM, B = PC8001.TEXT_VRAM + 3000;
+const PLANE_BASE = 0xb000, PLANE_SIZE = 3000;
 const CENTER = (s, w = 80) => Math.max(0, (w - s.length) >> 1);
-
-// color spec helper: color index + optional semigraphic
 const col = (c, sg = false) => (c << 5) | (sg ? 0x10 : 0) | 0x08;
 
 function writeScene(vramBase, variant) {
-  // variant 0: normal palette, variant 1: shifted palette (for 27-color mix)
   const P = variant === 0
     ? { title: 7, num: 6, sub: 5, mugFoam: 7, mugBody: 6, bar: [1,2,3,4,5,6,7] }
     : { title: 5, num: 2, sub: 4, mugFoam: 6, mugBody: 2, bar: [4,1,5,2,6,3,7] };
@@ -117,25 +153,21 @@ function writeScene(vramBase, variant) {
   const title = ' UPD3301 CRTC EMULATOR ** MEMORIAL 3301 ';
   L(0).text(CENTER(title), title)
       .attrs(0, col(P.title), CENTER(title), 0x04, CENTER(title) + title.length, 0x00);
-
   const chant = '3301 !  3301 !';
   L(2).text(CENTER(chant), chant)
       .attrs(0, col(P.num), CENTER(chant), 0x02, CENTER(chant) + chant.length, 0x00);
   const sub = 'NANMO NEE ... DEMO 3301 WA ARU';
   L(3).text(CENTER(sub), sub).attrs(0, col(P.sub));
 
-  // attribute showcase
   L(5).text(10, 'REVERSE').text(24, 'BLINK').text(36, 'SECRET').text(50, 'UNDERLINE')
       .attrs(0, 0xe8, 10, 0x04, 17, 0x00, 24, 0x02, 29, 0x00, 36, 0x01, 42, 0x00, 50, 0x20, 59, 0x00);
 
-  // semigraphic beer mug (cells at x=36..43, y=8..13)
   for (let r = 0; r < MUG.length; r++) {
     L(8 + r).code(36, ...MUG[r])
       .attrs(0, 0xe8, 36, col(r === 0 ? P.mugFoam : P.mugBody, true), 44, 0xe8);
   }
   L(14).text(35, '( BEER )').attrs(0, col(P.num));
 
-  // color bar, one semigraphic full-block band
   L(16).code(8, ...Array(64).fill(0xff));
   const barAttrs = [0, 0xe8];
   P.bar.forEach((c, i) => { barAttrs.push(8 + Math.floor(i * 64 / 7), col(c, true)); });
@@ -146,7 +178,6 @@ function writeScene(vramBase, variant) {
   L(19).text(CENTER(lore), lore).attrs(0, col(7));
   const lore2 = 'IT ALL COMES BACK TO 3301.';
   L(20).text(CENTER(lore2), lore2).attrs(0, col(P.sub));
-
   L(23).text(0, 'READY').attrs(0, col(7));
 }
 
@@ -163,76 +194,205 @@ function writeScene40(vramBase) {
   L(23).text(0, 'READY').attrs(0, col(7));
 }
 
+// RGB plane scene: 160x100 dot bitmaps, one per gun.
+// Venn circles show additive mixing; rainbow band is Bayer-dithered;
+// the big 3301 is lit in all three planes → driven every frame → stays bright.
+function writePlanesScene() {
+  const W = 160, H = 100;
+  const planes = [new Uint8Array(W * H), new Uint8Array(W * H), new Uint8Array(W * H)];
+  const set = (p, x, y) => { if (x >= 0 && x < W && y >= 0 && y < H) planes[p][y * W + x] = 1; };
+
+  // big "3301!" text, scale 3, all planes (≈ white, full duty)
+  const msg = '3301!';
+  const S = 3, tw = msg.length * 6 * S;
+  let tx = (W - tw) >> 1;
+  for (const ch of msg) {
+    const rows = glyphRows[ch];
+    if (rows) for (let ry = 0; ry < 7; ry++) for (let rx = 0; rx < 5; rx++) {
+      if (rows[ry][rx] === '1') for (let dy = 0; dy < S; dy++) for (let dx = 0; dx < S; dx++) {
+        for (let p = 0; p < 3; p++) set(p, tx + rx * S + dx, 2 + ry * S + dy);
+      }
+    }
+    tx += 6 * S;
+  }
+
+  // Venn diagram: R, G, B circles (per-dot color, impossible with 20 attrs/row)
+  const circles = [[62, 52, 22, 0], [98, 52, 22, 1], [80, 70, 22, 2]];
+  for (let y = 26; y < H; y++) for (let x = 0; x < W; x++) {
+    for (const [cx, cy, r, p] of circles) {
+      const dx = x - cx, dy = y - cy;
+      if (dx * dx + dy * dy <= r * r) set(p, x, y);
+    }
+  }
+
+  // Bayer-dithered rainbow band
+  const BAYER = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+  const hue2rgb = (h) => { // h in [0,6)
+    const f = h - Math.floor(h);
+    switch (Math.floor(h) % 6) {
+      case 0: return [1, f, 0]; case 1: return [1 - f, 1, 0]; case 2: return [0, 1, f];
+      case 3: return [0, 1 - f, 1]; case 4: return [f, 0, 1]; default: return [1, 0, 1 - f];
+    }
+  };
+  for (let y = 94; y < H; y++) for (let x = 4; x < W - 4; x++) {
+    const rgb = hue2rgb((x - 4) / (W - 8) * 6);
+    const th = (BAYER[y % 4][x % 4] + 0.5) / 16;
+    if (rgb[0] > th) set(0, x, y);
+    if (rgb[1] > th) set(1, x, y);
+    if (rgb[2] > th) set(2, x, y);
+  }
+
+  const planeColor = [2, 4, 1]; // red, green, blue
+  for (let p = 0; p < 3; p++) {
+    const codes = packDots(planes[p]);
+    for (let y = 0; y < 25; y++) {
+      sys.line(y, { vramBase: PLANE_BASE + p * PLANE_SIZE })
+        .code(0, ...codes[y])
+        .attrs(0, col(planeColor[p], true));
+    }
+  }
+}
+
 // ---- machine setup ----------------------------------------------------
-let width80 = true, mode27 = false, reverse = false;
+let mode = 'text'; // 'text' | 'text40' | 'c27' | 'planes'
+let reverse = false;
+
+function setDma(base, bytes) {
+  sys.out(0x64, base & 0xff); sys.out(0x64, base >> 8);
+  const tc = 0x8000 | (bytes - 1);
+  sys.out(0x65, tc & 0xff); sys.out(0x65, tc >> 8);
+}
 
 function boot() {
-  const cols = width80 ? 80 : 40;
+  const cols = mode === 'text40' ? 40 : 80;
   sys.initTextMode({ cols });
-  if (width80) { writeScene(A, 0); writeScene(B, 1); }
-  else writeScene40(A);
-  if (mode27 && width80) {
-    const tc = 0x8000 | (6000 - 1);
-    sys.out(0x64, A & 0xff); sys.out(0x64, A >> 8);
-    sys.out(0x65, tc & 0xff); sys.out(0x65, tc >> 8);
-  }
+  if (mode === 'text40') writeScene40(A);
+  else { writeScene(A, 0); writeScene(B, 1); }
+  if (mode === 'c27') setDma(A, 2 * 3000);
+  if (mode === 'planes') { writePlanesScene(); setDma(PLANE_BASE, 3 * PLANE_SIZE); }
   sys.out(0x51, 0x20 | (reverse ? 1 : 0));
-  sys.out(0x51, 0x81); sys.out(0x50, 6); sys.out(0x50, 23); // cursor after READY
+  if (mode === 'planes') { sys.out(0x51, 0x80); sys.out(0x50, 0); sys.out(0x50, 0); } // cursor off
+  else { sys.out(0x51, 0x81); sys.out(0x50, 6); sys.out(0x50, 23); }
 }
 boot();
 
-// ---- CRT rendering ----------------------------------------------------
+// ---- physical layer: phosphor + tube + hsync whine ---------------------
+const phosphor = new CrtPhosphor({ width: 640, height: 200, phosphor: PHOSPHORS.P22 });
+let phosName = 'P22';
+let tubeMode = 'aperture'; // 'off' | 'aperture' | 'shadow' | 'slot'
+let interlaced = false;
+const tubes = {};
+function getTube() {
+  if (!tubes[tubeMode]) {
+    tubes[tubeMode] = new CrtTube({
+      srcWidth: 640, srcHeight: 200, outWidth: 640, outHeight: 400,
+      mask: tubeMode, maskPitch: 3,
+    });
+  }
+  return tubes[tubeMode];
+}
+
 const canvas = document.getElementById('crt');
 const ctx = canvas.getContext('2d');
 const img = ctx.createImageData(640, 400);
-const PALETTE = [
-  [0,0,0],[40,60,255],[255,60,50],[235,70,255],
-  [50,230,60],[60,235,235],[245,235,60],[240,240,240],
-];
+const idxBuf = new Uint8Array(640 * 200);
+let rgbaBuf = null; // 640x200, physics-off path
 
-function blit(frame) {
+function blit() {
   const d = img.data;
-  for (let y = 0; y < frame.height; y++) {
-    for (let x = 0; x < frame.width; x++) {
-      const [r, g, b] = PALETTE[frame.pixels[y * frame.width + x]];
-      let o = (y * 2 * 640 + x) * 4;
-      d[o] = r; d[o + 1] = g; d[o + 2] = b; d[o + 3] = 255;
-      o += 640 * 4; // scanline: darker second line
-      d[o] = r * .55; d[o + 1] = g * .55; d[o + 2] = b * .55; d[o + 3] = 255;
+  if (tubeMode === 'off') {
+    rgbaBuf = phosphor.toRGBA(rgbaBuf);
+    for (let y = 0; y < 200; y++) {
+      for (let x = 0; x < 640; x++) {
+        const s = (y * 640 + x) * 4;
+        let o = (y * 2 * 640 + x) * 4;
+        d[o] = rgbaBuf[s]; d[o + 1] = rgbaBuf[s + 1]; d[o + 2] = rgbaBuf[s + 2]; d[o + 3] = 255;
+        o += 640 * 4;
+        d[o] = rgbaBuf[s] * .55; d[o + 1] = rgbaBuf[s + 1] * .55; d[o + 2] = rgbaBuf[s + 2] * .55; d[o + 3] = 255;
+      }
     }
+  } else {
+    getTube().apply(phosphor.composite(), d); // writes straight into the ImageData
   }
   ctx.putImageData(img, 0, 0);
 }
 
+// 15 kHz horizontal-deflection whine — the flyback transformer's song
+let audioCtx = null, osc = null, oscGain = null;
+function setAudio(on) {
+  if (on) {
+    audioCtx ??= new AudioContext();
+    osc = audioCtx.createOscillator();
+    oscGain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = sys.crtc.hsyncHz();
+    oscGain.gain.value = 0.025;
+    osc.connect(oscGain).connect(audioCtx.destination);
+    osc.start();
+  } else if (osc) {
+    osc.stop(); osc.disconnect(); osc = null;
+  }
+}
+
 const guts = document.getElementById('guts');
-let last = performance.now();
+const FR = 1 / 60;
+let last = performance.now(), acc = 0;
 function loop(now) {
-  const dt = Math.min(0.1, (now - last) / 1000);
+  acc += Math.min(0.1, (now - last) / 1000);
   last = now;
-  sys.update(dt); // fixed 60Hz frames inside
-  blit(sys.render({ cgrom }));
+  let steps = 0;
+  while (acc >= FR && steps < 6) { // one beam pass per CRTC frame
+    acc -= FR; steps++;
+    sys.crtc.stepFrame();
+    sys.render({ cgrom, out: idxBuf });
+    phosphor.step(idxBuf, FR, { fieldParity: interlaced ? sys.crtc.frame & 1 : null });
+  }
+  if (steps) blit();
   const c = sys.dmac.channels[2];
-  const st = sys.in(0x51);
   guts.textContent =
-    `frame=${String(sys.crtc.frame).padStart(6)}  status=${st.toString(2).padStart(8, '0')}b` +
-    `  DMA ch2 addr=${c.addr.toString(16).toUpperCase().padStart(4, '0')}h` +
-    ` count=${String(c.count).padStart(4)}  ${sys.crtc.cols}x${sys.crtc.rows}` +
-    ` attr=${sys.crtc.attrsPerRow}pairs/row`;
+    `frame=${String(sys.crtc.frame).padStart(6)}  status=${sys.in(0x51).toString(2).padStart(8, '0')}b` +
+    `  DMA ch2 addr=${c.addr.toString(16).toUpperCase().padStart(4, '0')}h count=${String(c.count).padStart(4)}` +
+    `  ${sys.crtc.cols}x${sys.crtc.rows}  mode=${mode}\n` +
+    `phosphor=${PHOSPHORS[phosName].name}  tube=${tubeMode}` +
+    `${interlaced ? '  interlaced' : ''}${phosphor.burnRate ? '  burn-in!' : ''}` +
+    `  hsync=${sys.crtc.hsyncHz()}Hz${osc ? ' ♪' : ''}`;
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
 
 // ---- controls ----------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-function setOn(el, on) { el.classList.toggle('on', on); }
-$('b80').onclick = () => { width80 = true; boot(); setOn($('b80'), true); setOn($('b40'), false); };
-$('b40').onclick = () => { width80 = false; boot(); setOn($('b80'), false); setOn($('b40'), true); };
+const modeBtns = { text: $('mtext'), text40: $('m40'), c27: $('m27'), planes: $('mplanes') };
+function setMode(m) {
+  mode = m; boot();
+  if (osc) osc.frequency.value = sys.crtc.hsyncHz();
+  for (const [k, el] of Object.entries(modeBtns)) el.classList.toggle('on', k === m);
+}
+for (const k of Object.keys(modeBtns)) modeBtns[k].onclick = () => setMode(k);
+$('brev').onclick = () => { reverse = !reverse; sys.out(0x51, 0x20 | (reverse ? 1 : 0)); $('brev').classList.toggle('on', reverse); };
 $('bcolor').onclick = () => {
-  sys.out(0x30, (width80 ? 1 : 0) | (sys.colorMode ? 2 : 0));
-  setOn($('bcolor'), sys.colorMode);
+  sys.out(0x30, (mode === 'text40' ? 0 : 1) | (sys.colorMode ? 2 : 0));
+  $('bcolor').classList.toggle('on', sys.colorMode);
 };
-$('brev').onclick = () => { reverse = !reverse; sys.out(0x51, 0x20 | (reverse ? 1 : 0)); setOn($('brev'), reverse); };
-$('b27').onclick = () => { mode27 = !mode27; boot(); setOn($('b27'), mode27); };
+const phosBtns = { P22: $('pP22'), LONG: $('pLONG'), P39: $('pP39'), P7: $('pP7') };
+function setPhosphor(name) {
+  phosName = name;
+  phosphor.setPhosphor(PHOSPHORS[name]);
+  for (const [k, el] of Object.entries(phosBtns)) el.classList.toggle('on', k === name);
+}
+for (const k of Object.keys(phosBtns)) phosBtns[k].onclick = () => setPhosphor(k);
+$('bburn').onclick = () => {
+  phosphor.setBurnRate(phosphor.burnRate ? 0 : 1.5);
+  $('bburn').classList.toggle('on', phosphor.burnRate > 0);
+};
+const tubeBtns = { off: $('tnone'), aperture: $('taperture'), shadow: $('tshadow'), slot: $('tslot') };
+function setTube(m) {
+  tubeMode = m;
+  for (const [k, el] of Object.entries(tubeBtns)) el.classList.toggle('on', k === m);
+}
+for (const k of Object.keys(tubeBtns)) tubeBtns[k].onclick = () => setTube(k);
+$('binterlace').onclick = () => { interlaced = !interlaced; $('binterlace').classList.toggle('on', interlaced); };
+$('baudio').onclick = () => { setAudio(!osc); $('baudio').classList.toggle('on', !!osc); };
 </script>
 </body>
 </html>

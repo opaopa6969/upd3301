@@ -5,6 +5,7 @@ import { Upd8257 } from './upd8257.js';
 import {
   Pc8001TextSystem, PC8001, decodeAttrPair, expandRowStates, renderScreen,
 } from './pc8001.js';
+import { CrtPhosphor, PHOSPHORS, indexToRgb } from './crt.js';
 
 function resetTo(crtc, { cols = 80, rows = 25, lines = 8, attrs = 20 } = {}) {
   crtc.writeCommand(0x00);
@@ -249,4 +250,222 @@ test('reverse display (START DISPLAY bit 0) inverts every cell', () => {
   sys.update(1 / 60);
   const img = sys.render({ cgrom });
   assert.equal(img.pixels[0], 7); // empty glyph renders lit under reverse
+});
+
+// ---- physical layer: CRT phosphor -------------------------------------
+
+test('phosphor decays exponentially and is deterministic', () => {
+  const run = () => {
+    const crt = new CrtPhosphor({ width: 2, height: 1, tau: [0.05, 0.05, 0.05] });
+    const lit = Uint8Array.from([7, 0]); // white pixel, dark pixel
+    const dark = Uint8Array.from([0, 0]);
+    crt.step(lit, 1 / 60);
+    const s0 = crt.sample(0, 0);
+    crt.step(dark, 1 / 60);
+    crt.step(dark, 1 / 60);
+    return { s0, s2: crt.sample(0, 0), dark: crt.sample(1, 0) };
+  };
+  const a = run();
+  const b = run();
+  assert.deepEqual(a, b);
+  assert.equal(a.s0.r, 1);
+  const expected = Math.exp(-(2 / 60) / 0.05);
+  assert.ok(Math.abs(a.s2.r - expected) < 1e-6);
+  assert.equal(a.dark.r, 0);
+});
+
+test('1/3 duty cycle: long persistence bridges dark frames, short flickers', () => {
+  const measure = (tau) => {
+    const crt = new CrtPhosphor({ width: 1, height: 1, tau: [tau, tau, tau] });
+    const on = Uint8Array.from([2]); // red
+    const off = Uint8Array.from([0]);
+    let min = Infinity, max = 0;
+    for (let i = 0; i < 30; i++) { // 30 plane cycles of on,off,off
+      for (const px of [on, off, off]) {
+        crt.step(px, 1 / 60);
+        if (i >= 5) { // after warm-up, sample every beam pass
+          min = Math.min(min, crt.sample(0, 0).r);
+          max = Math.max(max, crt.sample(0, 0).r);
+        }
+      }
+    }
+    return (max - min) / max; // modulation depth: 1 = hard flicker, 0 = steady
+  };
+  const short = measure(PHOSPHORS.P22.tau[0]);
+  const long = measure(PHOSPHORS.LONG.tau[0]);
+  assert.ok(short > 0.99, `short persistence should flicker hard (${short})`);
+  assert.ok(long < 0.4, `long persistence should look steady (${long})`);
+});
+
+test('indexToRgb maps the GRB palette indexes', () => {
+  assert.deepEqual(indexToRgb(0), [0, 0, 0]);
+  assert.deepEqual(indexToRgb(1), [0, 0, 1]); // blue
+  assert.deepEqual(indexToRgb(2), [1, 0, 0]); // red
+  assert.deepEqual(indexToRgb(4), [0, 1, 0]); // green
+  assert.deepEqual(indexToRgb(7), [1, 1, 1]);
+});
+
+test('3-plane mode: DMA count of three screens cycles R,G,B planes', () => {
+  const sys = new Pc8001TextSystem();
+  sys.initTextMode();
+  const BASE = 0xb000, PLANE = 3000;
+  sys.out(0x64, BASE & 0xff); sys.out(0x64, BASE >> 8);
+  const tc = 0x8000 | (3 * PLANE - 1);
+  sys.out(0x65, tc & 0xff); sys.out(0x65, tc >> 8);
+  for (let p = 0; p < 3; p++) sys.memory[BASE + p * PLANE] = 0x30 + p; // '0','1','2'
+  const seen = [];
+  for (let i = 0; i < 4; i++) { sys.update(1 / 60); seen.push(sys.crtc.cells[0]); }
+  assert.deepEqual(seen, [0x30, 0x31, 0x32, 0x30]);
+});
+
+test('RGB planes flicker-mix into per-dot color through long phosphor', () => {
+  const sys = new Pc8001TextSystem();
+  sys.initTextMode();
+  const BASE = 0xb000, PLANE = 3000;
+  sys.out(0x64, BASE & 0xff); sys.out(0x64, BASE >> 8);
+  const tc = 0x8000 | (3 * PLANE - 1);
+  sys.out(0x65, tc & 0xff); sys.out(0x65, tc >> 8);
+  // one semigraphic cell at (0,0): full block in the red and green planes,
+  // empty in the blue plane → the dot should read as (dim) yellow
+  const colors = [2, 4, 1]; // red, green, blue plane colors
+  for (let p = 0; p < 3; p++) {
+    const base = BASE + p * PLANE;
+    sys.memory[base] = p < 2 ? 0xff : 0x00;
+    sys.memory[base + 80] = 0; // attr pair position 0
+    sys.memory[base + 81] = (colors[p] << 5) | 0x10 | 0x08; // semigraphic color
+  }
+  const long = new CrtPhosphor({ width: 640, height: 200, tau: PHOSPHORS.LONG.tau });
+  const short = new CrtPhosphor({ width: 640, height: 200, tau: PHOSPHORS.P22.tau });
+  const cgrom = new Uint8Array(256 * 16);
+  let px;
+  for (let i = 0; i < 6; i++) {
+    sys.update(1 / 60);
+    px = sys.render({ cgrom }).pixels;
+    long.step(px, 1 / 60);
+    short.step(px, 1 / 60);
+  }
+  // frame order: R,G,B,R,G,B → last shown plane is blue (empty for this dot)
+  const l = long.sample(0, 0);
+  assert.ok(l.r > 0.3 && l.g > 0.3, `long: dot holds red+green glow (${l.r},${l.g})`);
+  assert.ok(l.b < 0.01, 'long: blue plane is empty at this dot');
+  const s = short.sample(0, 0);
+  assert.ok(s.r < 0.01 && s.g < 0.01, 'short: glow gone two frames later — flicker');
+});
+
+// ---- physical layer: the tube ------------------------------------------
+
+test('hsyncHz derives the 15.36 kHz whine from CRTC geometry', () => {
+  const sys = new Pc8001TextSystem();
+  sys.initTextMode();
+  assert.equal(sys.crtc.hsyncHz(), 15360);
+});
+
+test('interlace: only the driven field is excited, the other decays', () => {
+  const crt = new CrtPhosphor({ width: 2, height: 2, tau: [0.001, 0.001, 0.001] });
+  const all = Uint8Array.from([7, 7, 7, 7]);
+  crt.step(all, 1 / 60, { fieldParity: 0 });
+  assert.equal(crt.sample(0, 0).r, 1); // even line excited
+  assert.ok(crt.sample(0, 1).r < 1e-4); // odd line only decayed (was 0)
+  crt.step(all, 1 / 60, { fieldParity: 1 });
+  assert.equal(crt.sample(0, 1).r, 1); // odd field's turn
+  assert.ok(crt.sample(0, 0).r < 0.01, 'short phosphor: even line faded between fields');
+});
+
+test('tube is deterministic and centers map ~identity', async () => {
+  const { CrtTube } = await import('./tube.js');
+  const mk = () => {
+    const tube = new CrtTube({ srcWidth: 64, srcHeight: 32, outWidth: 64, outHeight: 64, mask: 'none', ghost: 0, barrel: 0.05, beamWidth: 0 });
+    const lum = [new Float32Array(64 * 32), new Float32Array(64 * 32), new Float32Array(64 * 32)];
+    lum[0][16 * 64 + 32] = 1; // single red dot at center
+    return tube.apply(lum);
+  };
+  const a = mk(), b = mk();
+  assert.deepEqual(a, b);
+  // center output pixel (32, 32) shows the dot
+  const c = (32 * 64 + 32) * 4;
+  assert.ok(a[c] > 200, `center red ${a[c]}`);
+  assert.equal(a[c + 1], 0);
+});
+
+test('aperture grille passes each gun mainly through its own stripe', async () => {
+  const { CrtTube } = await import('./tube.js');
+  const W = 60, H = 12;
+  const tube = new CrtTube({
+    srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
+    mask: 'aperture', maskPitch: 3, maskLeak: 0.1,
+    barrel: 0, ghost: 0, vignette: 0, beamWidth: 0,
+  });
+  const flat = new Float32Array(W * H).fill(0.5); // uniform white field
+  const rgba = tube.apply([flat, flat, flat], null, { gamma: 1 });
+  // along one row, each channel must peak on its own phase and dip elsewhere
+  const row = 6;
+  const r = [], g = [];
+  for (let x = 0; x < 6; x++) {
+    r.push(rgba[(row * W + x) * 4]);
+    g.push(rgba[(row * W + x) * 4 + 1]);
+  }
+  const rPeak = Math.max(...r), rDip = Math.min(...r);
+  assert.ok(rPeak > rDip * 3, `stripe contrast r: ${r.join(',')}`);
+  // red and green peaks must not be on the same column
+  assert.notEqual(r.indexOf(rPeak) % 3, g.indexOf(Math.max(...g)) % 3);
+});
+
+test('beam spot blur bleeds a hard edge (the nijimi)', async () => {
+  const { CrtTube } = await import('./tube.js');
+  const W = 32, H = 8;
+  const mk = (beamWidth) => new CrtTube({
+    srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
+    mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth,
+  });
+  const lum = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 16; x < W; x++) lum[y * W + x] = 1;
+  const sharp = mk(0).apply([lum, lum, lum], null, { gamma: 1 });
+  const soft = mk(1).apply([lum, lum, lum], null, { gamma: 1 });
+  const at = (img, x) => img[(4 * W + x) * 4];
+  assert.equal(at(sharp, 14), 0); // no bleed without beam width
+  assert.ok(at(soft, 14) > 10, `bleed to the left of the edge: ${at(soft, 14)}`);
+  assert.ok(at(soft, 17) < 255, 'edge softened on the bright side too');
+});
+
+// ---- phosphor character ------------------------------------------------
+
+test('P22: blue dies first — a white flash decays through orange', () => {
+  const crt = new CrtPhosphor({ width: 1, height: 1, phosphor: PHOSPHORS.P22 });
+  crt.step(Uint8Array.from([7]), 1 / 60); // white flash
+  const dark = Uint8Array.from([0]);
+  for (let i = 0; i < 4; i++) crt.step(dark, 1 / 60);
+  const s = crt.sample(0, 0);
+  assert.ok(s.r > s.g && s.g > s.b, `afterglow orders r>g>b (${s.r}, ${s.g}, ${s.b})`);
+  assert.ok(s.r > 0.005, 'red tail still glowing');
+});
+
+test('P39 mono: whatever the guns drive, the light is green', () => {
+  const crt = new CrtPhosphor({ width: 2, height: 1, phosphor: PHOSPHORS.P39 });
+  crt.step(Uint8Array.from([2, 1]), 1 / 60); // "red" dot and "blue" dot
+  const [R, G, B] = crt.composite();
+  for (const i of [0, 1]) {
+    assert.ok(G[i] > R[i] * 2 && G[i] > B[i] * 3, `pixel ${i} is green (${R[i]}, ${G[i]}, ${B[i]})`);
+  }
+});
+
+test('P7 radar: blue-white flash, yellow afterglow', () => {
+  const crt = new CrtPhosphor({ width: 1, height: 1, phosphor: PHOSPHORS.P7 });
+  crt.step(Uint8Array.from([7]), 1 / 60);
+  let [R, G, B] = crt.composite();
+  assert.ok(B[0] > R[0], `flash leans blue (${R[0]}, ${B[0]})`);
+  const dark = Uint8Array.from([0]);
+  for (let i = 0; i < 30; i++) crt.step(dark, 1 / 60); // half a second later
+  [R, G, B] = crt.composite();
+  assert.ok(R[0] > B[0] * 2 && G[0] > B[0] * 2, `afterglow leans yellow (${R[0]}, ${G[0]}, ${B[0]})`);
+  assert.ok(G[0] > 0.01, 'the radar glow persists');
+});
+
+test('burn-in: accumulated dose reduces efficiency', () => {
+  const crt = new CrtPhosphor({ width: 2, height: 1, tau: [0.001, 0.001, 0.001], burnRate: 4 });
+  const left = Uint8Array.from([2, 0]);
+  const both = Uint8Array.from([2, 2]);
+  for (let i = 0; i < 600; i++) crt.step(left, 1 / 60); // 10 s of burning pixel 0
+  crt.step(both, 1 / 60);
+  const worn = crt.sample(0, 0).r, fresh = crt.sample(1, 0).r;
+  assert.ok(worn < fresh * 0.05, `burned pixel is dim (${worn} vs ${fresh})`);
 });

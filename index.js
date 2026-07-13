@@ -277,6 +277,13 @@ export class Upd3301 {
     return Math.floor(this.frame / period) % 2 === 0;
   }
 
+  // Horizontal deflection frequency implied by the programmed geometry —
+  // (displayed rows + vblank rows) × lines per row × frame rate. For the
+  // N-BASIC 80x25 setup: (25+7)×8×60 = 15360 Hz, the CRT whine you heard.
+  hsyncHz() {
+    return this.frameHz * (this.rows + this.vblankRows) * this.linesPerChar;
+  }
+
   getScreen() {
     return {
       schemaVersion: SCHEMA_VERSION,

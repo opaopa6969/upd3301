@@ -20,9 +20,16 @@ index.js  （μPD3301チップ — メモリも色もPC-8001も知らない）
 upd8257.js（μPD8257 DMA — CRTCを知らない）
    ↑ 両方を import するのが
 pc8001.js（配線＋アトリビュート意味論＋レンダラ＝「下流」）
-   ↑ を import するのが
+
+crt.js   （物理層1: 蛍光体 — GRBインデックスのフレームを消費）
+tube.js  （物理層2: マスク/ガラス — リニア光の3プレーンを消費）
+   ↑ 全部を組み合わせるのは
 demo/    （ブラウザデモ。手描きCGROMを注入）
 ```
+
+論理スタック（index/upd8257/pc8001）と物理スタック（crt/tube）は互いに
+import しない。demo/テストの層でだけ、plain data（インデックス画素→
+輝度プレーン→RGBA）で接続される。
 
 `index.js` と `upd8257.js` は sibling を import しない。ループを閉じる
 コーディネータ（DRQ → DMA pull → 行バイト）は `Pc8001TextSystem`。

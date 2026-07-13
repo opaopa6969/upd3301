@@ -20,9 +20,16 @@ index.js  (μPD3301 chip — knows nothing about memory, colors, PC-8001)
 upd8257.js (μPD8257 DMA — knows nothing about the CRTC)
    ↑ both imported by
 pc8001.js (wiring + attribute semantics + renderer — the "downstream")
-   ↑ imported by
-demo/     (browser demo, injects a hand-made CGROM)
+
+crt.js   (physical layer 1: phosphor — consumes GRB-indexed frames)
+tube.js  (physical layer 2: mask/glass — consumes linear light planes)
+   ↑ all composed only by
+demo/    (browser demo, injects a hand-made CGROM)
 ```
+
+The logical stack (index/upd8257/pc8001) and the physical stack (crt/tube)
+never import each other; they meet only at the demo/test level, connected by
+plain data (indexed pixels → luminance planes → RGBA).
 
 `index.js` and `upd8257.js` never import siblings. The coordinator that
 closes the loop (DRQ → DMA pull → row bytes) is `Pc8001TextSystem`.
