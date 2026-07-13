@@ -5,7 +5,7 @@ from skidl.pin import pin_types
 
 SKIDL_lib_version = '0.0.1'
 
-vstream_netlist = SchLib(tool=SKIDL).add_parts(*[
+make_pcb = SchLib(tool=SKIDL).add_parts(*[
         Part(**{ 'name':'PC8001_EXPANSION', 'dest':TEMPLATE, 'tool':SKIDL, 'aliases':Alias({'PC8001_EXPANSION'}), 'ref_prefix':'U', 'fplist':None, 'footprint':'Connector_PinSocket_2.54mm:PinSocket_2x25_P2.54mm_Vertical', 'keywords':None, 'description':'', 'datasheet':None, 'pins':[
             Pin(num='1',name='+5V',func=pin_types.PWRIN),
             Pin(num='2',name='GND',func=pin_types.PWRIN),

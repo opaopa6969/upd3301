@@ -50,7 +50,7 @@ j1['~IORQ'] += nIORQ; j1['~RD'] += nRD; j1['~M1'] += nM1
 j1['~RESET'] += nRESET; j1['~WAIT'] += nWAIT
 
 # ---- U1: Raspberry Pi Pico (module) --------------------------------------
-u1 = part('U1', 'RPi_Pico', 'MCU_RaspberryPi_and_Boards:RPi_Pico_SMD_TH',
+u1 = part('U1', 'RPi_Pico', 'vstream:RPi_Pico_TH',
     [(39, 'VSYS', PWR), (36, '3V3_OUT', PWR), (38, 'GND', PWR), (3, 'GND2', PWR)]
     + [(i + 1 if i < 3 else i + 2, f'GP{i}', B) for i in range(8)]  # GP0-7 (pins 1,2,4,5,6,7,9,10)
     + [(11, 'GP8', I), (12, 'GP9', O), (14, 'GP10', I),

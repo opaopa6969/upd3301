@@ -1,8 +1,8 @@
 (export 
   (version "D")
   (design
-    (source "vstream_netlist.py")
-    (date "07/13/2026 11:56 PM")
+    (source "make_pcb.py")
+    (date "07/14/2026 12:36 AM")
     (tool "SKiDL (2.2.3)")
     (sheet
       (number 1)
@@ -13,7 +13,7 @@
         (company)
         (rev)
         (date)
-        (source "vstream_netlist.py")
+        (source "make_pcb.py")
         (comment
           (number "1")
           (value ""))
@@ -55,7 +55,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "f7KFji72kQ")
+          (name "SKiDL Tag") "zcGGcfD7RG")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -65,7 +65,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "80319fb9-8509-5305-809c-faa6a624ac9f"))
+      (tstamps "4a1e0865-2863-5f7c-af40-66a4c3acf019"))
     (comp
       (ref "C2")
       (value "C_100n")
@@ -79,7 +79,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "8l6ZCdc1pq")
+          (name "SKiDL Tag") "uXIPHz_jsZ")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -89,7 +89,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "17b02062-1bb4-553e-9e47-1992848b9d8d"))
+      (tstamps "2d656bbe-3aec-59a3-91fa-4b625e179b35"))
     (comp
       (ref "C3")
       (value "C_100n")
@@ -103,7 +103,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "bYkQMe0wE8")
+          (name "SKiDL Tag") "UWix0veazN")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -113,7 +113,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "9b2c15d7-cf0e-59a4-a5f3-71bd3cdc3cd3"))
+      (tstamps "795c183a-3aea-5b32-90ba-08a9fc071ca4"))
     (comp
       (ref "C4")
       (value "C_100n")
@@ -127,7 +127,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "n0kV3GZU96")
+          (name "SKiDL Tag") "u2QC22mhdm")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -137,7 +137,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "7ec81e5d-f506-5a80-acd4-460d213f2921"))
+      (tstamps "8bac7097-a6b8-50e7-b7c4-a550d3571132"))
     (comp
       (ref "C5")
       (value "C_10u")
@@ -151,7 +151,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "wm1075oS9p")
+          (name "SKiDL Tag") "gb1cTvE_DE")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -161,7 +161,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "8943b13d-2066-58c4-b183-64de5d86da7f"))
+      (tstamps "24b26935-3bb9-5788-9883-78b1d182f2ee"))
     (comp
       (ref "J1")
       (value "PC8001_EXPANSION")
@@ -175,7 +175,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "5zfDGvNIKV")
+          (name "SKiDL Tag") "WOcMInEtlr")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -185,7 +185,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "8e2e2d37-46ab-5b4f-90ff-1ca437defc5a"))
+      (tstamps "63e40d74-afac-58c0-bf50-416b238217fa"))
     (comp
       (ref "J2")
       (value "microSD_SPI")
@@ -199,7 +199,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "gLG6XzQUXr")
+          (name "SKiDL Tag") "k3J1_CSmfb")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -209,7 +209,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "a98414ca-d75e-5aed-8536-5689932b7efe"))
+      (tstamps "960897fb-8466-5466-acd6-b520b5993661"))
     (comp
       (ref "Q1")
       (value "2N7002")
@@ -223,7 +223,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "aBmNj_VKCV")
+          (name "SKiDL Tag") "9GRjvxd_mE")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -233,7 +233,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "91afe7be-f295-581c-8acf-64d7f8b60633"))
+      (tstamps "191c591f-4ce8-502f-8acb-3999f78409eb"))
     (comp
       (ref "R1")
       (value "R_4k7")
@@ -247,7 +247,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "GM0PIaFPOS")
+          (name "SKiDL Tag") "9u0j4zdX2L")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -257,7 +257,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "29d1cff1-c86e-5e81-addd-5611c65896cc"))
+      (tstamps "c147fc11-0922-5df7-b59e-403df6eb2866"))
     (comp
       (ref "R2")
       (value "R_10k")
@@ -271,7 +271,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "5Cx3PMabFf")
+          (name "SKiDL Tag") "bArod0D24J")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -281,21 +281,21 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "839f1e08-1346-59f3-9549-f0aab3f0cb59"))
+      (tstamps "da03761d-3457-5cce-a36d-639308b21793"))
     (comp
       (ref "U1")
       (value "RPi_Pico")
       (description "")
-      (footprint "MCU_RaspberryPi_and_Boards:RPi_Pico_SMD_TH")
+      (footprint "vstream:RPi_Pico_TH")
       (fields
         (field
           (name "Description"))
         (field
-          (name "Footprint") "MCU_RaspberryPi_and_Boards:RPi_Pico_SMD_TH")
+          (name "Footprint") "vstream:RPi_Pico_TH")
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "XhuS7CtFbb")
+          (name "SKiDL Tag") "gt8Qdm1MvO")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -305,7 +305,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "67c4b5e5-5d05-5234-9ad7-a55bebd61a59"))
+      (tstamps "f104e4df-c96d-5f55-b236-60e1c827a316"))
     (comp
       (ref "U2")
       (value "74LVC245A")
@@ -319,7 +319,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "3oaQAv0qzf")
+          (name "SKiDL Tag") "U0AdXAG36r")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -329,7 +329,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "26a77c7b-74e2-58ad-a7a0-ab76e21a6c19"))
+      (tstamps "6afb8e0d-e3dd-5edf-a6f8-51a035df6c1d"))
     (comp
       (ref "U3")
       (value "74LVC245A")
@@ -343,7 +343,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "8dy9isdDkg")
+          (name "SKiDL Tag") "S6SIfbEre1")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -353,7 +353,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "b71d561c-123b-5650-8dff-d8b8f2898498"))
+      (tstamps "0c377406-6746-5541-9822-9214821643c3"))
     (comp
       (ref "U4")
       (value "74HC688")
@@ -367,7 +367,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "Hfw_Z7bSqI")
+          (name "SKiDL Tag") "EFwFVMuU9D")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -377,7 +377,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "7c4d8c6d-2439-5d9c-ae29-41f2d5585fa7"))
+      (tstamps "92b6e56a-562f-5a92-936d-b44477448f6a"))
     (comp
       (ref "U5")
       (value "74HC32")
@@ -391,7 +391,7 @@
         (field
           (name "Datasheet"))
         (field
-          (name "SKiDL Tag") "pID6eMj4V0")
+          (name "SKiDL Tag") "3F0rj185hc")
         (field
           (name "SKiDL Line") "vstream_netlist.py:18"))
       (libsource
@@ -401,7 +401,7 @@
         (names "/")
         (tstamps "/"))
       (component_classes)
-      (tstamps "c53da3a8-d777-5a14-94e2-9cd2912b3a7a")))
+      (tstamps "3cbd596d-776d-559a-a122-caad0f3bceec")))
   (nets
     (net
       (code 1)

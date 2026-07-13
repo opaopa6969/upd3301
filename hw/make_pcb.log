@@ -8,35 +8,35 @@ WARNING: fp-lib-table file was not found. Component footprints are not available
 WARNING: fp-lib-table file was not found. Component footprints are not available.
 WARNING: fp-lib-table file was not found. Component footprints are not available.
 WARNING: Missing tag on PC8001_EXPANSION instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag Ts8eY_e6s3 generated for PC8001_EXPANSION.
+WARNING: Random tag WOcMInEtlr generated for PC8001_EXPANSION.
 WARNING: Missing tag on RPi_Pico instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag Gzc1Ia7tnh generated for RPi_Pico.
+WARNING: Random tag gt8Qdm1MvO generated for RPi_Pico.
 WARNING: Missing tag on 74LVC245A instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag X657G2_qb6 generated for 74LVC245A.
+WARNING: Random tag U0AdXAG36r generated for 74LVC245A.
 WARNING: Missing tag on 74LVC245A instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag mNG1oy_2Jc generated for 74LVC245A.
+WARNING: Random tag S6SIfbEre1 generated for 74LVC245A.
 WARNING: Missing tag on 74HC688 instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag t6Ntj_ioed generated for 74HC688.
+WARNING: Random tag EFwFVMuU9D generated for 74HC688.
 WARNING: Missing tag on 74HC32 instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag OQiMnTXGAz generated for 74HC32.
+WARNING: Random tag 3F0rj185hc generated for 74HC32.
 WARNING: Missing tag on 2N7002 instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag GAb0LFfzun generated for 2N7002.
+WARNING: Random tag 9GRjvxd_mE generated for 2N7002.
 WARNING: Missing tag on R_4k7 instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag CK4EzYuEXk generated for R_4k7.
+WARNING: Random tag 9u0j4zdX2L generated for R_4k7.
 WARNING: Missing tag on R_10k instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag RivtnWAfhe generated for R_10k.
+WARNING: Random tag bArod0D24J generated for R_10k.
 WARNING: Missing tag on microSD_SPI instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag 2PFpEz2A1_ generated for microSD_SPI.
+WARNING: Random tag k3J1_CSmfb generated for microSD_SPI.
 WARNING: Missing tag on C_100n instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag StklG4lzsj generated for C_100n.
+WARNING: Random tag zcGGcfD7RG generated for C_100n.
 WARNING: Missing tag on C_100n instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag invXHKk3w6 generated for C_100n.
+WARNING: Random tag uXIPHz_jsZ generated for C_100n.
 WARNING: Missing tag on C_100n instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag R1tZCGMzyd generated for C_100n.
+WARNING: Random tag UWix0veazN generated for C_100n.
 WARNING: Missing tag on C_100n instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag MTV_Gh6Z5x generated for C_100n.
+WARNING: Random tag u2QC22mhdm generated for C_100n.
 WARNING: Missing tag on C_10u instantiated at /home/opa/work/game-workspace/upd3301/hw/vstream_netlist.py:18.
-WARNING: Random tag k6MMzMIXr5 generated for C_10u.
+WARNING: Random tag gb1cTvE_DE generated for C_10u.
 WARNING: Missing tag on  instantiated at /home/opa/work/game-workspace/upd3301/hw/<frozen importlib._bootstrap>:241.
 INFO: 35 warnings found while generating netlist.
 INFO: 0 errors found while generating netlist.

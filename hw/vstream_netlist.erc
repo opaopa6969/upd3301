@@ -1,36 +1,35 @@
-ERC WARNING: Merging two named nets (~M1 and GND) into ~M1.
+ERC WARNING: Merging two named nets (~M1 and A4) into ~M1.
 ERC WARNING: Merging two named nets (A2 and ~M1) into A2.
-ERC WARNING: Merging two named nets (A5 and A4) into A5.
+ERC WARNING: Merging two named nets (A5 and GND) into A5.
 ERC WARNING: Merging two named nets (A6 and A5) into A6.
 ERC WARNING: Merging two named nets (A2 and A6) into A2.
 ERC WARNING: Merging two named nets (A1 and A7) into A1.
 ERC WARNING: Merging two named nets (A3 and A1) into A3.
-ERC WARNING: Insufficient drive current on net WAIT_GATE for pin POWER-IN pin 1/A of R_10k/R2.
 ERC WARNING: No drivers for net A2.
 ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 19/~OE of 74LVC245A/U3.
+ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 1/~G of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net A2 for pin POWER-IN pin 10/GND of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net A2 for pin POWER-IN pin 2/N of C_100n/C2.
 ERC WARNING: Insufficient drive current on net A2 for pin POWER-IN pin 7/GND of 74HC32/U5.
-ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 1/~G of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 13/A2 of PC8001_EXPANSION/J1.
+ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 8/P3 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 15/A4 of PC8001_EXPANSION/J1.
 ERC WARNING: Insufficient drive current on net A2 for pin POWER-IN pin 10/GND of 74LVC245A/U2.
 ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 16/A5 of PC8001_EXPANSION/J1.
-ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 3/Q0 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 4/P1 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 17/A6 of PC8001_EXPANSION/J1.
-ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 8/P3 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 10/P4 of 74HC688/U4.
+ERC WARNING: Insufficient drive current on net A2 for pin POWER-IN pin 3/GND of microSD_SPI/J2.
+ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 7/Q2 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 12/P5 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 21/~M1 of PC8001_EXPANSION/J1.
 ERC WARNING: Insufficient drive current on net A2 for pin POWER-IN pin 2/N of C_100n/C3.
 ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 16/P7 of 74HC688/U4.
-ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 15/Q6 of 74HC688/U4.
-ERC WARNING: Insufficient drive current on net A2 for pin POWER-IN pin 3/GND of microSD_SPI/J2.
+ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 3/Q0 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 5/Q1 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net A2 for pin POWER-IN pin 2/N of C_10u/C5.
-ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 7/Q2 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net A2 for pin POWER-IN pin 2/B of R_10k/R2.
+ERC WARNING: Insufficient drive current on net A2 for pin INPUT pin 15/Q6 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net A2 for pin POWER-IN pin 2/N of C_100n/C4.
 ERC WARNING: Insufficient drive current on net A2 for pin POWER-IN pin 38/GND of RPi_Pico/U1.
 ERC WARNING: Insufficient drive current on net A2 for pin POWER-IN pin 3/GND2 of RPi_Pico/U1.
@@ -45,40 +44,41 @@ ERC WARNING: Insufficient drive current on net +5V for pin INPUT pin 9/Q3 of 74H
 ERC WARNING: Insufficient drive current on net +5V for pin POWER-IN pin 39/VSYS of RPi_Pico/U1.
 ERC WARNING: Insufficient drive current on net +5V for pin INPUT pin 11/Q4 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net +5V for pin POWER-IN pin 2/B of R_4k7/R1.
-ERC WARNING: Insufficient drive current on net +5V for pin INPUT pin 13/Q5 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net +5V for pin POWER-IN pin 20/VCC of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net +5V for pin INPUT pin 17/Q7 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net +5V for pin POWER-IN pin 14/VCC of 74HC32/U5.
 ERC WARNING: Insufficient drive current on net +5V for pin POWER-IN pin 1/P of C_100n/C4.
 ERC WARNING: Insufficient drive current on net +5V for pin POWER-IN pin 1/+5V of PC8001_EXPANSION/J1.
 ERC WARNING: Insufficient drive current on net +5V for pin POWER-IN pin 1/P of C_100n/C3.
+ERC WARNING: Insufficient drive current on net +5V for pin INPUT pin 13/Q5 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net +5V for pin POWER-IN pin 1/P of C_10u/C5.
+ERC WARNING: No drivers for net +3V3.
+ERC WARNING: Insufficient drive current on net +3V3 for pin INPUT pin 1/DIR of 74LVC245A/U3.
+ERC WARNING: Insufficient drive current on net +3V3 for pin INPUT pin 1/DIR of 74LVC245A/U2.
+ERC WARNING: Insufficient drive current on net +3V3 for pin POWER-IN pin 1/P of C_100n/C1.
+ERC WARNING: Insufficient drive current on net +3V3 for pin POWER-IN pin 36/3V3_OUT of RPi_Pico/U1.
+ERC WARNING: Insufficient drive current on net +3V3 for pin POWER-IN pin 4/VDD of microSD_SPI/J2.
+ERC WARNING: Insufficient drive current on net +3V3 for pin POWER-IN pin 1/P of C_100n/C2.
+ERC WARNING: Insufficient drive current on net +3V3 for pin POWER-IN pin 20/VCC of 74LVC245A/U3.
+ERC WARNING: Insufficient drive current on net +3V3 for pin POWER-IN pin 20/VCC of 74LVC245A/U2.
+ERC WARNING: No drivers for net ~IORQ.
+ERC WARNING: Insufficient drive current on net ~IORQ for pin INPUT pin 19/~IORQ of PC8001_EXPANSION/J1.
+ERC WARNING: Insufficient drive current on net ~IORQ for pin INPUT pin 2/1B of 74HC32/U5.
+ERC WARNING: Insufficient drive current on net WAIT_GATE for pin POWER-IN pin 1/A of R_10k/R2.
+ERC WARNING: No drivers for net A3.
+ERC WARNING: Insufficient drive current on net A3 for pin INPUT pin 18/A7 of PC8001_EXPANSION/J1.
+ERC WARNING: Insufficient drive current on net A3 for pin INPUT pin 6/P2 of 74HC688/U4.
+ERC WARNING: Insufficient drive current on net A3 for pin INPUT pin 14/P6 of 74HC688/U4.
+ERC WARNING: Insufficient drive current on net A3 for pin INPUT pin 12/A1 of PC8001_EXPANSION/J1.
+ERC WARNING: Insufficient drive current on net A3 for pin INPUT pin 14/A3 of PC8001_EXPANSION/J1.
+ERC WARNING: Insufficient drive current on net A3 for pin INPUT pin 2/P0 of 74HC688/U4.
 ERC WARNING: Insufficient drive current on net ~WAIT for pin POWER-IN pin 1/A of R_4k7/R1.
 ERC WARNING: No drivers for net A0.
 ERC WARNING: Insufficient drive current on net A0 for pin INPUT pin 11/A0 of PC8001_EXPANSION/J1.
 ERC WARNING: Insufficient drive current on net A0 for pin INPUT pin 10/3B of 74HC32/U5.
-ERC WARNING: No drivers for net +3V3.
-ERC WARNING: Insufficient drive current on net +3V3 for pin INPUT pin 1/DIR of 74LVC245A/U2.
-ERC WARNING: Insufficient drive current on net +3V3 for pin POWER-IN pin 1/P of C_100n/C1.
-ERC WARNING: Insufficient drive current on net +3V3 for pin POWER-IN pin 4/VDD of microSD_SPI/J2.
-ERC WARNING: Insufficient drive current on net +3V3 for pin POWER-IN pin 36/3V3_OUT of RPi_Pico/U1.
-ERC WARNING: Insufficient drive current on net +3V3 for pin POWER-IN pin 20/VCC of 74LVC245A/U3.
-ERC WARNING: Insufficient drive current on net +3V3 for pin POWER-IN pin 1/P of C_100n/C2.
-ERC WARNING: Insufficient drive current on net +3V3 for pin INPUT pin 1/DIR of 74LVC245A/U3.
-ERC WARNING: Insufficient drive current on net +3V3 for pin POWER-IN pin 20/VCC of 74LVC245A/U2.
 ERC WARNING: No drivers for net ~RD.
 ERC WARNING: Insufficient drive current on net ~RD for pin INPUT pin 5/2B of 74HC32/U5.
 ERC WARNING: Insufficient drive current on net ~RD for pin INPUT pin 20/~RD of PC8001_EXPANSION/J1.
-ERC WARNING: No drivers for net A3.
-ERC WARNING: Insufficient drive current on net A3 for pin INPUT pin 2/P0 of 74HC688/U4.
-ERC WARNING: Insufficient drive current on net A3 for pin INPUT pin 6/P2 of 74HC688/U4.
-ERC WARNING: Insufficient drive current on net A3 for pin INPUT pin 18/A7 of PC8001_EXPANSION/J1.
-ERC WARNING: Insufficient drive current on net A3 for pin INPUT pin 14/P6 of 74HC688/U4.
-ERC WARNING: Insufficient drive current on net A3 for pin INPUT pin 12/A1 of PC8001_EXPANSION/J1.
-ERC WARNING: Insufficient drive current on net A3 for pin INPUT pin 14/A3 of PC8001_EXPANSION/J1.
-ERC WARNING: No drivers for net ~IORQ.
-ERC WARNING: Insufficient drive current on net ~IORQ for pin INPUT pin 19/~IORQ of PC8001_EXPANSION/J1.
-ERC WARNING: Insufficient drive current on net ~IORQ for pin INPUT pin 2/1B of 74HC32/U5.
 ERC INFO: 81 warnings found while running ERC.
 ERC INFO: 0 errors found while running ERC.
 
