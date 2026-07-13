@@ -36,3 +36,41 @@ export function buildFont() {
   }
   return { cgrom, glyphRows };
 }
+
+// Upper-half (0x80-0xFF) placeholder glyphs. The real PC-8001 CGROM has
+// glyphs here (this is what the OUT &H51 accident shows, font-dot rendered);
+// we can't ship NEC's ROM, so: a few hand-drawn sprites on the attribute
+// values the accident actually lands on, and deterministic symmetric
+// "invader" patterns everywhere else. Drop a dumped FONT.ROM in to get the
+// real thing (applyFontRom).
+const SPRITES = {
+  0xe8: ['00000000','00110010','01111100','11010110','01111111','00101010','01000100','00000000'], // hover bike ｗ
+  0xc8: ['00011000','00111100','01111110','11011011','11111111','00100100','01011010','00000000'], // invader
+  0xd8: ['00010000','00111000','01111100','11111110','01111100','00111000','00010000','00000000'], // diamond
+  0x98: ['01100110','11111111','11111111','11111111','01111110','00111100','00011000','00000000'], // heart
+};
+export function addPlaceholderUpperHalf(cgrom) {
+  const rev4 = (n) => ((n & 1) << 3) | ((n & 2) << 1) | ((n & 4) >> 1) | ((n & 8) >> 3);
+  for (let code = 0x80; code < 0x100; code++) {
+    if (SPRITES[code]) {
+      SPRITES[code].forEach((bits, line) => { cgrom[code * 16 + line] = parseInt(bits, 2); });
+      continue;
+    }
+    for (let line = 0; line < 8; line++) {
+      if (line === 0 || line === 7) { cgrom[code * 16 + line] = 0; continue; }
+      const n = ((code >> ((line * 3) & 7)) ^ (code * 5 + line * 11)) & 0xf;
+      cgrom[code * 16 + line] = (n << 4) | rev4(n);
+    }
+  }
+  return cgrom;
+}
+
+// FONT.ROM: 2KB dump = 256 glyphs x 8 lines → our 16-byte-stride CGROM
+export function applyFontRom(cgrom, bytes) {
+  for (let code = 0; code < 256; code++) {
+    for (let line = 0; line < 16; line++) {
+      cgrom[code * 16 + line] = line < 8 ? (bytes[code * 8 + line] ?? 0) : 0;
+    }
+  }
+  return cgrom;
+}

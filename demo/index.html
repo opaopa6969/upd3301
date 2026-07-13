@@ -29,6 +29,8 @@
   <button id="mplanes">RGB 3プレーン (DMA 3画面)</button>
   <button id="brev">画面反転 (RVV)</button>
   <button id="bcolor" class="on">カラー</button>
+  <button id="bglitch">OUT &amp;H51 (事故)</button>
+  <label style="color:#778;font-size:12px">FONT.ROM(2KB): <input type="file" id="ffont" style="font-size:11px"></label>
 </div>
 <div class="row"><span class="lbl">蛍光体:</span>
   <button id="pP22" class="on">P22 (青が先に死ぬ)</button>
@@ -70,8 +72,9 @@ import { CrtPhosphor, PHOSPHORS, collapseScan } from '../crt.js';
 import { CrtTube } from '../tube.js';
 
 // ---- 5x7 font → CGROM ------------------------------------------------
-import { buildFont } from './font.js';
+import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 const { cgrom, glyphRows } = buildFont();
+addPlaceholderUpperHalf(cgrom); // codes 80h-FFh: what the 51h accident reveals
 
 // ---- semigraphic packers ----------------------------------------------
 function packSemigraphic(dotRows) { // '0'/'1' strings → cell code rows
@@ -415,6 +418,24 @@ function setMode(m) {
 }
 for (const k of Object.keys(modeBtns)) modeBtns[k].onclick = () => setMode(k);
 $('brev').onclick = () => { reverse = !reverse; sys.out(0x51, 0x20 | (reverse ? 1 : 0)); $('brev').classList.toggle('on', reverse); };
+// the OUT &H51 accident: a stray CRTC command mid-display slips the DMA
+// framing — attribute bytes become characters and vice versa. ASCII text
+// read as color attributes can only yield GRB 1..3 (blue/red/magenta):
+// that's why the legendary garbage is always 青紫赤. Press again to slip more;
+// pick any display mode button to "power-cycle" back to sanity.
+$('bglitch').onclick = () => {
+  sys.out(0x51, 0xc0); // RESET COUNTERS lands mid-stream on real silicon
+  const slip = new Uint8Array(1 + (sys.crtc.frame % 119));
+  sys.dmac.drqPull(2, slip); // the stream slides under the row framing
+};
+// drop in a dumped 2KB FONT.ROM and every glyph — including the accident
+// garbage — becomes the real PC-8001 character set
+$('ffont').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  applyFontRom(cgrom, bytes);
+};
 $('bcolor').onclick = () => {
   sys.out(0x30, (mode === 'text40' ? 0 : 1) | (sys.colorMode ? 2 : 0));
   $('bcolor').classList.toggle('on', sys.colorMode);
