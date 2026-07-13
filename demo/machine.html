@@ -59,7 +59,6 @@ import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 const canvas = document.getElementById('crt');
 const ctx = canvas.getContext('2d');
 const guts = document.getElementById('guts');
-const img = ctx.createImageData(640, 400);
 const { cgrom } = buildFont();
 addPlaceholderUpperHalf(cgrom);
 
@@ -114,10 +113,22 @@ async function autoLoad() {
     loadMachine(def);
   }
 }
-const phosphor = new CrtPhosphor({ width: 640, height: 200, phosphor: PHOSPHORS.P22 });
-const tube = new CrtTube({ srcWidth: 640, srcHeight: 200, outWidth: 640, outHeight: 400, mask: 'aperture' });
-const idxBuf = new Uint8Array(640 * 200);
-let rgbaBuf = null;
+// The screen geometry comes from the ROM: N-BASIC runs 80x20 (=640x160),
+// N88 80x25 (=640x200). Rebuild the physical layer whenever the CRTC's
+// programmed geometry changes — assuming 640x200 silently fed the phosphor
+// an empty buffer (renderScreen allocates its own when the out array's size
+// doesn't match) and the screen stayed black.
+let phosphor = null, tube = null, img = null, rgbaBuf = null;
+let phosW = 0, phosH = 0;
+function fitTo(w, h) {
+  if (w === phosW && h === phosH) return;
+  phosW = w; phosH = h;
+  phosphor = new CrtPhosphor({ width: w, height: h, phosphor: PHOSPHORS.P22 });
+  tube = new CrtTube({ srcWidth: w, srcHeight: h, outWidth: w, outHeight: h * 2, mask: 'aperture' });
+  canvas.width = w; canvas.height = h * 2;
+  img = ctx.createImageData(w, h * 2);
+  rgbaBuf = null;
+}
 
 const $ = (id) => document.getElementById(id);
 $('from').onchange = async (e) => {
@@ -185,19 +196,22 @@ function loop(now) {
   const t0 = performance.now();
   if (machine) {
     machine.update(dt);
-    machine.sys.render({ cgrom, out: idxBuf });
-    phosphor.step(idxBuf, FR);
+    const frame = machine.sys.render({ cgrom });
+    if (!frame.width || !frame.height) { requestAnimationFrame(loop); return; }
+    fitTo(frame.width, frame.height);
+    phosphor.step(frame.pixels, FR);
     const d = img.data;
+    const W = phosW, H = phosH;
     if (tubeOn) {
       tube.apply(phosphor.composite(), d);
     } else {
       rgbaBuf = phosphor.toRGBA(rgbaBuf);
-      for (let y = 0; y < 200; y++) {
-        for (let x = 0; x < 640; x++) {
-          const s = (y * 640 + x) * 4;
-          let o = (y * 2 * 640 + x) * 4;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const s = (y * W + x) * 4;
+          let o = (y * 2 * W + x) * 4;
           d[o] = rgbaBuf[s]; d[o + 1] = rgbaBuf[s + 1]; d[o + 2] = rgbaBuf[s + 2]; d[o + 3] = 255;
-          o += 640 * 4;
+          o += W * 4;
           d[o] = rgbaBuf[s] * .55; d[o + 1] = rgbaBuf[s + 1] * .55; d[o + 2] = rgbaBuf[s + 2] * .55; d[o + 3] = 255;
         }
       }
@@ -205,7 +219,7 @@ function loop(now) {
     ctx.putImageData(img, 0, 0);
     workMs = workMs * 0.9 + (performance.now() - t0) * 0.1;
     guts.textContent = `${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
-      + `  ${machine.sys.crtc.cols}x${machine.sys.crtc.rows}  hsync=${machine.sys.crtc.hsyncHz()}Hz`;
+      + `  ${machine.sys.crtc.cols}x${machine.sys.crtc.rows} (${phosW}x${phosH}px)  hsync=${machine.sys.crtc.hsyncHz()}Hz`;
   }
   requestAnimationFrame(loop);
 }

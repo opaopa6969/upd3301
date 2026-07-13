@@ -51,8 +51,17 @@ export class Pc8001Machine {
     return v === 0xff && port >= 0x50 && port <= 0x68 ? this.sys.in(port) : v;
   }
 
+  // The 8001's port 30h d0 selects the character clock (40/80), but N-BASIC
+  // programs the CRTC's column count too — trust the chip: 80 columns means
+  // 80-column dots. (Assuming port 30h alone stretched every dot 2x and made
+  // the screen 1280 px wide.)
+  _syncWidth() {
+    if (this.sys.crtc.cols >= 60) this.sys.width80 = true;
+  }
+
   // run exactly one video frame's worth of CPU time, then refresh the CRT
   stepFrame() {
+    this._syncWidth();
     while (this.tInFrame < this.frameT) {
       this.tInFrame += this.cpu.step();
     }
