@@ -70,6 +70,7 @@
   <button id="tshadow">シャドウ</button>
   <button id="tslot">スロット</button>
   <button id="binterlace">インターレース</button>
+  <button id="b400">400ライン</button>
 </div>
 <div class="row knobs"><span class="lbl">ノブ:</span>
   <label>FOCUS <input type="range" id="kfocus" min="0" max="2" step="0.05" value="0.8"></label>
@@ -80,17 +81,19 @@
   <label>CONV <input type="range" id="kconv" min="0" max="0.02" step="0.001" value="0.004"></label>
   <label>BARREL <input type="range" id="kbarrel" min="-0.12" max="0.25" step="0.01" value="0.07"></label>
   <label>CONTRAST <input type="range" id="kcontrast" min="0.5" max="1.8" step="0.05" value="1"></label>
-  <label>TINT <input type="range" id="ktint" min="-60" max="60" step="1" value="0"></label>
-  <label>V-HOLD <input type="range" id="kvhold" min="-10" max="10" step="0.5" value="0"></label>
+  <label>TINT<input type="checkbox" id="ctint" style="margin:2px"> <input type="range" id="ktint" min="-60" max="60" step="1" value="0"></label>
+  <label>V-HOLD <input type="range" id="kvhold" min="-20" max="20" step="0.5" value="0"></label>
 </div>
 <div id="guts"></div>
-<p class="note">
+<p class="note" id="note-player">
   μPD3301は不使用ｗ — crt.js（蛍光体：ガン別2成分減衰・発光色・焼き付き）と
   tube.js（マスク・ビームスポット・収束誤差・ガラス）だけを、アナログ駆動
   （stepAnalog：sRGB→リニア化して励起）で任意の映像に適用するプレイヤー。
   P7レーダー管で観る動画、最高だから試して。POWERで偏向崩壊も動く。
 </p>
 <script type="module">
+import { applyI18n, t } from './i18n.js';
+applyI18n();
 import { CrtPhosphor, PHOSPHORS, rollScan } from '../crt.js';
 import { CrtTube } from '../tube.js';
 
@@ -124,7 +127,7 @@ const grab = makeGrab(SW, SH);
 
 const phosphor = new CrtPhosphor({ width: SW, height: SH, phosphor: PHOSPHORS.P22 });
 let phosName = 'P22';
-const knobs = { focus: 0.8, hSize: 1, vSize: 1, bright: 1.2, pitch: 3, conv: 0.004, barrel: 0.07, contrast: 1, tint: 0, vhold: 0 };
+const knobs = { focus: 0.8, hSize: 1, vSize: 1, bright: 1.2, pitch: 3, conv: 0.004, barrel: 0.07, contrast: 1, tint: 0, tintOn: false, vhold: 0 };
 let tubeMode = 'aperture', interlaced = false;
 const tubes = {};
 function getTube() {
@@ -163,13 +166,17 @@ const rollBuf = new Uint8ClampedArray(SW * SH * 4);
 let rollPos = 0;
 function vholdApply(src, dst) {
   const blank = 28, total = SH + blank;
-  if (knobs.vhold !== 0) rollPos = (rollPos + knobs.vhold + total) % total;
-  else if (rollPos !== 0) {
+  if (knobs.vhold !== 0) {
+    const wobble = 1 + 0.8 * Math.sin(rollPos / total * Math.PI * 2);
+    rollPos = (rollPos + knobs.vhold * wobble + total) % total;
+  } else if (rollPos !== 0) {
     rollPos = rollPos < total / 2 ? rollPos * 0.8 : total - (total - rollPos) * 0.8;
     if (rollPos < 0.6 || rollPos > total - 0.6) rollPos = 0;
   }
   if (rollPos === 0) return src;
-  return rollScan(src, dst, SW, SH, Math.round(rollPos) % total, blank, 4);
+  const stretch = 1 + Math.min(0.5, Math.abs(knobs.vhold) * 0.03)
+    * Math.sin(rollPos / total * Math.PI * 4);
+  return rollScan(src, dst, SW, SH, Math.round(rollPos) % total, blank, 4, stretch);
 }
 const power = { state: 'on', t: 0 };
 
@@ -204,18 +211,18 @@ function beamPass() {
 function blit() {
   const d = img.data;
   if (tubeMode === 'none') {
-    rgbaSmall = phosphor.toRGBA(rgbaSmall, { scale: knobs.bright, tint: knobs.tint, contrast: knobs.contrast });
+    rgbaSmall = phosphor.toRGBA(rgbaSmall, { scale: knobs.bright, tint: knobs.tintOn ? knobs.tint : 0, contrast: knobs.contrast });
     for (let y = 0; y < SH; y++) {
       for (let x = 0; x < SW; x++) {
         const s = (y * SW + x) * 4;
         let o = (y * 2 * 640 + x) * 4;
         d[o] = rgbaSmall[s]; d[o + 1] = rgbaSmall[s + 1]; d[o + 2] = rgbaSmall[s + 2]; d[o + 3] = 255;
         o += 640 * 4;
-        d[o] = rgbaSmall[s] * .55; d[o + 1] = rgbaSmall[s + 1] * .55; d[o + 2] = rgbaSmall[s + 2] * .55; d[o + 3] = 255;
+        d[o] = rgbaSmall[s] * line2; d[o + 1] = rgbaSmall[s + 1] * line2; d[o + 2] = rgbaSmall[s + 2] * line2; d[o + 3] = 255;
       }
     }
   } else {
-    getTube().apply(phosphor.composite(), d, { scale: knobs.bright, tint: knobs.tint, contrast: knobs.contrast });
+    getTube().apply(phosphor.composite(), d, { scale: knobs.bright, tint: knobs.tintOn ? knobs.tint : 0, contrast: knobs.contrast });
   }
   ctx.putImageData(img, 0, 0);
 }
@@ -226,14 +233,17 @@ function loop(now) {
   acc += Math.min(0.1, (now - last) / 1000);
   last = now;
   const t0 = performance.now();
-  grabFrame();
+  // interlaced: grab a new frame every OTHER field, so both fields of a
+  // pair come from the same source frame — no combing on moving edges
+  // (2:2 pulldown, the film/anime-correct behavior)
+  if (!interlaced || (frameNo & 1) === 0) grabFrame();
   let steps = 0;
   while (acc >= FR && steps < 2) { acc -= FR; steps++; frameNo++; beamPass(); }
   if (acc > FR) acc = 0; // can't keep up: drop the backlog instead of spiraling
   if (steps) blit();
   workMs = workMs * 0.9 + (performance.now() - t0) * 0.1;
   guts.textContent =
-    `${workMs.toFixed(1)}ms/frame${workMs > 24 ? ' (重い: 物理OFFかFOCUS 0を試して)' : ''}  ` +
+    `${workMs.toFixed(1)}ms/frame${workMs > 24 ? ' (' + t('重い: 物理OFFかFOCUS 0を試して') + ')' : ''}  ` +
     `phosphor=${PHOSPHORS[phosName].name}  tube=${tubeMode}${interlaced ? '  interlaced' : ''}` +
     `${phosphor.burnRate ? '  burn-in!' : ''}  power=${power.state}` +
     `  video=${video.videoWidth}x${video.videoHeight} rs=${video.readyState}${video.paused ? ' paused' : ''}\n${status}`;
@@ -241,6 +251,7 @@ function loop(now) {
 }
 requestAnimationFrame(loop);
 
+let line2 = 0.55; // 200-line: visible scanline gaps; 400-line: solid
 const $ = (id) => document.getElementById(id);
 function tryPlay() {
   const p = video.play();
@@ -316,6 +327,11 @@ for (const [k, el] of Object.entries(tubeBtns)) {
   el.onclick = () => { tubeMode = k; for (const [k2, el2] of Object.entries(tubeBtns)) el2.classList.toggle('on', k2 === k); };
 }
 $('binterlace').onclick = () => { interlaced = !interlaced; $('binterlace').classList.toggle('on', interlaced); };
+$('b400').onclick = () => {
+  const on = $('b400').classList.toggle('on');
+  line2 = on ? 1.0 : 0.55;
+  for (const tb of Object.values(tubes)) tb.setGeometry({ scanlineDepth: on ? 0.05 : 0.35 });
+};
 $('kfocus').oninput = (e) => { knobs.focus = +e.target.value; for (const t of Object.values(tubes)) t.beamWidth = knobs.focus; };
 const regeo = () => {
   for (const t of Object.values(tubes)) {
@@ -330,6 +346,7 @@ $('kconv').oninput = (e) => { knobs.conv = +e.target.value; regeo(); };
 $('kbarrel').oninput = (e) => { knobs.barrel = +e.target.value; regeo(); };
 $('kcontrast').oninput = (e) => { knobs.contrast = +e.target.value; };
 $('ktint').oninput = (e) => { knobs.tint = (+e.target.value) * Math.PI / 180; }; // 度→rad、NTSCのTINTつまみ
+$('ctint').onchange = (e) => { knobs.tintOn = e.target.checked; };
 $('kvhold').oninput = (e) => { knobs.vhold = +e.target.value; };
 </script>
 </body>

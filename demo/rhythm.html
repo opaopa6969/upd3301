@@ -43,7 +43,7 @@
 </div>
 <table id="grid"></table>
 <div id="log"></div>
-<p class="note">
+<p class="note" id="note-rhythm">
   鍵盤代わり: <b>Z</b>=シーク <b>X</b>=ヘッドロード <b>C</b>=MOTORリレー <b>V</b>=BEEP。
   昔、PC-8031のヘッドシークがうるさすぎてドラムマシンにされてた文化と、
   N-BASICの <b>MOTOR文</b>（カセットリレーが port 30h の d3 でカチッと鳴る）への
@@ -51,6 +51,7 @@
   同じ音を出すときのOUT命令。音はぜんぶWebAudio合成（実録じゃなくて物理の真似）。
 </p>
 <script type="module">
+import { applyI18n, t } from './i18n.js';
 const TRACKS = [
   { name: 'FDD SEEK (ガガガッ)', key: 'z', out: 'PC-8031 CMD: SEEK TRK+6' },
   { name: 'HEAD LOAD (ゴトッ)', key: 'x', out: 'PC-8031 CMD: HEAD LOAD' },
@@ -179,7 +180,7 @@ TRACKS.forEach((trk, i) => {
   const tr = document.createElement('tr');
   const name = document.createElement('td');
   name.className = 'trk';
-  name.textContent = `[${trk.key.toUpperCase()}] ${trk.name}`;
+  name.textContent = `[${trk.key.toUpperCase()}] ${t(trk.name)}`;
   tr.appendChild(name);
   cellEls.push([]);
   for (let s = 0; s < STEPS; s++) {
@@ -221,6 +222,7 @@ document.getElementById('bdemo').onclick = () => loadPattern(DEMO);
 document.getElementById('bclear').onclick = () => loadPattern(['', '', '', '']);
 const bpmv = document.getElementById('bpmv');
 document.getElementById('kbpm').oninput = (e) => { bpm = +e.target.value; bpmv.textContent = bpm; };
+applyI18n();
 
 document.addEventListener('keydown', (e) => {
   const i = TRACKS.findIndex((t) => t.key === e.key.toLowerCase());

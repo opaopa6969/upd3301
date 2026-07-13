@@ -48,6 +48,7 @@ export class CrtTube {
     vSize = 1.0, // V-SIZE knob: vertical scan height
     edgeDefocus = 0.35, // how much focus degrades per r² (oblique landing)
     convergence = 0.0035, // R/B gun mis-registration per r² (color fringes)
+    scanlineDepth = 0.35, // 200-line look: dark gaps between scanlines (0 = 400-line)
   } = {}) {
     this.srcWidth = srcWidth;
     this.srcHeight = srcHeight;
@@ -58,7 +59,7 @@ export class CrtTube {
     this.edgeDefocus = edgeDefocus;
     this.geometry = {
       mask, maskPitch, maskLeak, barrel, ghostShift, vignette,
-      hSize, vSize, convergence,
+      hSize, vSize, convergence, scanlineDepth,
     };
 
     const n = outWidth * outHeight;
@@ -86,7 +87,7 @@ export class CrtTube {
     const { srcWidth, srcHeight, outWidth, outHeight } = this;
     const {
       mask, maskPitch, maskLeak, barrel, ghostShift, vignette,
-      hSize, vSize, convergence,
+      hSize, vSize, convergence, scanlineDepth,
     } = this.geometry;
     const gain = mask === 'none' ? 1 : Math.min(2.2, 3 / (1 + 2 * maskLeak));
     // convergence error per gun: R and B deflect to opposite sides of G
@@ -131,19 +132,25 @@ export class CrtTube {
         } else {
           this.lutGhostIdx[i] = 0;
         }
-        this.lutVig[i] = Math.max(0, 1 - vignette * r2 * r2);
+        let vigv = Math.max(0, 1 - vignette * r2 * r2);
+        // scanline structure: the beam draws discrete lines; between them
+        // the phosphor stays darker. 200-line mode shows the gaps, 400-line
+        // (24 kHz) packs lines too tightly to see them (scanlineDepth→0).
+        if (scanlineDepth > 0 && Math.abs(bv) <= 1) {
+          const sy = (bv + 1) / 2 * srcHeight;
+          const f = sy - Math.floor(sy);
+          vigv *= 1 - scanlineDepth * 4 * f * (1 - f);
+        }
+        this.lutVig[i] = vigv;
 
-        // mask pattern — area-sampled, not point-sampled: one output pixel
-        // spans [a, b) in stripe units (period 3, one unit per gun), and
-        // each gun's transmission comes from how much of the pixel lies on
-        // its stripe. Point sampling skips whole stripes when pitch < 3
-        // (a 2px pitch never lands on phase 2 → blue dies → yellow cast).
-        let mr = 1, mg = 1, mb = 1;
-        if (mask === 'aperture' || mask === 'slot' || mask === 'shadow') {
-          const stagger = mask === 'shadow'
-            ? (Math.floor(y / maskPitch) % 2) * (maskPitch / 2) : 0;
-          const a = (x + stagger) * 3 / maskPitch;
-          const b = (x + stagger + 1) * 3 / maskPitch;
+        // mask pattern
+        let mr = 1, mg = 1, mb = 1, g2 = gain;
+        if (mask === 'aperture' || mask === 'slot') {
+          // stripes, area-sampled: one output pixel spans [a, b) in stripe
+          // units (period 3, one unit per gun); point sampling would skip
+          // whole stripes when pitch < 3 (blue dies → yellow cast).
+          const a = x * 3 / maskPitch;
+          const b = (x + 1) * 3 / maskPitch;
           const cov = [0, 0, 0];
           for (let k = Math.floor(a / 3) - 1; k * 3 < b; k++) {
             for (let c = 0; c < 3; c++) {
@@ -155,15 +162,45 @@ export class CrtTube {
           mr = maskLeak + (1 - maskLeak) * cov[0] / len;
           mg = maskLeak + (1 - maskLeak) * cov[1] / len;
           mb = maskLeak + (1 - maskLeak) * cov[2] / len;
-          if (mask === 'slot' || mask === 'shadow') {
-            // dark horizontal gaps between slots/dots, staggered by column
+          if (mask === 'slot') {
+            // dark horizontal gaps between slots, staggered by column
             const colStagger = (Math.floor(x / maskPitch) % 2) * ((maskPitch * 2) >> 1);
             if ((y + colStagger) % (maskPitch * 2) === 0) { mr *= 0.35; mg *= 0.35; mb *= 0.35; }
           }
+        } else if (mask === 'shadow') {
+          // the real shadow mask: round-dot triads in delta (∵) arrangement
+          // on a hex lattice — per gun, transmission is a soft circular
+          // aperture around the nearest dot center of that gun's sublattice
+          const p = maskPitch * 2; // triad pitch in output pixels
+          const hh = p * 0.866; // hex row height
+          const r0 = p * 0.30, aa = 0.8; // dot radius, anti-alias width
+          const D = [[0, -0.29 * p], [-0.25 * p, 0.145 * p], [0.25 * p, 0.145 * p]]; // R G B ∵
+          const m = [0, 0, 0];
+          for (let c = 0; c < 3; c++) {
+            let best = 1e9;
+            const ry = Math.round(y / hh);
+            for (let dr = -1; dr <= 1; dr++) {
+              const row = ry + dr;
+              const cy2 = row * hh + D[c][1];
+              const xoff = (row & 1) * (p / 2) + D[c][0];
+              const rx = Math.round((x - xoff) / p);
+              for (let dc = -1; dc <= 1; dc++) {
+                const cx2 = (rx + dc) * p + xoff;
+                const d2 = (x - cx2) * (x - cx2) + (y - cy2) * (y - cy2);
+                if (d2 < best) best = d2;
+              }
+            }
+            const cov = Math.min(1, Math.max(0, (r0 + aa / 2 - Math.sqrt(best)) / aa));
+            m[c] = maskLeak + (1 - maskLeak) * cov;
+          }
+          [mr, mg, mb] = m;
+          // brightness normalization: average circular coverage per gun
+          const avgCov = Math.PI * r0 * r0 / (p * hh);
+          g2 = Math.min(2.5, 1 / (maskLeak + (1 - maskLeak) * avgCov));
         }
-        this.maskR[i] = mr * gain;
-        this.maskG[i] = mg * gain;
-        this.maskB[i] = mb * gain;
+        this.maskR[i] = mr * g2;
+        this.maskG[i] = mg * g2;
+        this.maskB[i] = mb * g2;
       }
     }
     return this;

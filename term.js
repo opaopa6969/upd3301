@@ -34,15 +34,22 @@ const DEFAULT_FUNC = 0x00;
 export class Terminal {
   constructor({
     cols = 80, rows = 25, ex = false, frameHz = 60,
-    sys = null, vramBase = null, showCursor = true,
+    sys = null, vramBase = null, showCursor = true, attrsPerRow = null,
   } = {}) {
     this.cols = cols;
     this.rows = rows;
     this.ex = ex;
     this.showCursor = showCursor;
-    this.sys = sys ?? new Pc8001TextSystem({ frameHz });
+    const base = vramBase ?? 0x4000;
+    const attrs = attrsPerRow ?? cols * 2;
+    let memoryBytes = 0x10000;
     if (ex) {
-      const geo = this.sys.initTextModeEx({ cols, rows, vramBase: vramBase ?? 0x4000 });
+      const need = base + rows * (cols + attrs * 2);
+      while (memoryBytes < need) memoryBytes *= 2; // UEX: fantasy RAM expansion
+    }
+    this.sys = sys ?? new Pc8001TextSystem({ frameHz, memoryBytes });
+    if (ex) {
+      const geo = this.sys.initTextModeEx({ cols, rows, attrsPerRow: attrs, vramBase: base });
       this.attrSlots = geo.attrsPerRow;
       this.vramBase = geo.vramBase;
     } else {

@@ -93,7 +93,11 @@ export class Upd8257 {
   // encoding. Used for extended terminal screens whose frame exceeds 16K.
   setChannelEx(ch, { addr, count, autoload = true }) {
     const c = this.channels[ch];
-    c.baseAddr = addr & 0xffff;
+    // extended address mask: smallest power of two covering the transfer
+    let mask = 0xffff;
+    while (mask < addr + count - 1) mask = (mask << 1) | 1;
+    c.exMask = mask;
+    c.baseAddr = addr & mask;
     c.addr = c.baseAddr;
     c.mode = DMA_MODE.READ;
     c.exCount = count;
@@ -115,9 +119,10 @@ export class Upd8257 {
     const c = this.channels[ch];
     if (!this.enabled(ch)) return 0;
     let served = 0;
+    const mask = c.exCount != null ? c.exMask : 0xffff;
     for (let i = 0; i < buf.length; i++) {
-      buf[i] = this.readMemory(c.addr & 0xffff) & 0xff;
-      c.addr = (c.addr + 1) & 0xffff;
+      buf[i] = this.readMemory(c.addr & mask) & 0xff;
+      c.addr = (c.addr + 1) & mask;
       served++;
       if (c.count === 0) {
         // terminal count reached on this byte

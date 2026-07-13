@@ -36,7 +36,7 @@
   <button id="brainbow">虹テスト (ペア溢れ実験)</button>
 </div>
 <div id="guts"></div>
-<p class="note">
+<p class="note" id="note-term">
   キャンバスをクリックしてキー入力（Enter/Backspace対応、コマンド: help / beer / 3301 / clear）。
   ESCシーケンス（SGR色・反転・点滅・下線、カーソル移動、消去）が
   行ごとの (位置, 値) アトリビュートペアにコンパイルされてVRAMへ落ち、
@@ -46,6 +46,8 @@
   アトリビュート。セミグラAPI（setDot）のサイン波も描いてある。
 </p>
 <script type="module">
+import { applyI18n, t } from './i18n.js';
+applyI18n();
 import { Terminal } from '../term.js';
 import { buildFont } from './font.js';
 

@@ -58,8 +58,14 @@
 </div>
 <div class="row"><span class="lbl">モード:</span>
   <button id="gex" class="on">EX 160×50 (セル毎8色)</button>
+  <button id="guex">UEX 320×100 (640×400ドット)</button>
   <button id="gorig">ORIGINAL 80×25 (20ペア/行)</button>
+</div>
+<div class="row"><span class="lbl">変換:</span>
+  <button id="mdither" class="on">ディザ</button>
+  <button id="mline">線画 (アニメ)</button>
   <button id="bauto" class="on">動的2値化 (自動レベル)</button>
+  <button id="b27">27色ちらつき</button>
   <label class="lbl"><input type="range" id="kgain" min="0.5" max="3" step="0.1" value="1.3" style="accent-color:#4a8"> GAIN</label>
 </div>
 <div class="row"><span class="lbl">蛍光体:</span>
@@ -73,29 +79,38 @@
   <button id="taperture">グリル</button>
   <button id="tshadow">シャドウ</button>
   <button id="tslot">スロット</button>
+  <button id="b400">400ライン</button>
 </div>
 <div class="row knobs"><span class="lbl">ノブ:</span>
   <label>FOCUS <input type="range" id="kfocus" min="0" max="2" step="0.05" value="0.6"></label>
+  <label>H-SIZE <input type="range" id="khsize" min="0.7" max="1.15" step="0.01" value="1"></label>
+  <label>V-SIZE <input type="range" id="kvsize" min="0.7" max="1.15" step="0.01" value="1"></label>
   <label>BRIGHT <input type="range" id="kbright" min="0.4" max="3" step="0.05" value="1.2"></label>
-  <label>CONTRAST <input type="range" id="kcontrast" min="0.5" max="1.8" step="0.05" value="1"></label>
-  <label>TINT <input type="range" id="ktint" min="-60" max="60" step="1" value="0"></label>
+  <label>PITCH <input type="range" id="kpitch" min="2" max="9" step="1" value="3"></label>
+  <label>CONV <input type="range" id="kconv" min="0" max="0.02" step="0.001" value="0.004"></label>
   <label>BARREL <input type="range" id="kbarrel" min="-0.12" max="0.25" step="0.01" value="0.05"></label>
+  <label>CONTRAST <input type="range" id="kcontrast" min="0.5" max="1.8" step="0.05" value="1"></label>
+  <label>TINT<input type="checkbox" id="ctint" style="margin:2px"> <input type="range" id="ktint" min="-60" max="60" step="1" value="0"></label>
+  <label>V-HOLD <input type="range" id="kvhold" min="-20" max="20" step="0.5" value="0"></label>
 </div>
 <div id="guts"></div>
-<p class="note">
+<p class="note" id="note-video">
   ルマはセミグラのドット格子（セルあたり2×4）、クロマはセル格子（1セル1色）—
   PC-8001 / ZX Spectrum / MSX1 系譜のアトリビュートクラッシュ美学。
-  動的2値化は毎フレーム輝度2%〜98%パーセンタイルでレベルを自動ストレッチ
-  してからBayerディザにかける（暗い動画でもドット密度を使い切る）。
-  さらに蛍光体＋管（crt.js / tube.js）を通せる — セミグラ映像をP7レーダー管で
-  観るという誰得の極致ｗ EXモードは1280×400源泉なので管ONは少し重い。
-  ms/frame 表示を見て、重ければ物理OFFで。
+  動的2値化は毎フレーム輝度2%〜98%パーセンタイルでレベルをストレッチしてから
+  Bayerディザ。線画モードはチャネル別の領域境界検出（アニメはフラット塗り＝
+  境界が線）。27色ちらつきは各ガンを3値化して中間レベルを1フレーム交互点滅 —
+  長残光蛍光体と合わせて見るやつ。UEX 320×100は64KB超の架空RAM＋DMAC拡張が
+  要る大画面で、管ONだと重い。ms/frame を見ながらどうぞ。
+  スロットマスク＋FOCUS甘めが良い感じｗ
 </p>
 <script type="module">
+import { applyI18n, t } from './i18n.js';
+applyI18n();
 import { Terminal } from '../term.js';
-import { rgbaToSemigraphic } from '../semivideo.js';
+import { rgbaToSemigraphic, rgbaToLineArt } from '../semivideo.js';
 import { ATTR } from '../pc8001.js';
-import { CrtPhosphor, PHOSPHORS } from '../crt.js';
+import { CrtPhosphor, PHOSPHORS, rollScan } from '../crt.js';
 import { CrtTube } from '../tube.js';
 
 const canvas = document.getElementById('crt');
@@ -109,7 +124,7 @@ let status = '';
 const say = (m) => { status = m; };
 window.onerror = (m) => say('ERROR: ' + m);
 video.addEventListener('error', () => {
-  const codes = { 3: 'DECODE (コーデック非対応かも — H.264のmp4かwebmで試して)', 4: 'SRC_NOT_SUPPORTED (この形式は無理)' };
+  const codes = { 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
   say('video error: ' + (codes[video.error?.code] ?? video.error?.code));
 });
 video.addEventListener('loadeddata', () => say(`loaded ${video.videoWidth}x${video.videoHeight}`));
@@ -124,35 +139,42 @@ function makeGrab(w, h) {
   return c.getContext('2d', { willReadFrequently: true });
 }
 
-let geometry = 'ex'; // 'ex' | 'orig'
-let autoLevels = true, gain = 1.3;
-let term = null, img = null, grab = null, idxBuf = null;
+let geometry = 'ex'; // 'ex' | 'uex' | 'orig'
+let convMode = 'dither'; // 'dither' | 'line'
+let autoLevels = true, flicker27 = false, gain = 1.3, phase = 0;
+let term = null, img = null, grab = null, idxBuf = null, rollBuf = null;
 let phosphor = null;
 let tubeMode = 'none', tubes = {};
-const knobs = { focus: 0.6, bright: 1.2, contrast: 1, tint: 0, barrel: 0.05 };
-let W = 0, H = 0; // rendered indexed size
+const knobs = {
+  focus: 0.6, hSize: 1, vSize: 1, bright: 1.2, pitch: 3, conv: 0.004,
+  barrel: 0.05, contrast: 1, tint: 0, tintOn: false, vhold: 0,
+};
+let W = 0, H = 0, phosName = 'P22';
+let rollPos = 0;
 
 function boot() {
-  term = geometry === 'ex'
-    ? new Terminal({ cols: 160, rows: 50, ex: true, showCursor: false })
+  term = geometry === 'ex' ? new Terminal({ cols: 160, rows: 50, ex: true, showCursor: false })
+    : geometry === 'uex' ? new Terminal({ cols: 320, rows: 100, ex: true, attrsPerRow: 320, showCursor: false })
     : new Terminal({ cols: 80, rows: 25, ex: false, showCursor: false });
   W = term.cols * 8; H = term.rows * 8;
   canvas.width = W; canvas.height = H * 2;
   img = ctx.createImageData(W, H * 2);
   grab = makeGrab(term.dotWidth, term.dotHeight);
   idxBuf = new Uint8Array(W * H);
+  rollBuf = new Uint8Array(W * H);
+  rollPos = 0;
   phosphor = new CrtPhosphor({ width: W, height: H, phosphor: PHOSPHORS[phosName] });
   tubes = {};
   term.write('\x1b[2J\x1b[H\x1b[36m  LOAD A VIDEO OR START THE WEBCAM\x1b[0m');
   term.flush();
 }
 
-let phosName = 'P22';
 function getTube() {
   if (!tubes[tubeMode]) {
     tubes[tubeMode] = new CrtTube({
       srcWidth: W, srcHeight: H, outWidth: W, outHeight: H * 2,
-      mask: tubeMode, maskPitch: 3, barrel: knobs.barrel, beamWidth: knobs.focus,
+      mask: tubeMode, maskPitch: knobs.pitch, convergence: knobs.conv, barrel: knobs.barrel,
+      beamWidth: knobs.focus, hSize: knobs.hSize, vSize: knobs.vSize,
     });
   }
   return tubes[tubeMode];
@@ -163,7 +185,11 @@ function frameToCells() {
   const dw = term.dotWidth, dh = term.dotHeight;
   grab.drawImage(video, 0, 0, dw, dh);
   const rgba = grab.getImageData(0, 0, dw, dh).data;
-  const { codes, colors } = rgbaToSemigraphic(rgba, dw, dh, { gain, autoLevels });
+  phase ^= 1;
+  const r = convMode === 'line'
+    ? rgbaToLineArt(rgba, dw, dh, { edgeGain: gain, autoLevels })
+    : rgbaToSemigraphic(rgba, dw, dh, { gain, autoLevels, temporalPhase: flicker27 ? phase : null });
+  const { codes, colors } = r;
   for (let i = 0; i < codes.length; i++) {
     term.chars[i] = codes[i];
     term.colorA[i] = (colors[i] << 5) | ATTR.SEMIGRAPHIC | ATTR.COLOR_FLAG;
@@ -173,24 +199,41 @@ function frameToCells() {
   term.flush();
 }
 
+// V-HOLD (violent flavor: speed wobbles near lock, vertical size breathes)
+function vholdApply(src, dst) {
+  const blank = Math.round(H * 0.12), total = H + blank;
+  if (knobs.vhold !== 0) {
+    const wobble = 1 + 0.8 * Math.sin(rollPos / total * Math.PI * 2);
+    rollPos = (rollPos + knobs.vhold * wobble + total) % total;
+  } else if (rollPos !== 0) {
+    rollPos = rollPos < total / 2 ? rollPos * 0.8 : total - (total - rollPos) * 0.8;
+    if (rollPos < 0.6 || rollPos > total - 0.6) rollPos = 0;
+  }
+  if (rollPos === 0) return src;
+  const stretch = 1 + Math.min(0.5, Math.abs(knobs.vhold) * 0.03)
+    * Math.sin(rollPos / total * Math.PI * 4);
+  return rollScan(src, dst, W, H, Math.round(rollPos) % total, blank, 1, stretch);
+}
+
 const cgromEmpty = new Uint8Array(256 * 16);
 let rgbaSmall = null;
 
 function blit() {
   const d = img.data;
+  const opts = { scale: knobs.bright, tint: knobs.tintOn ? knobs.tint : 0, contrast: knobs.contrast };
   if (tubeMode === 'none') {
-    rgbaSmall = phosphor.toRGBA(rgbaSmall, { scale: knobs.bright, tint: knobs.tint, contrast: knobs.contrast });
+    rgbaSmall = phosphor.toRGBA(rgbaSmall, opts);
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const s = (y * W + x) * 4;
         let o = (y * 2 * W + x) * 4;
         d[o] = rgbaSmall[s]; d[o + 1] = rgbaSmall[s + 1]; d[o + 2] = rgbaSmall[s + 2]; d[o + 3] = 255;
         o += W * 4;
-        d[o] = rgbaSmall[s] * .55; d[o + 1] = rgbaSmall[s + 1] * .55; d[o + 2] = rgbaSmall[s + 2] * .55; d[o + 3] = 255;
+        d[o] = rgbaSmall[s] * line2; d[o + 1] = rgbaSmall[s + 1] * line2; d[o + 2] = rgbaSmall[s + 2] * line2; d[o + 3] = 255;
       }
     }
   } else {
-    getTube().apply(phosphor.composite(), d, { scale: knobs.bright, tint: knobs.tint, contrast: knobs.contrast });
+    getTube().apply(phosphor.composite(), d, opts);
   }
   ctx.putImageData(img, 0, 0);
 }
@@ -207,14 +250,14 @@ function loop(now) {
     acc -= FR; steps++;
     term.sys.crtc.stepFrame();
     term.sys.render({ cgrom: cgromEmpty, out: idxBuf });
-    phosphor.step(idxBuf, FR);
+    phosphor.step(vholdApply(idxBuf, rollBuf), FR);
   }
   if (acc > FR) acc = 0; // drop the backlog instead of spiraling
   if (steps) blit();
   workMs = workMs * 0.9 + (performance.now() - t0) * 0.1;
   guts.textContent =
-    `${workMs.toFixed(1)}ms/frame${workMs > 24 ? ' (重い: 物理OFF/ORIGINALを試して)' : ''}  ` +
-    `mode=${geometry}  ${term.cols}x${term.rows} cells  overflowRows=${term.stats.overflowRows}` +
+    `${workMs.toFixed(1)}ms/frame${workMs > 24 ? ' (' + t('重い: 物理OFF/ORIGINALを試して') + ')' : ''}  ` +
+    `mode=${geometry}/${convMode}${flicker27 ? '/27c' : ''}  ${term.cols}x${term.rows} cells` +
     `  autoLevels=${autoLevels ? 'on' : 'off'} gain=${gain.toFixed(1)}` +
     `  phosphor=${phosName} tube=${tubeMode}` +
     `  video=${video.videoWidth}x${video.videoHeight} rs=${video.readyState}${video.paused ? ' paused' : ''}\n${status}`;
@@ -222,10 +265,11 @@ function loop(now) {
 }
 requestAnimationFrame(loop);
 
+let line2 = 0.55; // 200-line: visible scanline gaps; 400-line: solid
 const $ = (id) => document.getElementById(id);
 function tryPlay() {
   const p = video.play();
-  if (p && p.catch) p.catch((err) => say('play(): ' + err.message + ' — ⏯を押して'));
+  if (p && p.catch) p.catch((err) => say('play(): ' + err.message));
 }
 $('file').onchange = (e) => {
   const f = e.target.files[0];
@@ -279,10 +323,31 @@ stage.addEventListener('mousemove', () => {
   idleTimer = setTimeout(() => stage.classList.add('idle'), 2500);
 });
 
-// modes / conversion
-$('gex').onclick = () => { geometry = 'ex'; boot(); $('gex').classList.add('on'); $('gorig').classList.remove('on'); };
-$('gorig').onclick = () => { geometry = 'orig'; boot(); $('gorig').classList.add('on'); $('gex').classList.remove('on'); };
+// geometry / conversion
+const geoBtns = { ex: $('gex'), uex: $('guex'), orig: $('gorig') };
+for (const [k, el] of Object.entries(geoBtns)) {
+  el.onclick = () => {
+    geometry = k; boot();
+    for (const [k2, el2] of Object.entries(geoBtns)) el2.classList.toggle('on', k2 === k);
+  };
+}
+$('mdither').onclick = () => { convMode = 'dither'; $('mdither').classList.add('on'); $('mline').classList.remove('on'); };
+$('mline').onclick = () => { convMode = 'line'; $('mline').classList.add('on'); $('mdither').classList.remove('on'); };
 $('bauto').onclick = () => { autoLevels = !autoLevels; $('bauto').classList.toggle('on', autoLevels); };
+$('b400').onclick = () => {
+  const on = $('b400').classList.toggle('on');
+  line2 = on ? 1.0 : 0.55;
+  for (const tb of Object.values(tubes)) tb.setGeometry({ scanlineDepth: on ? 0.05 : 0.35 });
+};
+$('b27').onclick = () => {
+  flicker27 = !flicker27;
+  $('b27').classList.toggle('on', flicker27);
+  if (flicker27 && phosName === 'P22') { // the trick needs afterglow to read
+    phosName = 'LONG';
+    phosphor.setPhosphor(PHOSPHORS.LONG);
+    for (const [k2, el2] of Object.entries(phosBtns)) el2.classList.toggle('on', k2 === 'LONG');
+  }
+};
 $('kgain').oninput = (e) => { gain = +e.target.value; };
 
 // CRT
@@ -298,11 +363,25 @@ const tubeBtns = { none: $('tnone'), aperture: $('taperture'), shadow: $('tshado
 for (const [k, el] of Object.entries(tubeBtns)) {
   el.onclick = () => { tubeMode = k; for (const [k2, el2] of Object.entries(tubeBtns)) el2.classList.toggle('on', k2 === k); };
 }
-$('kfocus').oninput = (e) => { knobs.focus = +e.target.value; for (const t of Object.values(tubes)) t.beamWidth = knobs.focus; };
+const regeo = () => {
+  for (const tb of Object.values(tubes)) {
+    tb.setGeometry({
+      hSize: knobs.hSize, vSize: knobs.vSize, maskPitch: knobs.pitch,
+      convergence: knobs.conv, barrel: knobs.barrel,
+    });
+  }
+};
+$('kfocus').oninput = (e) => { knobs.focus = +e.target.value; for (const tb of Object.values(tubes)) tb.beamWidth = knobs.focus; };
+$('khsize').oninput = (e) => { knobs.hSize = +e.target.value; regeo(); };
+$('kvsize').oninput = (e) => { knobs.vSize = +e.target.value; regeo(); };
 $('kbright').oninput = (e) => { knobs.bright = +e.target.value; };
+$('kpitch').oninput = (e) => { knobs.pitch = +e.target.value; regeo(); };
+$('kconv').oninput = (e) => { knobs.conv = +e.target.value; regeo(); };
+$('kbarrel').oninput = (e) => { knobs.barrel = +e.target.value; regeo(); };
 $('kcontrast').oninput = (e) => { knobs.contrast = +e.target.value; };
 $('ktint').oninput = (e) => { knobs.tint = (+e.target.value) * Math.PI / 180; };
-$('kbarrel').oninput = (e) => { knobs.barrel = +e.target.value; for (const t of Object.values(tubes)) t.setGeometry({ barrel: knobs.barrel }); };
+$('ctint').onchange = (e) => { knobs.tintOn = e.target.checked; };
+$('kvhold').oninput = (e) => { knobs.vhold = +e.target.value; };
 </script>
 </body>
 </html>

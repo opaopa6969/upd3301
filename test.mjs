@@ -374,7 +374,7 @@ test('interlace: only the driven field is excited, the other decays', () => {
 test('tube is deterministic and centers map ~identity', async () => {
   const { CrtTube } = await import('./tube.js');
   const mk = () => {
-    const tube = new CrtTube({ srcWidth: 64, srcHeight: 32, outWidth: 64, outHeight: 64, mask: 'none', ghost: 0, barrel: 0.05, beamWidth: 0, edgeDefocus: 0, convergence: 0 });
+    const tube = new CrtTube({ srcWidth: 64, srcHeight: 32, outWidth: 64, outHeight: 64, mask: 'none', ghost: 0, barrel: 0.05, beamWidth: 0, edgeDefocus: 0, convergence: 0, scanlineDepth: 0 });
     const lum = [new Float32Array(64 * 32), new Float32Array(64 * 32), new Float32Array(64 * 32)];
     lum[0][16 * 64 + 32] = 1; // single red dot at center
     return tube.apply(lum);
@@ -393,7 +393,7 @@ test('aperture grille passes each gun mainly through its own stripe', async () =
   const tube = new CrtTube({
     srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
     mask: 'aperture', maskPitch: 3, maskLeak: 0.1,
-    barrel: 0, ghost: 0, vignette: 0, beamWidth: 0, edgeDefocus: 0, convergence: 0,
+    barrel: 0, ghost: 0, vignette: 0, beamWidth: 0, edgeDefocus: 0, convergence: 0, scanlineDepth: 0,
   });
   const flat = new Float32Array(W * H).fill(0.5); // uniform white field
   const rgba = tube.apply([flat, flat, flat], null, { gamma: 1 });
@@ -415,7 +415,7 @@ test('beam spot blur bleeds a hard edge (the nijimi)', async () => {
   const W = 32, H = 8;
   const mk = (beamWidth) => new CrtTube({
     srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
-    mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth, edgeDefocus: 0, convergence: 0,
+    mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth, edgeDefocus: 0, convergence: 0, scanlineDepth: 0,
   });
   const lum = new Float32Array(W * H);
   for (let y = 0; y < H; y++) for (let x = 16; x < W; x++) lum[y * W + x] = 1;
@@ -477,7 +477,7 @@ test('H-SIZE knob: shrinking the scan leaves dark borders', async () => {
   const W = 40, H = 10;
   const tube = new CrtTube({
     srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
-    mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth: 0, edgeDefocus: 0, convergence: 0,
+    mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth: 0, edgeDefocus: 0, convergence: 0, scanlineDepth: 0,
   });
   const flat = new Float32Array(W * H).fill(1);
   const lum = [flat, flat, flat];
@@ -500,7 +500,7 @@ test('FOCUS knob: bleed grows monotonically with beam width', async () => {
   const bleedAt = (bw) => {
     const tube = new CrtTube({
       srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
-      mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth: bw, edgeDefocus: 0, convergence: 0,
+      mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth: bw, edgeDefocus: 0, convergence: 0, scanlineDepth: 0,
     });
     return tube.apply([lum, lum, lum], null, { gamma: 1 })[(4 * W + 14) * 4];
   };
@@ -516,7 +516,7 @@ test('oblique landing: edges defocus and R/B converge apart', async () => {
   const tube = new CrtTube({
     srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
     mask: 'none', barrel: 0, ghost: 0, vignette: 0,
-    beamWidth: 0, edgeDefocus: 0.8, convergence: 0.02,
+    beamWidth: 0, edgeDefocus: 0.8, convergence: 0.02, scanlineDepth: 0,
   });
   // vertical white 1px lines at center and near the left edge
   const lum = new Float32Array(W * H);
@@ -691,7 +691,7 @@ test('mask: any pitch keeps color balance (no yellow cast at pitch 2)', async ()
     const tube = new CrtTube({
       srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
       mask: 'aperture', maskPitch: pitch, maskLeak: 0.1,
-      barrel: 0, ghost: 0, vignette: 0, beamWidth: 0, edgeDefocus: 0, convergence: 0,
+      barrel: 0, ghost: 0, vignette: 0, beamWidth: 0, edgeDefocus: 0, convergence: 0, scanlineDepth: 0,
     });
     const flat = new Float32Array(W * H).fill(0.4);
     const rgba = tube.apply([flat, flat, flat], null, { gamma: 1 });
@@ -789,4 +789,88 @@ test('semivideo autoLevels: dark footage stretches to usable density', async () 
   assert.ok(auto < 0.75, `but not blown out (${auto})`);
   const auto2 = density(rgbaToSemigraphic(rgba, W, H, { autoLevels: true }));
   assert.equal(auto, auto2, 'deterministic');
+});
+
+test('line-art mode: flat regions go dark, boundaries light up in region color', async () => {
+  const { rgbaToLineArt } = await import('./semivideo.js');
+  const W = 32, H = 16;
+  const rgba = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const o = (y * W + x) * 4;
+    if (x < 16) rgba[o] = 220; // flat red region
+    else rgba[o + 1] = 200; // flat green region
+    rgba[o + 3] = 255;
+  }
+  const r = rgbaToLineArt(rgba, W, H, { autoLevels: false });
+  let litCells = 0;
+  for (let cy = 0; cy < r.rows; cy++) {
+    for (let cx = 0; cx < r.cols; cx++) {
+      const code = r.codes[cy * r.cols + cx];
+      if (cx <= 5 || cx >= 10) assert.equal(code, 0, `flat region dark at cell ${cx}`);
+      if (code) litCells++;
+    }
+  }
+  assert.ok(litCells >= r.rows, 'the boundary column is lit');
+  const r2 = rgbaToLineArt(rgba, W, H, { autoLevels: false });
+  assert.deepEqual(r.codes, r2.codes, 'deterministic');
+});
+
+test('UEX 320x100: fantasy RAM + extended DMA drive 640x400 dots', async () => {
+  const { Terminal } = await import('./term.js');
+  const t = new Terminal({ cols: 320, rows: 100, ex: true, attrsPerRow: 320, showCursor: false });
+  assert.ok(t.sys.memory.length > 0x10000, 'expanded RAM');
+  t.chars[99 * 320 + 319] = 0xff; // bottom-right cell, full semigraphic block
+  t.colorA[99 * 320 + 319] = (5 << 5) | 0x10 | 0x08; // cyan semigraphic
+  t.flush().update(1 / 60);
+  const img = t.render({ cgrom: new Uint8Array(256 * 16) });
+  assert.equal(img.width, 2560);
+  assert.equal(img.height, 800);
+  assert.equal(img.pixels[(99 * 8) * 2560 + 319 * 8], 5, 'cyan block in the corner');
+});
+
+test('27-color flicker: middle levels alternate between phases', async () => {
+  const { rgbaToSemigraphic } = await import('./semivideo.js');
+  const W = 8, H = 8;
+  const rgba = new Uint8Array(W * H * 4);
+  for (let i = 0; i < W * H; i++) { rgba[i * 4] = 128; rgba[i * 4 + 3] = 255; } // half red
+  const density = (r) => {
+    let lit = 0, total = 0;
+    for (const c of r.codes) for (let b = 0; b < 8; b++) { total++; lit += (c >> b) & 1; }
+    return lit / total;
+  };
+  const p0 = density(rgbaToSemigraphic(rgba, W, H, { temporalPhase: 0 }));
+  const p1 = density(rgbaToSemigraphic(rgba, W, H, { temporalPhase: 1 }));
+  assert.ok(p0 > 0.9, `half level lit on phase 0 (${p0})`);
+  assert.ok(p1 < 0.1, `dark on phase 1 (${p1})`);
+  rgba.fill(255); // full white
+  for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
+  const f0 = density(rgbaToSemigraphic(rgba, W, H, { temporalPhase: 0 }));
+  const f1 = density(rgbaToSemigraphic(rgba, W, H, { temporalPhase: 1 }));
+  assert.ok(f0 > 0.9 && f1 > 0.9, 'full level lit on both phases');
+});
+
+test('shadow mask: round delta-dot triads (∵), not stripes', async () => {
+  const { CrtTube } = await import('./tube.js');
+  const W = 48, H = 48;
+  const tube = new CrtTube({
+    srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
+    mask: 'shadow', maskPitch: 4, maskLeak: 0.1,
+    barrel: 0, ghost: 0, vignette: 0, beamWidth: 0, edgeDefocus: 0, convergence: 0, scanlineDepth: 0,
+  });
+  const flat = new Float32Array(W * H).fill(0.5);
+  const rgba = tube.apply([flat, flat, flat], null, { gamma: 1 });
+  // a stripe mask is constant down a column; round dots must vary in y too
+  let varies = 0;
+  for (let x = 10; x < 30; x++) {
+    const a = rgba[(10 * W + x) * 4], b = rgba[(14 * W + x) * 4];
+    if (Math.abs(a - b) > 25) varies++;
+  }
+  assert.ok(varies > 3, `R transmission varies vertically (${varies} columns)`);
+  let r = 0, g = 0, bl = 0;
+  for (let y = 4; y < 44; y++) for (let x = 4; x < 44; x++) {
+    const o = (y * W + x) * 4;
+    r += rgba[o]; g += rgba[o + 1]; bl += rgba[o + 2];
+  }
+  const mean = (r + g + bl) / 3;
+  for (const v of [r, g, bl]) assert.ok(Math.abs(v - mean) / mean < 0.08, `balanced (${r},${g},${bl})`);
 });

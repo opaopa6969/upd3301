@@ -310,11 +310,15 @@ export function tintMatrix(rad) {
 // vertical blanking interval sweeps through as a dark band. Remap rows
 // with wraparound over (height + blankLines); rows landing in the VBI go
 // dark. bpp: bytes per pixel (1 for GRB-indexed frames, 4 for RGBA).
-export function rollScan(src, dst, width, height, offsetLines, blankLines, bpp = 1) {
+// stretch != 1 warps the row mapping nonlinearly — the vertical size
+// breathes and lines tear/duplicate, which is what a badly detuned
+// oscillator really looks like (it never rolls smoothly).
+export function rollScan(src, dst, width, height, offsetLines, blankLines, bpp = 1, stretch = 1) {
   const total = height + blankLines;
   const rowBytes = width * bpp;
   for (let y = 0; y < height; y++) {
-    const s = (y + offsetLines) % total;
+    let s = Math.floor(y * stretch + offsetLines) % total;
+    if (s < 0) s += total;
     const o = y * rowBytes;
     if (s < height) dst.set(src.subarray(s * rowBytes, (s + 1) * rowBytes), o);
     else dst.fill(0, o, o + rowBytes); // vertical blanking band

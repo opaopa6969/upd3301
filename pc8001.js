@@ -173,8 +173,10 @@ export function renderScreen(screen, {
 // A whole PC-8001-ish text subsystem: 64KB memory + μPD8257 + μPD3301,
 // wired through the real I/O port numbers.
 export class Pc8001TextSystem {
-  constructor({ frameHz = 60 } = {}) {
-    this.memory = new Uint8Array(0x10000);
+  constructor({ frameHz = 60, memoryBytes = 0x10000 } = {}) {
+    // memoryBytes > 64KB is UEX fantasy territory (with the DMAC's extended
+    // address mask) — the real machine tops out at 0x10000
+    this.memory = new Uint8Array(memoryBytes);
     this.dmac = new Upd8257({ readMemory: (a) => this.memory[a] });
     this.crtc = new Upd3301({ frameHz, drq: (buf) => this.dmac.drqPull(2, buf) });
     this.width80 = true;
