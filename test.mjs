@@ -469,3 +469,43 @@ test('burn-in: accumulated dose reduces efficiency', () => {
   const worn = crt.sample(0, 0).r, fresh = crt.sample(1, 0).r;
   assert.ok(worn < fresh * 0.05, `burned pixel is dim (${worn} vs ${fresh})`);
 });
+
+// ---- the knobs on the back ----------------------------------------------
+
+test('H-SIZE knob: shrinking the scan leaves dark borders', async () => {
+  const { CrtTube } = await import('./tube.js');
+  const W = 40, H = 10;
+  const tube = new CrtTube({
+    srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
+    mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth: 0,
+  });
+  const flat = new Float32Array(W * H).fill(1);
+  const lum = [flat, flat, flat];
+  const full = tube.apply(lum, null, { gamma: 1 });
+  assert.ok(full[(5 * W + 1) * 4] > 200, 'hSize=1: lit to the edge');
+  tube.setGeometry({ hSize: 0.7, vSize: 0.7 });
+  const shrunk = tube.apply(lum, null, { gamma: 1 });
+  assert.equal(shrunk[(5 * W + 1) * 4], 0, 'left border dark');
+  assert.equal(shrunk[(0 * W + 20) * 4], 0, 'top border dark');
+  assert.ok(shrunk[(5 * W + 20) * 4] > 200, 'center still lit');
+  tube.setGeometry({ hSize: 1, vSize: 1 });
+  assert.deepEqual(tube.apply(lum, null, { gamma: 1 }), full, 'knob back → identical LUT');
+});
+
+test('FOCUS knob: bleed grows monotonically with beam width', async () => {
+  const { CrtTube } = await import('./tube.js');
+  const W = 32, H = 8;
+  const lum = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 16; x < W; x++) lum[y * W + x] = 1;
+  const bleedAt = (bw) => {
+    const tube = new CrtTube({
+      srcWidth: W, srcHeight: H, outWidth: W, outHeight: H,
+      mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth: bw,
+    });
+    return tube.apply([lum, lum, lum], null, { gamma: 1 })[(4 * W + 14) * 4];
+  };
+  const b = [0, 0.5, 1, 1.5, 2].map(bleedAt);
+  assert.equal(b[0], 0);
+  for (let i = 1; i < b.length; i++) assert.ok(b[i] >= b[i - 1], `monotone: ${b.join(',')}`);
+  assert.ok(b[4] > b[1], 'defocused end clearly softer');
+});

@@ -31,11 +31,13 @@ export class CrtTube {
     mask = 'aperture',
     maskPitch = 3, // output pixels per triad period
     maskLeak = 0.12, // how much of a gun leaks through neighboring openings
-    beamWidth = 1.0, // beam spot radius in source pixels (0 disables blur)
+    beamWidth = 1.0, // FOCUS knob: beam spot size, 0 = sharp, >1 = defocused
     barrel = 0.06, // barrel distortion strength
     ghost = 0.07, // inner-glass reflection strength (0 disables)
     ghostShift = 0.012, // reflection offset toward the center, normalized
     vignette = 0.18,
+    hSize = 1.0, // H-SIZE knob: horizontal scan width (1 = fills the glass)
+    vSize = 1.0, // V-SIZE knob: vertical scan height
   } = {}) {
     this.srcWidth = srcWidth;
     this.srcHeight = srcHeight;
@@ -43,6 +45,7 @@ export class CrtTube {
     this.outHeight = outHeight;
     this.beamWidth = beamWidth;
     this.ghost = ghost;
+    this.geometry = { mask, maskPitch, maskLeak, barrel, ghostShift, vignette, hSize, vSize };
 
     const n = outWidth * outHeight;
     // geometry LUT: source sample position (fixed-point bilinear)
@@ -56,6 +59,19 @@ export class CrtTube {
     this.maskG = new Float32Array(n);
     this.maskB = new Float32Array(n);
 
+    this._blurR = new Float32Array(srcWidth * srcHeight);
+    this._blurG = new Float32Array(srcWidth * srcHeight);
+    this._blurB = new Float32Array(srcWidth * srcHeight);
+    this._tmp = new Float32Array(srcWidth * srcHeight);
+    this._tmp2 = new Float32Array(srcWidth * srcHeight);
+    this.rebuild();
+  }
+
+  // Recompute the geometry + mask LUTs (call after twisting a knob that
+  // changes them: setGeometry). Deterministic — same params, same LUTs.
+  rebuild() {
+    const { srcWidth, srcHeight, outWidth, outHeight } = this;
+    const { mask, maskPitch, maskLeak, barrel, ghostShift, vignette, hSize, vSize } = this.geometry;
     const gain = mask === 'none' ? 1 : Math.min(2.2, 3 / (1 + 2 * maskLeak));
     for (let y = 0; y < outHeight; y++) {
       for (let x = 0; x < outWidth; x++) {
@@ -64,9 +80,11 @@ export class CrtTube {
         const u = (x + 0.5) / outWidth * 2 - 1;
         const v = (y + 0.5) / outHeight * 2 - 1;
         const r2 = u * u + v * v;
-        // barrel: screen coords bulge outward → sample pulls inward at edges
-        const su = u * (1 + barrel * r2);
-        const sv = v * (1 + barrel * r2);
+        // barrel: screen coords bulge outward → sample pulls inward at edges.
+        // H/V-SIZE scale the deflection: smaller size → the raster shrinks
+        // on the glass and the border goes dark, just like the real knob.
+        const su = u * (1 + barrel * r2) / hSize;
+        const sv = v * (1 + barrel * r2) / vSize;
         if (Math.abs(su) > 1 || Math.abs(sv) > 1) {
           this.lutIdx[i] = -1;
           continue;
@@ -111,18 +129,20 @@ export class CrtTube {
         this.maskB[i] = mb * gain;
       }
     }
-
-    this._blurR = new Float32Array(srcWidth * srcHeight);
-    this._blurG = new Float32Array(srcWidth * srcHeight);
-    this._blurB = new Float32Array(srcWidth * srcHeight);
-    this._tmp = new Float32Array(srcWidth * srcHeight);
+    return this;
   }
 
-  // separable 5-tap Gaussian, horizontal then a light vertical pass
-  _blurChannel(src, dst) {
+  // Twist a knob: merge partial geometry (hSize, vSize, barrel, ...) and
+  // rebuild the LUTs.
+  setGeometry(partial) {
+    Object.assign(this.geometry, partial);
+    return this.rebuild();
+  }
+
+  // one separable Gaussian pass: 5-tap horizontal, 3-tap vertical
+  _blurPass(src, dst) {
     const w = this.srcWidth, h = this.srcHeight;
     const t = this._tmp;
-    if (this.beamWidth <= 0) { dst.set(src); return; }
     for (let y = 0; y < h; y++) {
       const o = y * w;
       for (let x = 0; x < w; x++) {
@@ -138,6 +158,24 @@ export class CrtTube {
         dst[o + x] = (t[ym + x] + 2 * t[o + x] + t[yp + x]) / 4;
       }
     }
+  }
+
+  // FOCUS: beamWidth is continuous. 0 = perfectly sharp, 1 = one Gaussian
+  // pass, 2 = two passes; fractions blend between the neighboring integers.
+  _blurChannel(src, dst) {
+    const f = Math.max(0, Math.min(2, this.beamWidth));
+    if (f === 0) { dst.set(src); return; }
+    const n = src.length;
+    this._blurPass(src, dst);
+    if (f <= 1) {
+      if (f < 1) for (let i = 0; i < n; i++) dst[i] = src[i] + (dst[i] - src[i]) * f;
+      return;
+    }
+    const t2 = this._tmp2;
+    t2.set(dst);
+    this._blurPass(t2, dst);
+    const g = f - 1;
+    if (g < 1) for (let i = 0; i < n; i++) dst[i] = t2[i] + (dst[i] - t2[i]) * g;
   }
 
   // lum: [R, G, B] Float32Arrays of srcWidth*srcHeight (phosphor output).
