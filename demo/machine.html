@@ -35,6 +35,7 @@
 <div class="row">
   <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
+  <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">FONT.ROM (任意): <input type="file" id="ffont" style="font-size:11px"></label>
   <button id="breset">リセット</button>
   <button id="bfull">⛶ 全画面</button>
@@ -62,6 +63,7 @@ import { Pc8001Machine } from '../machine.js';
 import { Pc8801Machine } from '../machine88.js';
 import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
+import { parseD88All, summarize } from '../d88.js';
 
 const canvas = document.getElementById('crt');
 const ctx = canvas.getContext('2d');
@@ -161,6 +163,29 @@ $('mn88').onclick = () => {
   $('dipnote').textContent = t('N88起動はFDDサブCPU待ちで停止する（issue #4）');
 };
 for (const id of ['dip1', 'dip2']) $(id).onchange = () => boot();
+
+// Mount a .d88. The image is parsed here (sector IDs, densities, the bad
+// sectors that copy protection lives in) and handed to the machine; actually
+// *booting* from it needs the FDD sub-CPU + μPD765, which is issue #4/#5.
+let disks = [];
+$('fdisk').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    disks = parseD88All(new Uint8Array(await f.arrayBuffer()));
+    if (machine) machine.disks = disks;
+    const s = summarize(disks[0]);
+    const extra = disks.length > 1 ? `  (+${disks.length - 1} more)` : '';
+    $('dipnote').textContent =
+      `${f.name}: ${s.name || '(no label)'} ${s.media}` +
+      ` ${s.tracks}trk ${s.sectors}sec ${(s.bytes / 1024) | 0}KB` +
+      (s.writeProtect ? ' [WP]' : '') +
+      (s.oddities.length ? '  ⚠ ' + s.oddities.join(', ') : '') + extra +
+      '  — ' + t('起動にはFDDサブCPUが必要（issue #4）');
+  } catch (err) {
+    $('dipnote').textContent = 'D88: ' + err.message;
+  }
+};
 const stage = $('stage');
 $('bfull').onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen();

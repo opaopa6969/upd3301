@@ -50,6 +50,8 @@ const DICT = {
   'N-BASIC (N80)': 'N-BASIC (N80)',
   'N88-BASIC (WIP)': 'N88-BASIC (WIP)',
   'N88起動はFDDサブCPU待ちで停止する（issue #4）': 'N88 boot stalls waiting for the FDD sub-CPU (issue #4)',
+  'ディスク(.d88):': 'Disk (.d88):',
+  '起動にはFDDサブCPUが必要（issue #4）': 'booting needs the FDD sub-CPU (issue #4)',
   // index
   'テキスト (80桁)': 'Text (80 col)',
   'テキスト (40桁)': 'Text (40 col)',
