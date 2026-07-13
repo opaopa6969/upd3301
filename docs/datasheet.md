@@ -236,3 +236,42 @@ encodings: arbitrary columns × rows, attribute pairs up to per-cell density,
 DMA counts beyond 14 bits. Built for the terminal layer (`term.js`), which
 compiles ANSI escape sequences into attribute pairs. The original limits
 (80×25, 20 pairs/row, 14-bit counts) remain the default and the truth.
+
+---
+
+# APPENDIX — PHOSPHOR "P-NUMBERS"
+
+The demo's phosphor buttons (P22 / P39 / P7) come from the EIA phosphor
+registry: US industry (RETMA → EIA, later merged into the WTDS world
+designation system) registered screen phosphors by **color and persistence
+characteristics**, not by chemistry. "P" is simply *phosphor*.
+
+| No. | Color | Persistence | Typical use |
+|-----|-------|-------------|-------------|
+| P1 | green | medium | early radar, oscilloscopes |
+| P4 | white | short | monochrome TV |
+| **P7** | **blue-white flash → yellow-green tail** | two-layer! | radar — the sweep trail lingers |
+| **P22** | RGB triad set | short | every color TV |
+| P31 | green | medium-short | oscilloscopes, green monitors |
+| **P39** | green | long | radar, vector-scan terminals |
+
+Notes worth keeping:
+
+- **P7 is physically two coats.** A short-persistence blue layer
+  (ZnS:Ag) faces the electron gun; behind it, toward the glass, sits a
+  long-persistence yellow-green layer (ZnCdS:Cu) that is excited by the
+  blue flash. So the radar sweep line is blue-white and the wake it leaves
+  glows yellow-green for seconds. `crt.js` models this with separate
+  `tailPrimaries` — the afterglow radiates a different color than
+  the flash.
+- **P22 is not one phosphor but the triad set** — red (Y₂O₂S:Eu),
+  green (ZnS:Cu,Au), blue (ZnS:Ag) — and their decay times differ, blue
+  fastest, red slowest. That is why a white flash on a color tube decays
+  through orange. `crt.js` reproduces it with per-gun time constants.
+- **P39** is the easy-on-the-eyes long green of terminal-era monitors —
+  "P39 tube inside" was a spec-sheet bullet in the early 80s.
+- The constants in `crt.js` are order-of-magnitude honest and tuned to be
+  visible at 60 Hz frame granularity; they are not colorimetric data. The
+  "LONG color" preset is a hypothetical — long-persistence *color* tubes
+  effectively did not exist (the closest real thing was P7's two-layer
+  trick, which is monochrome-ish).
