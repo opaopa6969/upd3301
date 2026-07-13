@@ -9,11 +9,10 @@ testable headless.
 
 ## Why this exists (the 3301 memorial)
 
-This repo was built to commemorate a chain of coincidences: the Cicada 3301
-internet puzzle → the anime *Yanineko*'s opening chanting "3301! 3301!" →
-which turns out to be the Saizeriya menu code for a draft beer → which led us
-back to the most nostalgic 3301 of all, the μPD3301. It all comes back
-to 3301.
+This repo was built to commemorate a chain of coincidences: the anime
+*Yanineko*'s opening chanting "3301! 3301!" → which turns out to be the
+Saizeriya menu code for a draft beer → which led us back to the most
+nostalgic 3301 of all, the μPD3301. It all comes back to 3301.
 
 ## What's emulated
 
