@@ -82,7 +82,10 @@ export class CrtPanel {
         mask: this.tubeMode, maskPitch: k.pitch, convergence: k.conv,
         barrel: k.barrel, ghost: k.ghost, beamWidth: k.focus,
         hSize: k.hSize, vSize: k.vSize,
-        scanlineDepth: this.line400 ? 0.05 : 0.35,
+        // 400-line packs the traces until the gaps vanish; 200-line leaves
+        // real black glass between them
+        scanlineDepth: this.line400 ? 0.3 : 1.0,
+        beamHeight: this.line400 ? 1.0 : 0.35,
       });
     }
     return this._tubes[this.tubeMode];

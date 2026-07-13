@@ -553,7 +553,7 @@ $('baudio').onclick = () => { setAudio(!osc); $('baudio').classList.toggle('on',
 $('b400').onclick = () => {
   const on = $('b400').classList.toggle('on');
   line2 = on ? 1.0 : 0.55;
-  for (const tb of Object.values(tubes)) tb.setGeometry({ scanlineDepth: on ? 0.05 : 0.35 });
+  for (const tb of Object.values(tubes)) tb.setGeometry({ scanlineDepth: on ? 0.3 : 1.0, beamHeight: on ? 1.0 : 0.35 });
   if (osc) osc.frequency.value = sys.crtc.hsyncHz() * (on ? 2 : 1); // 24kHz!
 };
 $('bpower').onclick = () => {

@@ -508,7 +508,7 @@ $('bauto').onclick = () => { autoLevels = !autoLevels; $('bauto').classList.togg
 $('b400').onclick = () => {
   const on = $('b400').classList.toggle('on');
   line2 = on ? 1.0 : 0.55;
-  for (const tb of Object.values(tubes)) tb.setGeometry({ scanlineDepth: on ? 0.05 : 0.35 });
+  for (const tb of Object.values(tubes)) tb.setGeometry({ scanlineDepth: on ? 0.3 : 1.0, beamHeight: on ? 1.0 : 0.35 });
 };
 // The phosphor is a property of the *tube*, not of the content — a mode
 // must never swap it behind your back. Temporal-dither modes just say so.

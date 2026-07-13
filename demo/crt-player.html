@@ -411,7 +411,7 @@ $('binterlace').onclick = () => { interlaced = !interlaced; $('binterlace').clas
 $('b400').onclick = () => {
   const on = $('b400').classList.toggle('on');
   line2 = on ? 1.0 : 0.55;
-  for (const tb of Object.values(tubes)) tb.setGeometry({ scanlineDepth: on ? 0.05 : 0.35 });
+  for (const tb of Object.values(tubes)) tb.setGeometry({ scanlineDepth: on ? 0.3 : 1.0, beamHeight: on ? 1.0 : 0.35 });
 };
 $('kfocus').oninput = (e) => { knobs.focus = +e.target.value; for (const t of Object.values(tubes)) t.beamWidth = knobs.focus; };
 const regeo = () => {

@@ -1047,3 +1047,31 @@ test('full-color dither: 512-cube per dot, selectable screening patterns', async
   for (let i = 0; i < b.levels.length; i++) if (b.levels[i] !== h.levels[i]) diff++;
   assert.ok(diff > 20, `patterns produce different screens (${diff} dots differ)`);
 });
+
+test('200-line scanlines: real black between the traces', async () => {
+  const { CrtTube } = await import('./tube.js');
+  const W = 8, H = 32;
+  const mk = (scanlineDepth, beamHeight) => new CrtTube({
+    srcWidth: W, srcHeight: H / 2, outWidth: W, outHeight: H,
+    mask: 'none', barrel: 0, ghost: 0, vignette: 0, beamWidth: 0,
+    edgeDefocus: 0, convergence: 0, scanlineDepth, beamHeight,
+  });
+  const flat = new Float32Array(W * (H / 2)).fill(1);
+  const lum = [flat, flat, flat];
+  const rgba200 = mk(1.0, 0.35).apply(lum, null, { gamma: 1 });
+  const col = (img) => Array.from({ length: H }, (_, y) => img[(y * W + 4) * 4]);
+  const c200 = col(rgba200);
+  const lit = c200.filter((v) => v > 200).length;
+  const dark = c200.filter((v) => v < 40).length;
+  assert.ok(lit >= 8, `traces are lit (${lit} rows)`);
+  assert.ok(dark >= 8, `gaps go properly black, not merely dim (${dark} rows)`);
+  // gaps must survive gamma encoding as dark, not grey
+  const rgba200g = mk(1.0, 0.35).apply(lum, null, { gamma: 2.2 });
+  const gapsGamma = col(rgba200g).filter((v, i) => i % 2 === 1);
+  assert.ok(Math.max(...gapsGamma) < 70,
+    `gaps stay dark after gamma encoding (max ${Math.max(...gapsGamma)})`);
+  // 400-line: traces packed, no black gaps
+  const c400 = col(mk(0.3, 1.0).apply(lum, null, { gamma: 1 }));
+  assert.equal(c400.filter((v) => v < 40).length, 0, '400-line closes the gaps');
+  assert.ok(Math.min(...c400) > 120, `400-line stays bright between traces (${Math.min(...c400)})`);
+});

@@ -48,7 +48,18 @@ export class CrtTube {
     vSize = 1.0, // V-SIZE knob: vertical scan height
     edgeDefocus = 0.35, // how much focus degrades per r² (oblique landing)
     convergence = 0.0035, // R/B gun mis-registration per r² (color fringes)
-    scanlineDepth = 0.35, // 200-line look: dark gaps between scanlines (0 = 400-line)
+    // The beam draws discrete lines with a Gaussian vertical profile; between
+    // them sits unlit glass. scanlineDepth is how much of that gap goes black
+    // (1 = nothing between the lines but darkness — the real 200-line look);
+    // beamHeight is the line's thickness as a fraction of the line pitch
+    // (~0.45 on a 200-line CRT: the gap is as wide as the line. 400-line
+    // packs the lines until the gaps close → beamHeight ~1).
+    // Gamma encoding lifts dim values hard (linear 0.05 → displayed 0.25), so
+    // "a bit dark between the lines" reads as grey. A real 200-line CRT is
+    // near-black between traces: full depth, and a beam thinner than half the
+    // pitch so its tail doesn't reach the next row.
+    scanlineDepth = 1.0,
+    beamHeight = 0.35,
   } = {}) {
     this.srcWidth = srcWidth;
     this.srcHeight = srcHeight;
@@ -59,7 +70,7 @@ export class CrtTube {
     this.edgeDefocus = edgeDefocus;
     this.geometry = {
       mask, maskPitch, maskLeak, barrel, ghostShift, vignette,
-      hSize, vSize, convergence, scanlineDepth,
+      hSize, vSize, convergence, scanlineDepth, beamHeight,
     };
 
     const n = outWidth * outHeight;
@@ -87,7 +98,7 @@ export class CrtTube {
     const { srcWidth, srcHeight, outWidth, outHeight } = this;
     const {
       mask, maskPitch, maskLeak, barrel, ghostShift, vignette,
-      hSize, vSize, convergence, scanlineDepth,
+      hSize, vSize, convergence, scanlineDepth, beamHeight,
     } = this.geometry;
     const gain = mask === 'none' ? 1 : Math.min(2.2, 3 / (1 + 2 * maskLeak));
     // convergence error per gun: R and B deflect to opposite sides of G
@@ -133,13 +144,26 @@ export class CrtTube {
           this.lutGhostIdx[i] = 0;
         }
         let vigv = Math.max(0, 1 - vignette * r2 * r2);
-        // scanline structure: the beam draws discrete lines; between them
-        // the phosphor stays darker. 200-line mode shows the gaps, 400-line
-        // (24 kHz) packs lines too tightly to see them (scanlineDepth→0).
+        // Scanline structure. Each source line is a beam trace with a
+        // Gaussian vertical profile of width `beamHeight` (in line pitches);
+        // the space between traces is unlit glass. A 200-line CRT drawn on a
+        // 400-row raster therefore alternates lit / black, and that black is
+        // *black*, not "slightly dimmer" — which is what the old cosine
+        // shading got wrong.
         if (scanlineDepth > 0 && Math.abs(bv) <= 1) {
+          // Work inside one source line's band (one line pitch). The trace's
+          // phase is a free parameter on real glass; we land it on the first
+          // output row of the band so a 2x raster can actually *show* the
+          // gap — otherwise both samples straddle the trace symmetrically
+          // and you get two half-lit rows instead of line + black.
+          const rowsPerLine = outHeight / srcHeight;
           const sy = (bv + 1) / 2 * srcHeight;
-          const f = sy - Math.floor(sy);
-          vigv *= 1 - scanlineDepth * 4 * f * (1 - f);
+          const u = sy - Math.floor(sy); // 0..1 within the band
+          const c = 0.5 / rowsPerLine; // trace center on the first row
+          const d = Math.min(Math.abs(u - c), Math.abs(u - c - 1), Math.abs(u - c + 1));
+          const sigma = Math.max(0.04, beamHeight * 0.5);
+          const beam = Math.exp(-(d * d) / (2 * sigma * sigma));
+          vigv *= (1 - scanlineDepth) + scanlineDepth * beam;
         }
         this.lutVig[i] = vigv;
 
