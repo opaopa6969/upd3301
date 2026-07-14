@@ -185,7 +185,7 @@ $('brainbow').onclick = () => rainbowTest();
 
 // ---- guided tour -----------------------------------------------------------
 import { mountTourButton } from './tour.js';
-mountTourButton($('gex').parentElement, [
+mountTourButton(document.querySelector('h1'), [
   { el: null,
     title: { ja: 'ANSI → 1979年のシリコン', en: 'ANSI → 1979 silicon' },
     body: {

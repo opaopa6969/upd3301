@@ -270,7 +270,7 @@ applyI18n();
 
 // ---- guided tour (ESC / ✕ / outside-click exits any time) ------------------
 import { mountTourButton } from './tour.js';
-mountTourButton(document.getElementById('bpause').parentElement, [
+mountTourButton(document.querySelector('h1'), [
   { el: null,
     title: { ja: 'ICE — 回路の中に入る', en: 'ICE — get inside the circuit' },
     body: {

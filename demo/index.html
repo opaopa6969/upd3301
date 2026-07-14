@@ -613,7 +613,7 @@ $('cghost').onchange = (e) => {
 
 // ---- guided tour ---------------------------------------------------------
 import { mountTourButton } from './tour.js';
-mountTourButton(document.querySelector('.row'), [
+mountTourButton(document.querySelector('h1'), [
   { el: null,
     title: { ja: 'ようこそ、μPD3301デモへ', en: 'Welcome to the μPD3301 demo' },
     body: {
@@ -679,6 +679,11 @@ mountTourButton(document.querySelector('.row'), [
     body: {
       ja: '上のリンクから他のデモへ: ANSIエスケープを3301のペアにコンパイルする<b>ターミナル</b>、動画をセミグラで観る<b>動画セミグラ</b>、Z80＋ROMで本当に動く<b>PC-8001実機</b>、などなど。ツアーは「？ツアー」ボタンでいつでも再開できるよ。',
       en: 'The links up top lead onward: the <b>terminal</b> that compiles ANSI escapes into 3301 pairs, <b>semigraphic video</b>, the <b>full PC-8001 machine</b> running a Z80 + ROM, and more. Restart this tour anytime with the "? Tour" button.' } },
+  { el: '#cflick',
+    title: { ja: 'フリッカー感（新入り）', en: 'Flicker feel (new)' },
+    body: {
+      ja: '60Hzモニタでは60Hzフリッカーは原理的に出せないから、<b>CRTをカメラで撮ったときの約10Hzビート</b>として再現した。フレームカウント駆動の決定論——このrepoはフリッカーにすら乱数を使わないｗ',
+      en: 'A 60Hz display can\'t show a 60Hz flicker, so this is the <b>~10Hz beat of a filmed CRT</b>. Frame-counted and deterministic — this repo won\'t even flicker with randomness.' } },
 ], { storageKey: 'tour-index' });
 </script>
 </body>

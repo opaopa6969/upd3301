@@ -366,7 +366,7 @@ const expandPanel = () => {
   const body = document.getElementById('crtpanel-body');
   if (body && body.style.display === 'none') document.getElementById('crtpanel-toggle').click();
 };
-mountTourButton(bkeys.parentElement, [
+mountTourButton(document.querySelector('h1'), [
   { el: null,
     title: { ja: 'PC-8001、まるごと', en: 'The whole PC-8001' },
     body: {
@@ -422,6 +422,11 @@ mountTourButton(bkeys.parentElement, [
     body: {
       ja: 'ms/frame（重さ）、フレーム番号、<b>pc</b>＝Z80のプログラムカウンタ（動いてる証拠！）、画面ジオメトリ、水平同期周波数。BASICが暴走したらpcが変な場所をぐるぐるするのが見える。',
       en: 'ms/frame (cost), frame number, <b>pc</b> = the Z80 program counter (proof of life!), geometry, hsync. If BASIC runs away you can watch pc spin somewhere strange.' } },
+  { el: '#bice',
+    title: { ja: '🔬 ICE — 回路の中に入る', en: '🔬 ICE — get inside the circuit' },
+    body: {
+      ja: '別窓で本格デバッガが開く: 条件付きブレーク・ウォッチポイント・<b>時間旅行</b>（実行の巻き戻しと分岐ツリー）・プロファイラ・マクロアセンブラ・逆アセン（ROMの解析済みラベル付き）。実機時代は本体より高かった機材が、ボタン1個。<b>ICE側にも専用ツアーがある</b>から続きはそっちで。',
+      en: 'Opens the full debugger in its own window: conditional breaks, watchpoints, <b>time travel</b> (rewind + branching tree), profiler, macro assembler, disassembly with analyzed ROM labels. This used to cost more than the computer. <b>The ICE has its own tour</b> — continue there.' } },
 ], { storageKey: 'tour-machine' });
 </script>
 </body>

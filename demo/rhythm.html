@@ -236,7 +236,7 @@ document.addEventListener('keydown', (e) => {
 
 // ---- guided tour -----------------------------------------------------------
 import { mountTourButton } from './tour.js';
-mountTourButton(document.getElementById('bclear').parentElement, [
+mountTourButton(document.querySelector('h1'), [
   { el: null,
     title: { ja: 'ディスクユニットで刻め', en: 'Groove on the disk unit' },
     body: {

@@ -616,7 +616,7 @@ $('cghost').onchange = (e) => {
 
 // ---- guided tour -----------------------------------------------------------
 import { mountTourButton } from './tour.js';
-mountTourButton($('brec').parentElement, [
+mountTourButton(document.querySelector('h1'), [
   { el: null,
     title: { ja: '動画 → セミグラフィック', en: 'Video → semigraphics' },
     body: {
@@ -677,6 +677,21 @@ mountTourButton($('brec').parentElement, [
     body: {
       ja: '⛶で全画面。ステータス行の<b>ms/frame</b>が24を超えたら、物理OFF・ORIGINALモード・FOCUS 0あたりで軽くして。UEX＋管ONは正直重い。',
       en: 'Go fullscreen with ⛶. If <b>ms/frame</b> on the status line passes 24, lighten up: physics OFF, ORIGINAL mode, or FOCUS 0. UEX with the tube on is honestly heavy.' } },
+  { el: '#bshare',
+    title: { ja: '🖥 画面/タブ共有 — YouTubeもこれで', en: '🖥 Screen/tab share — YouTube included' },
+    body: {
+      ja: '直URLはCORSと署名ストリームで原理的に無理だけど、<b>別タブで再生して共有</b>すればフレームが同じパイプラインに流れる。「タブの音声も共有」にチェックすればBEEP 1bit化まで通るよ。DRM付き配信は黒画面（それはDRMの仕事）。',
+      en: 'Direct URLs are impossible (CORS + signed streams), but <b>play in another tab and share it</b> — frames flow through the same pipeline. Tick "share tab audio" and even the 1-bit BEEP works. DRM streams arrive black (that\'s DRM doing its job).' } },
+  { el: '#bgame',
+    title: { ja: '🎮 ゲームアタッチ', en: '🎮 Game attach' },
+    body: {
+      ja: 'ゲームのウィンドウを共有して<b>遅延優先プリセット</b>（60fps・EX最軽量・ディザ・管物理off）を一発適用。操作はゲーム側に直接届くから遅延が乗るのは見た目だけ。GTAをセミグラで遊ぶという蛮行のために生まれたボタンｗ',
+      en: 'Share a game window and apply the <b>latency-first preset</b> (60fps, lightest EX geometry, dither, physics off) in one click. Input goes straight to the game — only your eyes take the latency. Born so someone could play GTA in semigraphics.' } },
+  { el: '#cflick',
+    title: { ja: 'フリッカー感', en: 'Flicker feel' },
+    body: {
+      ja: '60Hzの画面に60Hzのフリッカーは出せない（同期して消える）ので、<b>CRTをカメラで撮ったときの約10Hzビート</b>＋電源系のゆっくりしたうねりとして再現。もちろん決定論（乱数不使用）。',
+      en: 'A 60Hz flicker on a 60Hz display cancels out, so this reproduces the <b>~10Hz beat of filming a CRT</b> plus a slow mains drift. Deterministic, of course.' } },
 ], { storageKey: 'tour-video' });
 </script>
 </body>

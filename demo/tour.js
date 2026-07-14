@@ -180,6 +180,10 @@ export function mountTourButton(mount, steps, { storageKey = 'tour', auto = true
   b.textContent = t('？ツアー');
   b.title = lang === 'ja' ? 'ガイドツアーを開始' : 'Start the guided tour';
   b.onclick = () => startTour(steps, { storageKey });
+  if (mount.tagName === 'H1') {
+    // header-right placement: small, floated, doesn't inherit the h1 font
+    b.style.cssText = 'float:right;font-size:13px;font-weight:400;margin-top:2px';
+  }
   mount.appendChild(b);
   let seen = null;
   try { seen = localStorage.getItem(storageKey); } catch {}

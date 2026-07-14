@@ -465,7 +465,7 @@ $('cghost').onchange = (e) => {
 
 // ---- guided tour -----------------------------------------------------------
 import { mountTourButton } from './tour.js';
-mountTourButton($('brec').parentElement, [
+mountTourButton(document.querySelector('h1'), [
   { el: null,
     title: { ja: 'なんでもブラウン管', en: 'Anything on a cathode-ray tube' },
     body: {
@@ -511,6 +511,16 @@ mountTourButton($('brec').parentElement, [
     body: {
       ja: '⛶で全画面 — バーは自動で隠れる。重かったら（ms/frame注意）物理OFFかFOCUS 0で軽くなる。P7レーダー管＋映画、ぜひ。',
       en: '⛶ goes fullscreen; the bar auto-hides. If it chugs (watch ms/frame), physics OFF or FOCUS 0 lightens it. P7 radar tube + a film: highly recommended.' } },
+  { el: '#bshare',
+    title: { ja: '🖥 画面/タブ共有', en: '🖥 Screen/tab share' },
+    body: {
+      ja: 'YouTubeでもデスクトップ全体でも、共有すればこのガラスを通せる。<b>作業画面をP39緑残光にする</b>という完全に不毛な使い方も可能になったｗ',
+      en: 'YouTube or your whole desktop — share it and it goes through this glass. Working all day on P39 green persistence is now a fully supported waste of time.' } },
+  { el: '#cflick',
+    title: { ja: 'フリッカー感', en: 'Flicker feel' },
+    body: {
+      ja: 'カメラでCRTを撮ったときの10Hzビートを輝度スロブで再現するチェックボックス。「実録映像っぽさ」が一段増す。',
+      en: 'A checkbox reproducing the 10Hz camera-beat luminance throb. One more notch of found-footage authenticity.' } },
 ], { storageKey: 'tour-player' });
 </script>
 </body>
