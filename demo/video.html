@@ -58,6 +58,7 @@
   <button id="bsample">▶ サンプル</button>
   <button id="bcam">Webカメラ</button>
   <button id="bshare">🖥 画面/タブ共有</button>
+  <button id="bgame">🎮 ゲームアタッチ</button>
   <button id="brec">⏺ 録画</button>
 </div>
 <div class="row"><span class="lbl">モード:</span>
@@ -386,6 +387,25 @@ $('bsample').onclick = () => {
   video.src = 'sample.mp4';
   video.load();
   tryPlay();
+};
+// game-attach: capture a game window/tab and tune everything for LATENCY.
+// EX geometry (the cheapest), dither conversion, physics off — the chain
+// costs ~1 frame on top of the capture. Playable; gloriously unreadable.
+$('bgame').onclick = async () => {
+  try {
+    video.removeAttribute('src');
+    video.srcObject = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: 60 }, audio: true,
+    });
+    geometry = 'ex'; boot();
+    for (const [k2, el2] of Object.entries(geoBtns)) el2.classList.toggle('on', k2 === 'ex');
+    setConv('dither');
+    autoLevels = true; $('bauto').classList.add('on');
+    tubeMode = 'none';
+    for (const [k2, el2] of Object.entries(tubeBtns)) el2.classList.toggle('on', k2 === 'none');
+    tryPlay();
+    say('game attach: EX+dither+physics-off (latency first) — ⛶で全画面, ms/frameを見てね');
+  } catch (err) { say('game attach: ' + err.message); }
 };
 $('bshare').onclick = async () => {
   // YouTube and friends: play the video in another tab, share that tab

@@ -200,6 +200,7 @@ const DICT = {
   'PC-8001/8801実機': 'PC-8001/8801 machine',
   '▶ サンプル': '▶ Sample',
   '🖥 画面/タブ共有': '🖥 Share screen/tab',
+  '🎮 ゲームアタッチ': '🎮 Attach a game',
   'フリッカー': 'Flicker',
   '前へ': 'Back',
   '完了': 'Done',
