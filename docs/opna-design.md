@@ -34,9 +34,9 @@ So OPNA is mostly **more of the same FM**, plus **two genuinely new units** (ADP
 
 ## 3. Register map (what changes)
 
-OPNA is addressed as **two register banks**. On the PC-88 the built-in OPN sits at ports **44h (addr) / 45h (data)** = bank 0; the OPNA's second bank is at ports **46h (addr) / 47h (data)** = bank 1.
+OPNA is addressed as **two register banks**. On the PC-88 the built-in OPN sits at ports **44h (addr) / 45h (data)**; Sound Board II is a *separate* OPNA at **A8h (addr0) / A9h (data0+status) / AAh (addr1) / ABh (data1)** — confirmed empirically, see §9. (An earlier draft guessed 46h/47h; that was wrong.) The register **contents** below are the same YM2608 map either way.
 
-**Bank 0** (ports 44h/45h) — a superset of today's OPN map, already implemented for `$00–$B6`:
+**Bank 0** (ports A8h/A9h) — a superset of the OPN map, already implemented for `$00–$B6`:
 - `$00–$0F` SSG · `$10–$1F` *(unused on 88 side)* · `$22` LFO · `$24–$27` Timer A/B + mode · `$28` FM key on/off · `$2D–$2F` prescaler
 - `$30–$9F` FM operator params, channels **1–3** · `$A0–$A6` fnum · `$B0–$B2` FB/ALG · `$B4–$B6` **L/R + AMS/PMS** (new: stereo pan + LFO sensitivity)
 
@@ -97,9 +97,23 @@ An independent review (Codex) plus a live I/O probe in our own emulator turned s
 - Both games, in OPN mode, touch **only 0x44/0x45** for sound — they **never read or write 0x46/0x47 or 0xA8–0xAF**. Heavy traffic is 0xFC–0xFF (FDD sub-CPU PPI handshake) and 0xE4–0xE6 (interrupt controller).
 - Interpretation: the game **detects no SB2, so it plays the OPN score and never exercises the OPNA path at all.** A perfect OPNA that no game addresses is silent. So the first deliverable is not FM6 — it is **making detection succeed**, then confirming the game starts writing the second bank.
 
-**Open items to nail before/while implementing (method in brackets):**
-1. **Detection protocol** 🔴 — how a SB2-aware Falcom driver decides SB2 is present. Not a passive probe of a dedicated port in our captures ⇒ likely an OPN-status bit that differs on OPNA, a DIP/config byte (0x30/0x31 *are* read), or a disk that ships the SB2 driver only when detected. *[capture the boot I/O of a known-SB2 disk build; diff against the OPN-only boot]*
-2. **Port mapping** 🔴 — working hypothesis: SB2 = OPNA at the OPN base, bank 0 = 0x44/0x45, **bank 1 = 0x46/0x47**; 0xA8–0xAF is the *second* board slot (unused here). Consistent with the chip family but unconfirmed on real PC-88 wiring. *[confirm against MAME's pc8801 OPNA hookup / hardware service manual]*
+**RESOLVED by measurement + disassembly (Telenet MUSICBOX music disk):**
+- **Port mapping — CONFIRMED: SB2 OPNA is at `0xA8` (addr0) / `0xA9` (data + status0), `0xAA` / `0xAB` (bank1).** NOT 0x46/0x47 — the earlier §3 hypothesis was wrong. The built-in OPN stays at 0x44/0x45; the OPNA is a *separate* device at 0xA8–0xAB. Evidence — the disk's own status-read helper, disassembled at the `IN 0xA9`:
+  ```
+  OUT (C),E        ; C = 0xA8  — latch OPNA register
+  OR (HL) ×6       ; settle delay
+  INC C            ; C: 0xA8 → 0xA9
+  IN A,(C)         ; read OPNA status at 0xA9
+  ...
+  LD A,(0x8FCE)    ; consult stored sound-board flag
+  AND 03 / CP 03 / RET NZ
+  LD C,0xA8        ; low2==3 ⇒ route sound output to OPNA (0xA8)
+  ```
+- **Detection routing — the driver picks OPN(0x44) vs OPNA(0xA8) from a stored flag** (here RAM `0x8FCE`, low 2 bits == 3 ⇒ OPNA). The flag is set by the detection read of `0xA9` at boot. So "play the enhanced score" == "make the boot-time status read at 0xA9 return the value a present OPNA returns."
+
+**Still open (method in brackets):**
+1. **Exact "present" status value** 🔴 — what byte the detection routine expects from `IN 0xA9` to store the SB2 flag. Our stub returned 0x00 / a plain-OPN status and it stored "absent". *[trace the routine that WRITES 0x8FCE; read its compare against the 0xA9 value — likely the OPNA reset/busy status semantics, not open-bus 0xFF]*
+2. **Port mapping** ✅ RESOLVED — 0xA8–0xAB (above).
 3. **`$28` key-on group bit** 🟠 — current code masks `v & 3` (3 channels). OPNA needs the group bit so `bit2` selects FM4–6; `& 3` silently drops it. *[fix mask to honor bit2 when in OPNA mode]*
 4. **Clock / prescaler** 🟠 — `fmStep = clk/72`, `ssgStep = clk/16` are the OPN dividers. OPNA's prescaler (`$2D–$2F`) and base clock may differ; a few-ms drift is audible across six voices. *[verify OPNA divider against datasheet before reusing the steps]*
 5. **ADPCM-A rhythm ROM** 🟠 — need the actual dump *and* its format (4-bit ADPCM, the exact step table, per-drum address table). Can't write the decoder without it. *[source a YM2608 rhythm ROM; confirm format]*
