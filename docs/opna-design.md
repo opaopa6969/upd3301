@@ -89,4 +89,22 @@ The `opn-scope` live engine already replays a captured register-write log throug
 - **Detection specifics per game** — the probe differs by title/driver; may need a couple of captured boots to pin down.
 - **Stereo in the output stage** — the current board model (HP, soft-limit, live knobs) must be duplicated per side without doubling the knob UI semantics.
 
+## 9. Verification-first — adversarial review + measured I/O
+
+An independent review (Codex) plus a live I/O probe in our own emulator turned several section-3/4 assertions from "assumed" into "must confirm before coding". **Detection is the gate**: everything downstream is dead code until the game is convinced Sound Board II is present.
+
+**Measured (boot Ys III / Ys II in our machine, 20 s, log every `in`/`out`):**
+- Both games, in OPN mode, touch **only 0x44/0x45** for sound — they **never read or write 0x46/0x47 or 0xA8–0xAF**. Heavy traffic is 0xFC–0xFF (FDD sub-CPU PPI handshake) and 0xE4–0xE6 (interrupt controller).
+- Interpretation: the game **detects no SB2, so it plays the OPN score and never exercises the OPNA path at all.** A perfect OPNA that no game addresses is silent. So the first deliverable is not FM6 — it is **making detection succeed**, then confirming the game starts writing the second bank.
+
+**Open items to nail before/while implementing (method in brackets):**
+1. **Detection protocol** 🔴 — how a SB2-aware Falcom driver decides SB2 is present. Not a passive probe of a dedicated port in our captures ⇒ likely an OPN-status bit that differs on OPNA, a DIP/config byte (0x30/0x31 *are* read), or a disk that ships the SB2 driver only when detected. *[capture the boot I/O of a known-SB2 disk build; diff against the OPN-only boot]*
+2. **Port mapping** 🔴 — working hypothesis: SB2 = OPNA at the OPN base, bank 0 = 0x44/0x45, **bank 1 = 0x46/0x47**; 0xA8–0xAF is the *second* board slot (unused here). Consistent with the chip family but unconfirmed on real PC-88 wiring. *[confirm against MAME's pc8801 OPNA hookup / hardware service manual]*
+3. **`$28` key-on group bit** 🟠 — current code masks `v & 3` (3 channels). OPNA needs the group bit so `bit2` selects FM4–6; `& 3` silently drops it. *[fix mask to honor bit2 when in OPNA mode]*
+4. **Clock / prescaler** 🟠 — `fmStep = clk/72`, `ssgStep = clk/16` are the OPN dividers. OPNA's prescaler (`$2D–$2F`) and base clock may differ; a few-ms drift is audible across six voices. *[verify OPNA divider against datasheet before reusing the steps]*
+5. **ADPCM-A rhythm ROM** 🟠 — need the actual dump *and* its format (4-bit ADPCM, the exact step table, per-drum address table). Can't write the decoder without it. *[source a YM2608 rhythm ROM; confirm format]*
+6. **ADPCM-B DRAM regs + busy/IRQ** 🟠 — `$10–$1B` split (which reg is address vs data, auto-increment?) is unspecified, and a game that polls the busy flag after DMA will **hang** if the status bit isn't wired. *[capture $10–$1B write order from an ADPCM-B-using title; wire the status bit, not just the decoder]*
+
+**Consequence for build order (§6):** phase 0 is now *"reach detection"* — present an OPNA-shaped status at the mapped ports and confirm a SB2-aware boot flips to the enhanced score (instrument-load signature jumps). Only then do FM6 / rhythm / ADPCM-B pay off.
+
 Related: [design.md](./design.md) (chip/emulator contracts), [datasheet.md](./datasheet.md), [peripherals.md](./peripherals.md).
