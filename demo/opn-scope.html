@@ -33,8 +33,16 @@
 </p>
 <div class="row">
   <button id="play">▶ 再生</button>
-  <span id="time">0:00 / 2:40</span>
+  <span id="time">0:00 / 3:20</span>
   <input type="range" id="seek" min="0" max="1000" value="0">
+</div>
+<div class="row">
+  <span class="legend">飛ぶ:</span>
+  <button class="jump" data-t="5">① Feena 0:05</button>
+  <button class="jump" data-t="37">② 静かな部 0:37</button>
+  <button class="jump" data-t="90">③ 別の曲 1:30</button>
+  <button class="jump" data-t="125">④ 続き 2:05</button>
+  <span class="legend">Ys I オープニングデモの通し（約3分20秒）。③あたりで曲調が変わる</span>
 </div>
 <div class="row">
   <span class="legend">音源:</span>
@@ -64,10 +72,10 @@
 <canvas id="keys" width="960" height="70"></canvas>
 <div id="meters"></div>
 
-<audio id="au" src="feena-v6.mp3?v=15" preload="auto"></audio>
+<audio id="au" src="feena-v6.mp3?v=16" preload="auto"></audio>
 
 <script type="module">
-import { Ym2203 } from '../ym2203.js?v=15'; // ?v= busts the browser module cache on each chip change
+import { Ym2203 } from '../ym2203.js?v=16'; // ?v= busts the browser module cache on each chip change
 
 const COLORS = ['#ff5a5a','#ffb14a','#ffe14a','#5ad1ff','#7affb0','#c68aff'];
 const NAMES = ['FM0','FM1','FM2','SSG0','SSG1','SSG2'];
@@ -302,6 +310,12 @@ $('seek').oninput = (e) => {
   else { au.currentTime = t; }
 };
 au.onended = () => setPlayBtn(false);
+function seekTo(t) {
+  if (engineMode) { if (ctx) engineSeek(t); else { playSample = Math.floor(t * 48000); frameIdx = Math.floor(t * 60); } }
+  else { au.currentTime = t; }
+  $('seek').value = Math.round((t / nowDur()) * 1000);
+}
+document.querySelectorAll('.jump').forEach(b => { b.onclick = () => seekTo(+b.dataset.t); });
 
 // ---- source switching ------------------------------------------------------
 function toEngine(on) {
@@ -321,7 +335,7 @@ $('srcEngine').onclick = async () => {
 };
 $('srcMine').onclick = () => {
   playing = false; toEngine(false);
-  au.pause(); au.src = 'feena-v6.mp3?v=15'; au.currentTime = 0;
+  au.pause(); au.src = 'feena-v6.mp3?v=16'; au.currentTime = 0;
   $('srcName').textContent = 'うちの音 (v6) — 表示と完全一致（mp3なので個別ミュートは表示のみ）';
   setPlayBtn(false);
 };
