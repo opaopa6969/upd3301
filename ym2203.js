@@ -144,11 +144,13 @@ export class Ym2203 {
     this.fmGain = 0.9;   // FM bus level into the board mixer
     this.ssgGain = 1.25; // SSG DAC level (was the 1/0.8 divisor)
     this.ssgMix = 0.62;  // SSG bus level into the board mixer
-    // edge-emphasis: sharpen the square's transitions so the AY lead reads
-    // "hard and forward". Too much turns LOW notes into "じじじ" (the first
-    // difference amplifies the point-sampled square's aliasing), so keep small.
-    this.ssgEmph = 0.25;
-    this._ssgPrev = 0;
+    // brightness high-shelf: lifts everything above ~1.5 kHz so the SSG opens
+    // up from a dark round "ぷおぉ" to a bright "ふぁぁ" like the real machine.
+    // The raw square's fundamental+h3 dominate; this raises the upper harmonics
+    // that carry the air. 0 = flat, ~1 = +6 dB shelf, ~3 = +12 dB.
+    this.ssgBright = 0.6;
+    this._ssgShelf = 0; // shelf-corner low-pass state
+    this.ssgShelfA = 1 - Math.exp(-2 * Math.PI * 1500 / sampleRate); // ~1.5 kHz corner
     // one-pole low-pass on the SSG: sheds the aliasing hash of the raw square
     // so low notes stay soft and the lead reads transparent, like the real
     // board's analog roll-off. Coefficient a = 1-exp(-2π fc/sr); ~8 kHz @ 48k.
@@ -159,6 +161,9 @@ export class Ym2203 {
     // instead of a fat body. R = exp(-2π fc/sr); default ~20 Hz = off (DC only).
     this.ssgHpR = 0.9974;
     this._ssgHpX = 0; this._ssgHpY = 0;
+    // default LP ceiling raised to ~13 kHz so the brightness shelf isn't
+    // immediately cut back (LP is now mostly an anti-alias / fizz tamer).
+    this.ssgLpA = 0.828;
     this.timerA = 0; this.timerACount = 0; this.timerARun = false;
     this.timerB = 0; this.timerBCount = 0; this.timerBRun = false;
     this.status = 0; // b0 timer A overflow, b1 timer B, b7 busy
@@ -509,12 +514,16 @@ export class Ym2203 {
       // SSG shaping (edge emphasis for "hardness", then a gentle low-pass to
       // shed the aliasing "じじじ" and keep it transparent), applied to the SSG
       // only so the FM stays smooth. All three amounts are live knobs.
-      const ssgE = ssg + this.ssgEmph * (ssg - this._ssgPrev);
-      this._ssgPrev = ssg;
-      // high-pass (thin, remove fundamental) → low-pass (de-fizz), in series
-      this._ssgHpY = this.ssgHpR * (this._ssgHpY + ssgE - this._ssgHpX);
-      this._ssgHpX = ssgE;
-      this._ssgLp += this.ssgLpA * (this._ssgHpY - this._ssgLp);
+      // SSG tone chain (all live knobs): high-pass thins the body (cuts the
+      // dominant fundamental → "細い線"), a high-shelf lifts the upper harmonics
+      // for brightness/air ("ぷおぉ"→"ふぁぁ"), a low-pass ceiling tames the very
+      // top / aliasing. Applied to the SSG only so the FM stays smooth.
+      this._ssgHpY = this.ssgHpR * (this._ssgHpY + ssg - this._ssgHpX);
+      this._ssgHpX = ssg;
+      let x = this._ssgHpY;
+      this._ssgShelf += this.ssgShelfA * (x - this._ssgShelf);
+      x += this.ssgBright * (x - this._ssgShelf);
+      this._ssgLp += this.ssgLpA * (x - this._ssgLp);
       const raw = fm * this.fmGain + this._ssgLp * this.ssgMix;
       this._hpY = 0.996 * (this._hpY + raw - this._hpX);
       this._hpX = raw;
