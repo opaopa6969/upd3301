@@ -42,6 +42,7 @@
   <button id="bice">🔬 ICE</button>
   <button id="bide">🛠 IDE</button>
 </div>
+<div class="row" style="font-size:12px" id="romstore"></div>
 <div class="row"><span class="lbl">起動モード:</span>
   <button id="mn80" class="on">N-BASIC (N80)</button>
   <button id="mn88">N88-BASIC (WIP)</button>
@@ -68,6 +69,7 @@ import { Pc8801Machine } from '../machine88.js';
 import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 import { parseD88All, summarize } from '../d88.js';
+import { putRom, getRom, listRoms, clearRoms } from './romstore.js';
 
 const canvas = document.getElementById('crt');
 const ctx = canvas.getContext('2d');
@@ -106,9 +108,9 @@ async function loadMachine(entry) {
 async function autoLoad() {
   try {
     const r = await fetch('../roms/manifest.json');
-    if (!r.ok) return; // no ROMs served (public site) → file picker stays
+    if (!r.ok) return restoreFromStore(); // no served ROMs → try this browser's saved ones
     manifest = await r.json();
-  } catch { return; }
+  } catch { return restoreFromStore(); }
   const sel = $('mach');
   // only machines whose N-BASIC image is verified to boot (the rest have
   // ROM layouts we haven't cracked — see issue #4)
@@ -147,6 +149,7 @@ $('from').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   romBytes = new Uint8Array(await f.arrayBuffer());
+  await putRom('rom', f.name, romBytes); refreshStore(); // remember for next visit
   boot();
 };
 $('ffont').onchange = async (e) => {
@@ -154,6 +157,7 @@ $('ffont').onchange = async (e) => {
   if (!f) return;
   const b = new Uint8Array(await f.arrayBuffer());
   applyFontRom(cgrom, b); // 2KB sets take the whole map; 6KB 88 sets use the head
+  await putRom('font', f.name, b); refreshStore();
 };
 $('breset').onclick = () => boot();
 $('mn80').onclick = () => {
@@ -177,7 +181,9 @@ $('fdisk').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   try {
-    disks = parseD88All(new Uint8Array(await f.arrayBuffer()));
+    const diskBytes = new Uint8Array(await f.arrayBuffer());
+    disks = parseD88All(diskBytes);
+    await putRom('disk', f.name, diskBytes); refreshStore(); // remember for next visit
     if (machine) machine.disks = disks;
     const s = summarize(disks[0]);
     const extra = disks.length > 1 ? `  (+${disks.length - 1} more)` : '';
@@ -191,6 +197,31 @@ $('fdisk').onchange = async (e) => {
     $('dipnote').textContent = 'D88: ' + err.message;
   }
 };
+// ---- persisted ROMs (this browser's IndexedDB) ----------------------------
+// "upload once": the boot ROM / font / disk you pick are kept locally so a
+// return visit auto-boots without re-picking. Bytes stay in your browser.
+async function restoreFromStore() {
+  try {
+    const font = await getRom('font');
+    if (font) applyFontRom(cgrom, font.bytes);
+    const disk = await getRom('disk');
+    if (disk) { try { disks = parseD88All(disk.bytes); } catch {} }
+    const rom = await getRom('rom');
+    if (rom) { romBytes = rom.bytes; guts.textContent = '保存済みROMから起動: ' + rom.name; boot(); if (machine && disks.length) machine.disks = disks; }
+  } catch {}
+  refreshStore();
+}
+async function refreshStore() {
+  const el = $('romstore'); if (!el) return;
+  let items = []; try { items = await listRoms(); } catch {}
+  if (!items.length) { el.innerHTML = '<span style="color:#667">このブラウザに保存されたROMはまだ無い（一度選べば次回から自動起動）</span>'; return; }
+  const kb = (n) => (n / 1024 < 1 ? n + 'B' : (n / 1024).toFixed(n < 102400 ? 1 : 0) + 'KB');
+  el.innerHTML = '💾 保存済み(このブラウザのみ): ' +
+    items.map((i) => `<b style="color:#8fd">${i.role}</b> ${i.name} <span style="color:#778">${kb(i.size)}</span>`).join(' / ') +
+    ' <button id="romclear" style="font-size:11px;padding:2px 8px;margin-left:6px">消す</button>';
+  $('romclear').onclick = async () => { await clearRoms(); refreshStore(); };
+}
+
 const stage = $('stage');
 $('bfull').onclick = () => {
   if (document.fullscreenElement) document.exitFullscreen();
