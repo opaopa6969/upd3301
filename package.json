@@ -22,7 +22,8 @@
     "./d88": "./d88.js",
     "./snap": "./snap.js",
     "./memmap": "./memmap.js",
-    "./romlabels": "./romlabels.js"
+    "./romlabels": "./romlabels.js",
+    "./romxref": "./romxref.js"
   },
   "files": [
     "*.js",

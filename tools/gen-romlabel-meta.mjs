@@ -12,7 +12,7 @@ import { ROM_LABELS } from '../romlabels.js';
 const load = async (p) => new Uint8Array(await readFile(new URL(`../${p}`, import.meta.url)));
 
 const cleanIo = (io) => io.map((x) => ({ dir: x.dir, port: x.port, name: x.name ?? null }));
-const cleanMem = (mem) => mem.map((x) => ({ dir: x.dir, addr: x.addr, name: x.name ?? null }));
+const cleanMem = (mem) => mem.map((x) => ({ rw: x.rw, addr: x.addr, name: x.name ?? null }));
 
 // analyze one address space and pull out the routines we labeled.
 // analyze() already serializes: destroys is transitively propagated

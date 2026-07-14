@@ -62,10 +62,12 @@ export const ROM_LABEL_META = {
    ],
    "mem": [
     {
+     "rw": "w",
      "addr": 60596,
      "name": "GVRAM window (when banked in)"
     },
     {
+     "rw": "w",
      "addr": 61204,
      "name": "disk work area"
     }
@@ -92,6 +94,7 @@ export const ROM_LABEL_META = {
    "io": [],
    "mem": [
     {
+     "rw": "w",
      "addr": 61204,
      "name": "disk work area"
     }
@@ -121,10 +124,12 @@ export const ROM_LABEL_META = {
    "io": [],
    "mem": [
     {
+     "rw": "r",
      "addr": 61258,
      "name": "disk work area"
     },
     {
+     "rw": "r",
      "addr": 61279,
      "name": "disk work area"
     }
@@ -156,6 +161,7 @@ export const ROM_LABEL_META = {
    "io": [],
    "mem": [
     {
+     "rw": "r",
      "addr": 61277,
      "name": "disk work area"
     }
@@ -187,6 +193,7 @@ export const ROM_LABEL_META = {
    "io": [],
    "mem": [
     {
+     "rw": "r",
      "addr": 61277,
      "name": "disk work area"
     }
@@ -216,22 +223,27 @@ export const ROM_LABEL_META = {
    "io": [],
    "mem": [
     {
+     "rw": "r",
      "addr": 60596,
      "name": "GVRAM window (when banked in)"
     },
     {
+     "rw": "w",
      "addr": 60596,
      "name": "GVRAM window (when banked in)"
     },
     {
+     "rw": "r",
      "addr": 60598,
      "name": "GVRAM window (when banked in)"
     },
     {
+     "rw": "r",
      "addr": 60586,
      "name": "GVRAM window (when banked in)"
     },
     {
+     "rw": "r",
      "addr": 60588,
      "name": "GVRAM window (when banked in)"
     }
@@ -277,6 +289,7 @@ export const ROM_LABEL_META = {
    ],
    "mem": [
     {
+     "rw": "r",
      "addr": 61204,
      "name": "disk work area"
     }
@@ -307,10 +320,12 @@ export const ROM_LABEL_META = {
    "io": [],
    "mem": [
     {
+     "rw": "r",
      "addr": 61200,
      "name": "disk work area"
     },
     {
+     "rw": "w",
      "addr": 61282,
      "name": "disk work area"
     }
@@ -529,18 +544,22 @@ export const ROM_LABEL_META = {
    ],
    "mem": [
     {
+     "rw": "w",
      "addr": 61195,
      "name": "disk work area"
     },
     {
+     "rw": "w",
      "addr": 61194,
      "name": "disk work area"
     },
     {
+     "rw": "r",
      "addr": 61194,
      "name": "disk work area"
     },
     {
+     "rw": "r",
      "addr": 61195,
      "name": "disk work area"
     }
@@ -576,10 +595,12 @@ export const ROM_LABEL_META = {
    ],
    "mem": [
     {
+     "rw": "w",
      "addr": 61194,
      "name": "disk work area"
     },
     {
+     "rw": "r",
      "addr": 61194,
      "name": "disk work area"
     }
@@ -712,38 +733,47 @@ export const ROM_LABEL_META = {
    ],
    "mem": [
     {
+     "rw": "r",
      "addr": 59072,
      "name": "GVRAM window (when banked in)"
     },
     {
+     "rw": "r",
      "addr": 59073,
      "name": "GVRAM window (when banked in)"
     },
     {
+     "rw": "r",
      "addr": 59074,
      "name": "GVRAM window (when banked in)"
     },
     {
+     "rw": "w",
      "addr": 61282,
      "name": "disk work area"
     },
     {
+     "rw": "w",
      "addr": 61200,
      "name": "disk work area"
     },
     {
+     "rw": "w",
      "addr": 61458,
      "name": "GVRAM window (when banked in)"
     },
     {
+     "rw": "w",
      "addr": 59075,
      "name": "GVRAM window (when banked in)"
     },
     {
+     "rw": "w",
      "addr": 61277,
      "name": "disk work area"
     },
     {
+     "rw": "w",
      "addr": 61198,
      "name": "disk work area"
     }
@@ -773,30 +803,37 @@ export const ROM_LABEL_META = {
    "io": [],
    "mem": [
     {
+     "rw": "w",
      "addr": 61280,
      "name": "disk work area"
     },
     {
+     "rw": "w",
      "addr": 61281,
      "name": "disk work area"
     },
     {
+     "rw": "r",
      "addr": 61280,
      "name": "disk work area"
     },
     {
+     "rw": "r",
      "addr": 61281,
      "name": "disk work area"
     },
     {
+     "rw": "r",
      "addr": 61283,
      "name": "disk work area"
     },
     {
+     "rw": "r",
      "addr": 61282,
      "name": "disk work area"
     },
     {
+     "rw": "w",
      "addr": 60541,
      "name": "GVRAM window (when banked in)"
     }
@@ -820,14 +857,17 @@ export const ROM_LABEL_META = {
    "io": [],
    "mem": [
     {
+     "rw": "w",
      "addr": 61204,
      "name": "disk work area"
     },
     {
+     "rw": "w",
      "addr": 61200,
      "name": "disk work area"
     },
     {
+     "rw": "w",
      "addr": 61283,
      "name": "disk work area"
     }
@@ -863,6 +903,7 @@ export const ROM_LABEL_META = {
    ],
    "mem": [
     {
+     "rw": "r",
      "addr": 61311,
      "name": "disk work area"
     }
@@ -903,6 +944,7 @@ export const ROM_LABEL_META = {
    ],
    "mem": [
     {
+     "rw": "w",
      "addr": 32521,
      "name": null
     }
@@ -939,6 +981,7 @@ export const ROM_LABEL_META = {
    ],
    "mem": [
     {
+     "rw": "w",
      "addr": 32521,
      "name": null
     }
@@ -975,14 +1018,17 @@ export const ROM_LABEL_META = {
    ],
    "mem": [
     {
+     "rw": "r",
      "addr": 32521,
      "name": null
     },
     {
+     "rw": "w",
      "addr": 32521,
      "name": null
     },
     {
+     "rw": "w",
      "addr": 32534,
      "name": null
     }
@@ -1045,14 +1091,17 @@ export const ROM_LABEL_META = {
    "io": [],
    "mem": [
     {
+     "rw": "w",
      "addr": 32533,
      "name": null
     },
     {
+     "rw": "w",
      "addr": 32532,
      "name": null
     },
     {
+     "rw": "r",
      "addr": 32533,
      "name": null
     }
@@ -1090,6 +1139,7 @@ export const ROM_LABEL_META = {
    ],
    "mem": [
     {
+     "rw": "w",
      "addr": 32524,
      "name": null
     }
@@ -1144,6 +1194,7 @@ export const ROM_LABEL_META = {
    "io": [],
    "mem": [
     {
+     "rw": "w",
      "addr": 32539,
      "name": null
     }
@@ -1177,22 +1228,27 @@ export const ROM_LABEL_META = {
    "io": [],
    "mem": [
     {
+     "rw": "r",
      "addr": 32554,
      "name": null
     },
     {
+     "rw": "w",
      "addr": 32550,
      "name": null
     },
     {
+     "rw": "w",
      "addr": 32549,
      "name": null
     },
     {
+     "rw": "r",
      "addr": 32556,
      "name": null
     },
     {
+     "rw": "r",
      "addr": 32552,
      "name": null
     }
