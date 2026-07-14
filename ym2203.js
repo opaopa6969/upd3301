@@ -139,6 +139,10 @@ export class Ym2203 {
     this.chMute = [false, false, false, false, false, false];
     this.board = true;
     this._hpX = 0; this._hpY = 0; // output AC-coupling high-pass state
+    // SSG edge-emphasis: sharpen the square's transitions so the AY lead reads
+    // "hard and forward" instead of being glued under the smooth FM. 0 = off.
+    this.ssgEmph = 0.7;
+    this._ssgPrev = 0;
     this.timerA = 0; this.timerACount = 0; this.timerARun = false;
     this.timerB = 0; this.timerBCount = 0; this.timerBRun = false;
     this.status = 0; // b0 timer A overflow, b1 timer B, b7 busy
@@ -312,8 +316,8 @@ export class Ym2203 {
       // measured AY DAC ladder (shallow-log in the mid) — see SSG_DAC. The
       // divisor is just the SSG/FM balance knob: on a real PC-88 the three SSG
       // analog outs sit LOUD next to the FM, so the SSG lead (13 s on) reads as
-      // a clear top line. 1.2 lifts it to ~0.45 of the FM RMS in that passage.
-      sum += SSG_DAC[vol & 15] / 1.2;
+      // a clear top line. 0.8 lifts it to ~0.5 of the FM RMS in that passage.
+      sum += SSG_DAC[vol & 15] / 0.8;
     }
     return sum;
   }
@@ -486,7 +490,13 @@ export class Ym2203 {
       // Modelling the board — not the chip — is what removes the bottom-heavy
       // "ドンシャリ" shelf. board=false gives the raw digital sum for A/B.
       if (!this.board) { out[i] = Math.max(-1, Math.min(1, fm * 0.5 + ssg * 0.5)); continue; }
-      const raw = fm * 0.9 + ssg * 0.62;
+      // edge-emphasis on the SSG only (first-difference high-boost): overshoots
+      // the square's transitions so the lead bites through — "硬くて前に出る" —
+      // rather than the tanh gluing it flat under the FM. Emphasis before the
+      // mix so the FM stays smooth.
+      const ssgE = ssg + this.ssgEmph * (ssg - this._ssgPrev);
+      this._ssgPrev = ssg;
+      const raw = fm * 0.9 + ssgE * 0.62;
       this._hpY = 0.996 * (this._hpY + raw - this._hpX);
       this._hpX = raw;
       // Analog output stage: a soft-saturating amp compresses the peaks and
