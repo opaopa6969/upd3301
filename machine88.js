@@ -25,6 +25,7 @@ import { renderScreen } from './pc8001.js';
 import { I8255, crossWire } from './i8255.js';
 import { Pc80s31 } from './pc80s31.js';
 import { snapObj, restoreObj } from './snap.js';
+import { Ym2203 } from './ym2203.js';
 
 export const SCHEMA_VERSION = 1;
 
@@ -104,6 +105,10 @@ export class Pc8801Machine {
     // into terminal-mode setup instead of booting the disk.
     this.dipsw = [0xdb, 0x79];
 
+    // YM2203 (OPN): FM×3 + SSG×3 + 2 timers, at ports 44h/45h. Its IRQ is
+    // the μPD8214's SOUND source (number 4, level 5) — the music driver's
+    // clock. Registers in, samples out; the machine only carries it.
+    this.opn = new Ym2203({ clockHz, sampleRate: 48000 });
     this.crtc = new Upd3301({ frameHz, drq: (buf) => this.dmac.drqPull(2, buf) });
     this.dmac = new Upd8257({ readMemory: (a) => this.ram[a & 0xffff] });
     this.width80 = true;
@@ -214,7 +219,8 @@ export class Pc8801Machine {
     if (port === 0x50) return this.crtc.readParam();
     if (port === 0x51) return this.crtc.readStatus();
     if (port >= 0x60 && port <= 0x68) return this.dmac.readPort(port - 0x60);
-    if (port === 0x44 || port === 0x45) return 0x00; // YM2203 stub
+    if (port === 0x44) return this.opn.readStatus(); // OPN status (timer flags)
+    if (port === 0x45) return this.opn.reg[this.opn.addr];
     if (port === 0xe2 || port === 0xe3) return 0xff; // EMM
     // FCh-FFh: the main half of the 8255 pair to the disk sub-system. With
     // no sub board the inputs float high and the boot ROM's BC×D timeout
@@ -253,6 +259,8 @@ export class Pc8801Machine {
       case 0x32: // mkII SR+: b5 = analog palette, b6 = ALU/extended VRAM window
         this._port32 = v;
         return;
+      case 0x44: this.opn.writeAddr(v); return; // OPN register select
+      case 0x45: this.opn.writeData(v); return; // OPN register data
       case 0x34: this._alu1 = v; return; // ALU op per plane
       case 0x35: this._alu2 = v; return; // ALU mode / compare colour / enable
       case 0x5c: this.gvramWindow = 0; return; // plane B into C000
@@ -349,6 +357,7 @@ export class Pc8801Machine {
     this.tInFrame -= this.frameT;
     this.crtc.stepFrame();
     if (this.intMaskBits & 2) this.intPending |= 1 << 1; // VSYNC, source 1
+    if (this.opn.irq) this.intPending |= 1 << 4; // OPN timers, source 4 (level 5)
     this.frame++;
     return this;
   }

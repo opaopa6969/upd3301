@@ -23,7 +23,8 @@
     "./snap": "./snap.js",
     "./memmap": "./memmap.js",
     "./romlabels": "./romlabels.js",
-    "./romxref": "./romxref.js"
+    "./romxref": "./romxref.js",
+    "./ym2203": "./ym2203.js"
   },
   "files": [
     "*.js",
