@@ -42,6 +42,7 @@
   <button id="breset">リセット</button>
   <button id="bpng" title="CRTシミュレーションを通さない生の描画出力(640×200・フルパレット)をPNG保存（バグ切り分け用）">PNG(raw)</button>
   <button id="brec" title="画面＋音声をWebM動画に録画（もう一度押すと停止して保存）">● 録画</button>
+  <button id="bclean" title="CRTシミュレーション(残光/管面/インターレース/走査線)を通さず、エミュの生描画をフルパレットでそのまま表示。崩れ無し・色正確・軽い。もう一度押すとCRT表示に戻る">🟢 クリーン表示</button>
   <button id="bfull">⛶ 全画面</button>
   <button id="bice">🔬 ICE</button>
   <button id="bide">🛠 IDE</button>
@@ -453,6 +454,22 @@ $('bfull').onclick = () => {
 $('bice').onclick = () => window.open('ice.html', 'upd3301-ice', 'width=1200,height=900');
 $('bide').onclick = () => window.open('ide.html', 'upd3301-ide-win', 'width=1400,height=950');
 
+// ---- clean vs CRT display toggle ------------------------------------------
+// Default CLEAN: the CRT sim was mangling fast-scrolling games (interlace comb,
+// phosphor smear) and costing most of the frame budget. Clean shows the true
+// emulation output; CRT is one click away for the phosphor look. Persisted.
+let cleanDisplay = localStorage.getItem('upd3301-clean') !== '0';
+function updateCleanBtn() {
+  $('bclean').classList.toggle('on', cleanDisplay);
+  $('bclean').textContent = cleanDisplay ? '🟢 クリーン表示' : '📺 CRT表示';
+}
+$('bclean').onclick = () => {
+  cleanDisplay = !cleanDisplay;
+  localStorage.setItem('upd3301-clean', cleanDisplay ? '1' : '0');
+  updateCleanBtn();
+};
+updateCleanBtn();
+
 // ---- video capture: record the live screen (+ sound) to a WebM ------------
 // canvas.captureStream taps the CRT canvas as it's drawn each frame; the audio
 // graph is tapped via a MediaStreamDestination so the recording carries the
@@ -643,34 +660,59 @@ function loop(now) {
     // composites its graphics planes under the text into the same index space.
     const is88 = machine instanceof Pc8801Machine;
     const crtc = is88 ? machine.crtc : machine.sys.crtc;
-    const frame = is88 ? machine.render({ cgrom, indexed: true }) : machine.sys.render({ cgrom });
-    if (!frame.width || !frame.height) { requestAnimationFrame(loop); return; }
-    const W = frame.width, H = frame.height;
-    fitTo(W, H);
-    const phosphor = panel.phosphor(W, H);
-    const src = panel.applyDeflection(frame.pixels, W, H, machine.frame);
-    phosphor.step(src, FR, { fieldParity: panel.interlaced ? machine.frame & 1 : null });
-    const d = img.data;
-    const opts = panel.plotOpts();
-    if (panel.tubeMode !== 'none') {
-      panel.tube(W, H).apply(phosphor.composite(), d, opts);
-    } else {
-      rgbaBuf = phosphor.toRGBA(rgbaBuf, opts);
-      const l2 = panel.line2;
+    // CLEAN path: draw the machine's own render() (full 512-colour palette),
+    // line-doubled with no dimming, and skip the whole CRT sim (phosphor / tube
+    // / interlace / scanline). No comb, true colours, and cheap — so the frame
+    // rate (and thus the music tempo, which rides the emulation clock) stays
+    // steady. Falls back to the CRT path if this machine has no rgb render.
+    let cleanF = null;
+    if (cleanDisplay) {
+      try { const f = is88 ? machine.render({ cgrom }) : machine.sys.render({ cgrom }); if (f && f.rgb && f.width) cleanF = f; } catch { cleanF = null; }
+    }
+    if (cleanF) {
+      const W = cleanF.width, H = cleanF.height, rgb = cleanF.rgb;
+      fitTo(W, H);
+      const d = img.data;
       for (let y = 0; y < H; y++) {
         for (let x = 0; x < W; x++) {
-          const s = (y * W + x) * 4;
+          const s = (y * W + x) * 3;
           let o = (y * 2 * W + x) * 4;
-          d[o] = rgbaBuf[s]; d[o + 1] = rgbaBuf[s + 1]; d[o + 2] = rgbaBuf[s + 2]; d[o + 3] = 255;
+          d[o] = rgb[s]; d[o + 1] = rgb[s + 1]; d[o + 2] = rgb[s + 2]; d[o + 3] = 255;
           o += W * 4;
-          d[o] = rgbaBuf[s] * l2; d[o + 1] = rgbaBuf[s + 1] * l2; d[o + 2] = rgbaBuf[s + 2] * l2; d[o + 3] = 255;
+          d[o] = rgb[s]; d[o + 1] = rgb[s + 1]; d[o + 2] = rgb[s + 2]; d[o + 3] = 255;
         }
       }
+      ctx.putImageData(img, 0, 0);
+    } else {
+      const frame = is88 ? machine.render({ cgrom, indexed: true }) : machine.sys.render({ cgrom });
+      if (!frame.width || !frame.height) { requestAnimationFrame(loop); return; }
+      const W = frame.width, H = frame.height;
+      fitTo(W, H);
+      const phosphor = panel.phosphor(W, H);
+      const src = panel.applyDeflection(frame.pixels, W, H, machine.frame);
+      phosphor.step(src, FR, { fieldParity: panel.interlaced ? machine.frame & 1 : null });
+      const d = img.data;
+      const opts = panel.plotOpts();
+      if (panel.tubeMode !== 'none') {
+        panel.tube(W, H).apply(phosphor.composite(), d, opts);
+      } else {
+        rgbaBuf = phosphor.toRGBA(rgbaBuf, opts);
+        const l2 = panel.line2;
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < W; x++) {
+            const s = (y * W + x) * 4;
+            let o = (y * 2 * W + x) * 4;
+            d[o] = rgbaBuf[s]; d[o + 1] = rgbaBuf[s + 1]; d[o + 2] = rgbaBuf[s + 2]; d[o + 3] = 255;
+            o += W * 4;
+            d[o] = rgbaBuf[s] * l2; d[o + 1] = rgbaBuf[s + 1] * l2; d[o + 2] = rgbaBuf[s + 2] * l2; d[o + 3] = 255;
+          }
+        }
+      }
+      ctx.putImageData(img, 0, 0);
     }
-    ctx.putImageData(img, 0, 0);
     workMs = workMs * 0.9 + (performance.now() - t0) * 0.1;
-    guts.textContent = `${is88 ? 'PC-8801/N88' : 'PC-8001/N80'}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
-      + `  ${crtc.cols}x${crtc.rows} (${phosW}x${phosH}px)  hsync=${crtc.hsyncHz()}Hz`;
+    guts.textContent = `${is88 ? 'PC-8801/N88' : 'PC-8001/N80'}${cleanF ? ' [clean]' : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
+      + `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz`;
   }
   requestAnimationFrame(loop);
 }
