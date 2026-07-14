@@ -312,8 +312,8 @@ export class Ym2203 {
       // measured AY DAC ladder (shallow-log in the mid) — see SSG_DAC. The
       // divisor is just the SSG/FM balance knob: on a real PC-88 the three SSG
       // analog outs sit LOUD next to the FM, so the SSG lead (13 s on) reads as
-      // a clear top line. 2.0 lifts it to ~1/4 of the FM RMS in that passage.
-      sum += SSG_DAC[vol & 15] / 2.0;
+      // a clear top line. 1.2 lifts it to ~0.45 of the FM RMS in that passage.
+      sum += SSG_DAC[vol & 15] / 1.2;
     }
     return sum;
   }
