@@ -327,29 +327,35 @@ export class Ym2203 {
       if (op.phase < 0) op.phase += 1024;
     }
 
-    // modulation graph per algorithm (op indices 0..3 = OP1..OP4)
+    // modulation graph per algorithm (op indices 0..3 = OP1..OP4).
+    // MOD is the phase swing a full-scale modulator (±1) imparts, in sine-
+    // table units (1024 = one cycle). At 256 the modulation index tops out
+    // near 1.5 — thin, few harmonics, and layered pads sink out of the mix.
+    // The real OPN swings the phase several cycles; MOD = 1024 restores the
+    // richness the ear was missing.
+    const MOD = 1024;
     const s = (op, mod) => {
       const idx = (op.phase + mod) & 1023;
       return SIN_TAB[idx | 0] * this._gain(op.env + op.tl * 8);
     };
 
     const fb = ch.fb ? (ops[0].out + ops[0].prev) * (1 << ch.fb) / 32 : 0;
-    const o1 = s(ops[0], fb * 256);
+    const o1 = s(ops[0], fb * MOD);
     ops[0].prev = ops[0].out; ops[0].out = o1;
 
     const A = ch.alg;
     let o2, o3, o4;
-    if (A === 0) { o2 = s(ops[1], o1 * 256); o3 = s(ops[2], o2 * 256); o4 = s(ops[3], o3 * 256); out = o4; }
-    else if (A === 1) { o2 = s(ops[1], 0); o3 = s(ops[2], (o1 + o2) * 256); o4 = s(ops[3], o3 * 256); out = o4; }
-    else if (A === 2) { o2 = s(ops[1], 0); o3 = s(ops[2], o2 * 256); o4 = s(ops[3], (o1 + o3) * 256); out = o4; }
-    else if (A === 3) { o2 = s(ops[1], o1 * 256); o3 = s(ops[2], 0); o4 = s(ops[3], (o2 + o3) * 256); out = o4; }
-    else if (A === 4) { o2 = s(ops[1], o1 * 256); o3 = s(ops[2], 0); o4 = s(ops[3], o3 * 256); out = o2 + o4; }
-    else if (A === 5) { o2 = s(ops[1], o1 * 256); o3 = s(ops[2], o1 * 256); o4 = s(ops[3], o1 * 256); out = o2 + o3 + o4; }
-    else if (A === 6) { o2 = s(ops[1], o1 * 256); o3 = s(ops[2], 0); o4 = s(ops[3], 0); out = o2 + o3 + o4; }
+    if (A === 0) { o2 = s(ops[1], o1 * MOD); o3 = s(ops[2], o2 * MOD); o4 = s(ops[3], o3 * MOD); out = o4; }
+    else if (A === 1) { o2 = s(ops[1], 0); o3 = s(ops[2], (o1 + o2) * MOD); o4 = s(ops[3], o3 * MOD); out = o4; }
+    else if (A === 2) { o2 = s(ops[1], 0); o3 = s(ops[2], o2 * MOD); o4 = s(ops[3], (o1 + o3) * MOD); out = o4; }
+    else if (A === 3) { o2 = s(ops[1], o1 * MOD); o3 = s(ops[2], 0); o4 = s(ops[3], (o2 + o3) * MOD); out = o4; }
+    else if (A === 4) { o2 = s(ops[1], o1 * MOD); o3 = s(ops[2], 0); o4 = s(ops[3], o3 * MOD); out = o2 + o4; }
+    else if (A === 5) { o2 = s(ops[1], o1 * MOD); o3 = s(ops[2], o1 * MOD); o4 = s(ops[3], o1 * MOD); out = o2 + o3 + o4; }
+    else if (A === 6) { o2 = s(ops[1], o1 * MOD); o3 = s(ops[2], 0); o4 = s(ops[3], 0); out = o2 + o3 + o4; }
     else { o2 = s(ops[1], 0); o3 = s(ops[2], 0); o4 = s(ops[3], 0); out = o1 + o2 + o3 + o4; }
 
     for (const op of ops) this._opTick(op);
-    return out / 4;
+    return out / 3;
   }
 
   // Advance ONLY the timers by `ticks` FM ticks (clock/72). The machine
