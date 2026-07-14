@@ -265,3 +265,40 @@ test('machine88: port 31h and the palette decode the way the silicon does', asyn
   m.out(0x55, 0x40 | 6); //            bit6=1 → G=6
   assert.deepEqual([...m.palette.slice(3, 6)], [5, 6, 3]);
 });
+
+test('machine88: the SR ALU writes three planes at once', async (t) => {
+  const roms = await loadRoms();
+  if (!roms) return t.skip('no ROMs (bring your own)');
+  const { Pc8801Machine } = await import('./machine88.js');
+  const m = new Pc8801Machine({ main: roms.main, ext: roms.ext, sub: roms.sub });
+
+  m.out(0x32, 0x40); // extended VRAM window
+  m.out(0x35, 0x80); // ALU on, mode 0, compare colour 0
+  // 34h: B = OR (0x01), R = XOR (0x10<<1?), G = AND-NOT (0)
+  // per-plane nibble pair: bit p of the low nibble = OR, bit p of the high = XOR
+  m.gvram[0][0] = 0x00; m.gvram[1][0] = 0xff; m.gvram[2][0] = 0xff;
+  m.out(0x34, 0x01 | 0x20); // plane0: OR, plane1: XOR, plane2: AND-NOT
+  m.writeMem(0xc000, 0x0f);
+  assert.equal(m.gvram[0][0], 0x0f, 'B: OR');
+  assert.equal(m.gvram[1][0], 0xf0, 'R: XOR');
+  assert.equal(m.gvram[2][0], 0xf0, 'G: AND-NOT');
+
+  // colour compare on read: a 1 bit marks dots that ARE the compare colour.
+  // set dot pattern: plane0=0x0f only → colour 1 (blue) in the low nibble
+  m.gvram[0][1] = 0x0f; m.gvram[1][1] = 0x00; m.gvram[2][1] = 0x00;
+  m.out(0x35, 0x80 | 1); // compare colour = 1 (B only)
+  assert.equal(m.readMem(0xc001), 0x0f, 'the blue dots come back as 1 bits');
+
+  // mode 1 replays the latched planes — the block-copy primitive
+  m.out(0x35, 0x80 | 0x10);
+  m.writeMem(0xc002, 0x00); // value ignored; the latch is what lands
+  assert.equal(m.gvram[0][2], 0x0f);
+  assert.equal(m.gvram[1][2], 0x00);
+
+  // window closed → plain RAM again, planes untouched
+  m.out(0x32, 0x00);
+  m.out(0x5f, 0); // RAM at C000
+  m.writeMem(0xc000, 0xaa);
+  assert.equal(m.gvram[0][0], 0x0f, 'plane survived');
+  assert.equal(m.readMem(0xc000), 0xaa, 'RAM again');
+});

@@ -63,6 +63,12 @@ export class Pc8801Machine {
     this.extMapped = false; // port 71h bit0=0 → ext ROM at 6000-7FFF
     this._port71 = 0xff; // the raw latch (read back by the call dispatcher)
     this._port31 = 0;
+    // SR's GVRAM ALU: three planes written in ONE cycle, with logic ops and
+    // a colour-compare read. It is why SR games scroll at all. 34h picks the
+    // op per plane, 35h the mode/compare/enable, 32h b6 turns the window on.
+    this._alu1 = 0; // per-plane op (bits: B=0x11, R=0x22, G=0x44)
+    this._alu2 = 0; // b0-2 compare colour, b4-5 mode, b7 = VRAM (not RAM)
+    this._aluBuf = [0, 0, 0]; // latched planes from the last ALU read
     this._port32 = 0; // bits 0-1 = EROMSL (which ext bank)
     this.gvramWindow = -1; // -1 = RAM at C000-FFFF; 0..2 = plane B/R/G
     this.gvramOn = false; // port 31h bit3
@@ -129,15 +135,59 @@ export class Pc8801Machine {
       const rom = this.n80mode && this.romN80 ? this.romN80 : this.romMain;
       return rom[a] ?? 0xff;
     }
+    if (a >= 0xc000 && this._aluOn()) return this._aluRead(a - 0xc000);
     if (a >= 0xc000 && this.gvramWindow >= 0) {
       return this.gvram[this.gvramWindow][a - 0xc000];
     }
     return this.ram[a];
   }
 
+  // the ALU window is open when 32h b6 (extended VRAM) and 35h b7 (VRAM, not
+  // main RAM) are both set — otherwise C000-FFFF is plain RAM or one plane
+  _aluOn() { return (this._port32 & 0x40) !== 0 && (this._alu2 & 0x80) !== 0; }
+
+  // ALU read: latch all three planes, and RETURN the colour-compare result —
+  // a 1 bit means "this dot is the compare colour". One read tells the CPU
+  // where a whole 8-dot span matches a colour; that is the scroll primitive.
+  _aluRead(o) {
+    const cmp = this._alu2 & 7;
+    let m = 0xff;
+    for (let p = 0; p < 3; p++) {
+      const v = this.gvram[p][o];
+      this._aluBuf[p] = v;
+      m &= (cmp & (1 << p)) ? v : ~v; // plane must be 1 where the colour has it
+    }
+    return m & 0xff;
+  }
+
+  // ALU write: mode 0 = per-plane logic op from 34h (AND-NOT / OR / XOR),
+  // modes 1-3 = replay the latched planes (block copy without re-reading).
+  _aluWrite(o, v) {
+    switch (this._alu2 & 0x30) {
+      case 0x00: {
+        let op = this._alu1;
+        for (let p = 0; p < 3; p++, op >>= 1) {
+          switch (op & 0x11) {
+            case 0x00: this.gvram[p][o] &= ~v; break;
+            case 0x01: this.gvram[p][o] |= v; break;
+            case 0x10: this.gvram[p][o] ^= v; break;
+            default: break; // 0x11 = leave this plane alone
+          }
+        }
+        return;
+      }
+      case 0x10: // restore all three planes as latched
+        for (let p = 0; p < 3; p++) this.gvram[p][o] = this._aluBuf[p];
+        return;
+      case 0x20: this.gvram[0][o] = this._aluBuf[1]; return; // R → B
+      default: this.gvram[1][o] = this._aluBuf[0]; return; // B → R
+    }
+  }
+
   writeMem(a, v) {
     a &= 0xffff;
     v &= 0xff;
+    if (a >= 0xc000 && this._aluOn()) { this._aluWrite(a - 0xc000, v); return; }
     if (a >= 0xc000 && this.gvramWindow >= 0) {
       this.gvram[this.gvramWindow][a - 0xc000] = v;
       return;
@@ -200,9 +250,11 @@ export class Pc8801Machine {
         this.gvramOn = (v & 8) !== 0;
         this.mono = (v & 0x10) === 0;
         return;
-      case 0x32: // mkII SR+: palette mode, sound int mask, ALU
+      case 0x32: // mkII SR+: b5 = analog palette, b6 = ALU/extended VRAM window
         this._port32 = v;
         return;
+      case 0x34: this._alu1 = v; return; // ALU op per plane
+      case 0x35: this._alu2 = v; return; // ALU mode / compare colour / enable
       case 0x5c: this.gvramWindow = 0; return; // plane B into C000
       case 0x5d: this.gvramWindow = 1; return; // plane R
       case 0x5e: this.gvramWindow = 2; return; // plane G
@@ -331,6 +383,7 @@ export class Pc8801Machine {
       dmac: snapObj(this.dmac),
       bank: {
         romEnabled: this.romEnabled, extMapped: this.extMapped, port32: this._port32, port71: this._port71,
+        port31: this._port31, alu1: this._alu1, alu2: this._alu2, aluBuf: [...this._aluBuf],
         gvramWindow: this.gvramWindow, gvramOn: this.gvramOn,
         mono: this.mono, line400: this.line400, width80: this.width80,
       },
@@ -378,6 +431,9 @@ export class Pc8801Machine {
     const b = s.bank;
     this.romEnabled = b.romEnabled; this.extMapped = b.extMapped; this._port32 = b.port32;
     this._port71 = b.port71 ?? 0xff;
+    this._port31 = b.port31 ?? 0;
+    this._alu1 = b.alu1 ?? 0; this._alu2 = b.alu2 ?? 0;
+    this._aluBuf = [...(b.aluBuf ?? [0, 0, 0])];
     this.gvramWindow = b.gvramWindow; this.gvramOn = b.gvramOn;
     this.mono = b.mono; this.line400 = b.line400; this.width80 = b.width80;
     this.intLevels = s.ints.levels; this.intMaskBits = s.ints.mask; this.intPending = s.ints.pending;
