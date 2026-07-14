@@ -55,7 +55,6 @@
 </div>
 <div class="row">
   <input type="file" id="file" accept="video/*">
-  <button id="bsample">▶ サンプル</button>
   <button id="bcam">Webカメラ</button>
   <button id="bshare">🖥 画面/タブ共有</button>
   <button id="bgame">🎮 ゲームアタッチ</button>
@@ -376,15 +375,6 @@ $('file').onchange = (e) => {
   say('loading ' + f.name + ' ...');
   video.srcObject = null;
   video.src = URL.createObjectURL(f);
-  video.load();
-  tryPlay();
-};
-// self-made test clip served next to the page (no upload needed). A YouTube
-// URL cannot be used directly: the browser blocks cross-origin media reads.
-$('bsample').onclick = () => {
-  say('loading sample.mp4 ...');
-  video.srcObject = null;
-  video.src = 'sample.mp4';
   video.load();
   tryPlay();
 };
