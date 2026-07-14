@@ -28,6 +28,17 @@
   .treerow { cursor:pointer; font-size:11px; line-height:1.5; color:#9ab; white-space:pre; }
   .treerow:hover { color:#8fd; }
   .treerow.on { color:#8fd; }
+  .listrow, .stackrow { cursor:pointer; font-size:11px; line-height:1.55; color:#9ab; white-space:pre; overflow-x:auto; }
+  .listrow:hover, .stackrow:hover { color:#8fd; background:#1c2430; }
+  .listrow.dim, .stackrow.dim { color:#556; }
+  .region { color:#889; font-size:11px; margin-top:3px; }
+  .region.approx { color:#556; font-style:italic; }
+  #metabox { color:#a98; font-size:11px; white-space:pre-wrap; margin-top:4px; border-top:1px dotted #2a3140; padding-top:4px; min-height:1em; }
+  #vram { font-size:11px; line-height:1.4; color:#9ab; max-height:26em; overflow:auto; }
+  #trace { max-height:17em; overflow-y:auto; }
+  #sres, #csres { max-height:9em; overflow-y:auto; }
+  #unusedout { color:#889; font-size:11px; white-space:pre; }
+  select { background:#181820; color:#cde; border:1px solid #446; border-radius:3px; font-family:inherit; font-size:11px; padding:2px 4px; max-width:17em; }
   #prof { font-size:11px; line-height:1.5; color:#9ab; }
   #ttinfo { color:#667; font-size:11px; margin-top:4px; }
   #clock { color:#8d9; font-size:12px; }
@@ -63,6 +74,7 @@
   <button id="bcont">▶ 続行</button>
   <button id="bstep">ステップ</button>
   <button id="bover">ステップオーバー</button>
+  <button id="bstepout">⤴ ステップアウト</button>
   <button id="bframe">+1フレーム</button>
   <span style="width:12px"></span>
   <span class="lbl" style="color:#778;font-size:12px">構文:</span>
@@ -87,6 +99,25 @@
         <button id="blexport">JSON書出</button>
         <label style="color:#778;font-size:11px">読込 <input type="file" id="blimport" accept=".json" style="font-size:10px;width:12em"></label>
       </div>
+      <div id="metabox"></div>
+      <div id="presetnote" class="region"></div>
+    </div>
+    <div class="panel">
+      <h2>コールスタック（フレームクリックでそのコードを見る）</h2>
+      <div id="stack"></div>
+    </div>
+    <div class="panel">
+      <h2>命令トレース（行クリックでその時点へ巻き戻し）</h2>
+      <div class="row" style="margin-top:0">
+        <button id="btrace" class="on">記録</button>
+        <button id="btraceclr">クリア</button>
+      </div>
+      <div id="trace"></div>
+    </div>
+    <div class="panel">
+      <h2>text VRAM / アトリビュートビューア（μPD3301の見る世界）</h2>
+      <div id="vraminfo" class="region"></div>
+      <pre id="vram"></pre>
     </div>
     <div class="panel">
       <h2>タイムトラベル（30フレーム毎に自動snap・分岐ツリー）</h2>
@@ -122,6 +153,7 @@
         <button id="bwrite">書込</button>
       </div>
       <pre id="mem"></pre>
+      <div id="memregion" class="region"></div>
     </div>
     <div class="panel">
       <h2>ブレークポイント（このタブのCPUに付く）</h2>
@@ -131,6 +163,64 @@
         <button id="bpbtn">±</button>
       </div>
       <pre id="bplist"></pre>
+    </div>
+    <div class="panel">
+      <h2>ウォッチポイント（メモリR/Wでブレーク、行クリックで削除）</h2>
+      <div class="row" style="margin-top:0">
+        <input id="walo" size="6" placeholder="addr">
+        <span style="color:#778">〜</span>
+        <input id="wahi" size="6" placeholder="(範囲)">
+        <label style="color:#778;font-size:11px"><input type="checkbox" id="war"> R</label>
+        <label style="color:#778;font-size:11px"><input type="checkbox" id="waw" checked> W</label>
+        <input id="wacond" size="16" placeholder="条件: value==0x55">
+        <button id="bwadd">追加</button>
+      </div>
+      <div id="wlist"></div>
+    </div>
+    <div class="panel">
+      <h2>I/Oポートブレーク（IN/OUTでブレーク、行クリックで削除）</h2>
+      <div class="row" style="margin-top:0">
+        <select id="iosel"></select>
+        <input id="iolo" size="4" placeholder="port">
+        <span style="color:#778">〜</span>
+        <input id="iohi" size="4" placeholder="(範囲)">
+        <label style="color:#778;font-size:11px"><input type="checkbox" id="ioin"> IN</label>
+        <label style="color:#778;font-size:11px"><input type="checkbox" id="ioout" checked> OUT</label>
+        <input id="iocond" size="12" placeholder="条件式">
+        <button id="bioadd">追加</button>
+      </div>
+      <div id="iolist"></div>
+    </div>
+    <div class="panel">
+      <h2>メモリ検索 / 変化検索（チートエンジン式）</h2>
+      <div class="row" style="margin-top:0">
+        <input id="spat" size="18" placeholder='C3 00 80 か "HELLO"'>
+        <button id="bsearch">検索</button>
+      </div>
+      <div id="sres"></div>
+      <div class="row">
+        <button id="bcsinit">📸 初期化</button>
+        <button id="bcsne">変化</button>
+        <button id="bcseq">不変</button>
+        <button id="bcsgt">増</button>
+        <button id="bcslt">減</button>
+        <input id="csval" size="4" placeholder="値">
+        <button id="bcsval">値=</button>
+        <span id="csinfo" style="color:#778;font-size:11px"></span>
+      </div>
+      <div id="csres"></div>
+      <div class="row">
+        <button id="bunused">未使用メモリ推定（実行カバレッジ由来）</button>
+      </div>
+      <pre id="unusedout"></pre>
+    </div>
+    <div class="panel">
+      <h2>ウォッチ式（毎フレーム評価、行クリックで削除）</h2>
+      <div class="row" style="margin-top:0">
+        <input id="wxexpr" size="24" placeholder="例: hl, mem(0xEF14), bc+de">
+        <button id="bwxadd">追加</button>
+      </div>
+      <div id="wxlist"></div>
     </div>
     <div class="panel">
       <h2>アセンブラ（Z80マクロアセンブラ → メモリ直書き）</h2>
@@ -158,25 +248,30 @@ start:  LD B,8
         <button id="bexpwrite">再ASM→メモリ</button>
       </div>
       <textarea id="exptext" spellcheck="false" placeholder="; 範囲を指定してソース化 — 出力はそのまま再アセンブル可能（範囲外への絶対参照はそのまま残る）"></textarea>
+      <div id="pinnote" class="region"></div>
     </div>
   </div>
 </div>
 
 <p class="note" id="note-ice">
-  machine.html の「🔬 ICE」から開くと、走ってる実機（window.opener.__machine）に
-  外から食い込む。停止・ステップ・条件付きブレーク（JS式でレジスタとmem(addr)が見える）、
-  レジスタ書き換え、メモリ編集、アセンブラで組んだコードの注入まで。
-  逆アセンブルはZilog/Intel 8080表記を切替可（88実機のモニタ文化）。
-  アセンブル成功時はルーチン毎の静的解析（破壊レジスタ・I/Oポート名・スタックlint・Tステート）が下に出る。
+  machine.html の「🔬 ICE」から開くと、走ってる実機（window.opener.__machine)に
+  外から食い込む。停止・ステップ・ステップアウト・条件付きブレーク、
+  <b>ウォッチポイント</b>（メモリR/W）と<b>I/Oポートブレーク</b>（ポート名表から選べる）、
+  コールスタック、命令トレース（クリックで時間旅行）、チートエンジン式の変化検索、
+  ライブウォッチ式、そして<b>text VRAM/アトリビュートビューア</b>（3301の一品）。
+  ROMの解析済みラベル（romlabels.js）が逆アセンブルに自動注釈され、
+  ラベル行クリックで「何を破壊するか・どのポートを叩くか・何T掛かるか」まで出る。
+  hexダンプはメモリマップ（memmap.js）の領域名つき。approx表記は「まだ推定」の正直マーク。
 </p>
 
 <script type="module">
-import { applyI18n, t } from './i18n.js';
+import { applyI18n, t, lang } from './i18n.js';
 applyI18n();
 import { mountIcePage } from './ice.js';
 
 const page = mountIcePage(document, {
   t,
+  lang, // ROM-label comments follow the page language (ja is the default)
   raf: (cb) => requestAnimationFrame(cb),
   getMachine: () => (window.opener && !window.opener.closed ? window.opener.__machine ?? null : null),
   openerAlive: () => !!(window.opener && !window.opener.closed),

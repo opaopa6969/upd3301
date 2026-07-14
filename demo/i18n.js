@@ -152,6 +152,49 @@ const DICT = {
   '（OFF — ⏱で計測開始）': '(off — hit ⏱ to start)',
   'ルーチン': 'routine',
   '範囲を addr,addr で入れて（終了は含む）': 'give a range (end inclusive)',
+  // ICE round 2 (issue #6)
+  '⤴ ステップアウト': '⤴ Step out',
+  'コールスタック（フレームクリックでそのコードを見る）': 'Call stack (click a frame to view its code)',
+  '命令トレース（行クリックでその時点へ巻き戻し）': 'Instruction trace (click a row to rewind to that moment)',
+  '記録': 'Record',
+  'クリア': 'Clear',
+  'text VRAM / アトリビュートビューア（μPD3301の見る世界）': 'Text VRAM / attribute viewer (the μPD3301\'s view)',
+  'ウォッチポイント（メモリR/Wでブレーク、行クリックで削除）': 'Watchpoints (break on memory R/W; click a row to remove)',
+  'I/Oポートブレーク（IN/OUTでブレーク、行クリックで削除）': 'I/O port breaks (break on IN/OUT; click a row to remove)',
+  'メモリ検索 / 変化検索（チートエンジン式）': 'Memory search / change search (cheat-engine style)',
+  'ウォッチ式（毎フレーム評価、行クリックで削除）': 'Watch expressions (live, click a row to remove)',
+  '追加': 'Add',
+  '検索': 'Search',
+  '📸 初期化': '📸 Baseline',
+  '変化': 'changed',
+  '不変': 'same',
+  '増': 'up',
+  '減': 'down',
+  '値=': 'val=',
+  '未使用メモリ推定（実行カバレッジ由来）': 'Estimate unused memory (from execution coverage)',
+  '戻り先': 'ret→',
+  '（CALL未観測 — attach後にCALLが実行されると積まれる）': '(no CALLs seen yet — frames stack up as CALLs execute)',
+  '（なし — クリックで削除）': '(none — click a row to remove)',
+  '（式を追加 — 例: hl, mem(0xEF14), bc+de）': '(add an expression — e.g. hl, mem(0xEF14), bc+de)',
+  '（トレースOFF）': '(trace off)',
+  '（まだ何も実行してない）': '(nothing executed yet)',
+  'CRTC/DMACが見つからない': 'no CRTC/DMAC on this machine',
+  'パターンが変（hex列 か "文字列"）': 'bad pattern (hex bytes or "text")',
+  '（見つからない）': '(not found)',
+  'まず📸初期化して': 'take the 📸 baseline first',
+  '候補': 'candidate(s)',
+  '全64KBを撮影した — 値を動かしてから絞り込む': 'photographed all 64KB — change the value, then refine',
+  '（userRAMに未実行領域なし）': '(no unexecuted user RAM)',
+  '（ポート名から選ぶ）': '(pick by port name)',
+  'ROM注釈プリセット': 'ROM annotation presets',
+  'ラベル行クリックで解説とmetaが出る': 'click a label line for commentary and meta',
+  '（このROMの注釈プリセットは無い）': '(no annotation preset for this ROM)',
+  'pin推奨（動かせない領域）': 'pin these (regions that must never move)',
+  '破壊': 'clobbers',
+  '入力': 'inputs',
+  '保存': 'saves',
+  '（ループ・下限のみ）': ' (loop — lower bound only)',
+  '⚠ 間接フローあり — 解析は不完全': '⚠ indirect flow — analysis incomplete',
   // tour / help chrome (tour.js)
   '次へ': 'Next',
   '▶ サンプル': '▶ Sample',
@@ -182,12 +225,14 @@ const DICT = {
 
 const NOTES_EN = {
   'note-ice': `Opened from machine.html's "🔬 ICE" button, this window clamps onto the live
-    machine (window.opener.__machine) from the outside. Pause, single-step, conditional
-    breakpoints (a JS expression that sees the registers and mem(addr)), register editing,
-    memory pokes, and code injection through the built-in Z80 macro assembler. The
-    disassembly toggles between Zilog and Intel 8080 spellings (the PC-88 monitor culture).
-    A successful assemble also prints per-routine static analysis below: destroyed
-    registers, I/O port names, stack lint, T-states.`,
+    machine (window.opener.__machine) from the outside. Pause, step, step-out, conditional
+    breakpoints, watchpoints (memory R/W), I/O port breaks (pickable by port name), a call
+    stack, an instruction trace (click a row to time-travel there), cheat-engine-style
+    change search, live watch expressions, and the text VRAM / attribute viewer (a μPD3301
+    specialty). Analyzed ROM labels (romlabels.js) annotate the disassembly automatically —
+    click a label line to see what a routine clobbers, which ports it touches and how many
+    T-states it costs. The hex dump carries memory-map region names (memmap.js); anything
+    tagged approx is honestly still an estimate.`,
   'note-main': `27-color mode = port 65h ← 8000h+5999 (two screens alternate; the Bemaga 1990-07 trick).
     3-plane mode = 8000h+8999 (three screens) showing R/G/B one frame each — logically full
     per-dot color at 1/3 duty per gun. On short-persistence P22 it is flicker hell; on the

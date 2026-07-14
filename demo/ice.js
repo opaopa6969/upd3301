@@ -20,6 +20,10 @@
 import { disasm } from '../z80dis.js';
 import { assemble } from '../z80asm.js';
 import { analyze, exportSource } from '../z80anal.js';
+import { PORTS_PC88_MAIN, PORTS_PC88_SUB } from '../z80anal.js';
+import { regionAt, pinPresets, estimateUnused } from '../memmap.js';
+import { labelMap, commentFor } from '../romlabels.js';
+import { parsePattern, searchBytes, ChangeSearch, textVramModel, attrShort } from './ice-tools.js';
 
 export const BREAK = Symbol('ice-break');
 
@@ -48,6 +52,17 @@ export function compileCond(cond) {
   );
 }
 
+// watch/IO-break conditions additionally see the access itself: value, and
+// addr (the address or port that was touched)
+export function compileAccessCond(cond) {
+  return new Function(
+    'value', 'addr',
+    'a', 'f', 'b', 'c', 'd', 'e', 'h', 'l', 'af', 'bc', 'de', 'hl',
+    'ix', 'iy', 'sp', 'pc', 'i', 'r', 'im', 'iff1', 'mem',
+    `return (${cond});`
+  );
+}
+
 export class IceController {
   constructor() {
     this.machine = null;
@@ -58,6 +73,11 @@ export class IceController {
     this._origKeys = null;
     this.replaying = false; // breakpoints hold their fire during a replay
     this.onInput = null; // (type, frame, row, bit) — the time-travel input log
+    // set inside a bus callback mid-instruction; the step wrap turns it into
+    // a clean break AFTER the instruction completes (never abort mid-opcode —
+    // that would leave the CPU half-executed and determinism in pieces)
+    this.pendingBreak = null;
+    this._accessId = 0;
   }
 
   cpu(name) { return this.cpus.find((c) => c.name === name) ?? null; }
@@ -122,13 +142,22 @@ export class IceController {
         this.machine.keyUp = this._origKeys.ku;
       }
     }
-    for (const c of this.cpus) c.cpu.step = c.origStep;
+    for (const c of this.cpus) {
+      c.cpu.step = c.origStep;
+      if (c.origBus) { // untap the bus
+        c.origBus.bus.read = c.origBus.read;
+        c.origBus.bus.write = c.origBus.write;
+        c.origBus.bus.in = c.origBus.in;
+        c.origBus.bus.out = c.origBus.out;
+      }
+    }
     this._origStepFrame = null;
     this._origKeys = null;
     this.machine = null;
     this.cpus = [];
     this.paused = false; // never leave a closed debugger holding the machine frozen
     this.hit = null;
+    this.pendingBreak = null;
   }
 
   rawKey(type, row, bit) { // replay injection — bypasses the recording tap
@@ -139,13 +168,57 @@ export class IceController {
   _addCpu(name, cpu, read, write, irq = {}) {
     const self = this;
     const origStep = cpu.step;
+    const TRACE_CAP = 4096;
     const entry = {
       name, cpu, read, write, origStep, irq,
       bps: new Map(), skipOnce: -1,
+      watches: [], // {id, lo, hi, r, w, cond, fn, enabled, error}
+      iobps: [], // {id, lo, hi, in, out, cond, fn, enabled, error}
       tTotal: 0, // T-states executed since attach (clock / wall-time display)
-      profOn: false, // shadow-call-stack profiler
+      stackOn: true, // shadow call stack (backtrace / step-out) — always cheapish
+      profOn: false, // T accounting into the routines map
       profData: { stack: [], routines: new Map(), rootSelf: 0 },
+      traceOn: true, // instruction trace ring
+      trace: {
+        cap: TRACE_CAP, n: 0,
+        pc: new Uint16Array(TRACE_CAP), af: new Uint16Array(TRACE_CAP),
+        bc: new Uint16Array(TRACE_CAP), de: new Uint16Array(TRACE_CAP),
+        hl: new Uint16Array(TRACE_CAP), sp: new Uint16Array(TRACE_CAP),
+        frame: new Uint32Array(TRACE_CAP),
+      },
+      // executed-PC coverage (main only) — feeds memmap.estimateUnused
+      coverage: name === 'main' ? new Uint8Array(0x10000) : null,
+      origBus: null,
     };
+
+    // bus taps: watchpoints and I/O breaks see every CPU access without the
+    // core knowing. ICE's own peeks (hex dump, disasm) use entry.read, which
+    // bypasses the bus — the debugger never trips its own wire. DMA pulls go
+    // through dmac.readMemory, also outside the bus: watchpoints are a CPU
+    // instrument, by design.
+    const bus = cpu.bus;
+    if (bus) {
+      entry.origBus = { bus, read: bus.read, write: bus.write, in: bus.in, out: bus.out };
+      bus.read = (a) => {
+        const v = entry.origBus.read(a);
+        if (entry.watches.length && !self.replaying) self._accessCheck(entry, entry.watches, a & 0xffff, v & 0xff, 'r', 'watch');
+        return v;
+      };
+      bus.write = (a, v) => {
+        entry.origBus.write(a, v);
+        if (entry.watches.length && !self.replaying) self._accessCheck(entry, entry.watches, a & 0xffff, v & 0xff, 'w', 'watch');
+      };
+      bus.in = (p) => {
+        const v = entry.origBus.in(p);
+        if (entry.iobps.length && !self.replaying) self._accessCheck(entry, entry.iobps, p & 0xff, v & 0xff, 'in', 'io');
+        return v;
+      };
+      bus.out = (p, v) => {
+        entry.origBus.out(p, v);
+        if (entry.iobps.length && !self.replaying) self._accessCheck(entry, entry.iobps, p & 0xff, v & 0xff, 'out', 'io');
+      };
+    }
+
     cpu.step = function () {
       if (!self.replaying) { // breakpoints hold their fire during a replay
         const bp = entry.bps.get(cpu.pc);
@@ -173,47 +246,185 @@ export class IceController {
           }
         } else if (entry.skipOnce !== cpu.pc) entry.skipOnce = -1;
       }
-      if (!entry.profOn) {
-        const t = origStep.call(cpu);
-        entry.tTotal += t;
-        return t;
-      }
-      // profiler: detect CALL/RST before executing, attribute the T after.
-      // The shadow stack unwinds by SP, so RET variants / popped return
-      // addresses / interrupts all resolve without opcode bookkeeping.
       const pcB = cpu.pc, spB = cpu.sp;
-      const op = entry.read(pcB) & 0xff;
-      let target = -1;
-      if (op === 0xcd || (op & 0xc7) === 0xc4) {
-        target = (entry.read((pcB + 1) & 0xffff) | (entry.read((pcB + 2) & 0xffff) << 8)) & 0xffff;
-      } else if ((op & 0xc7) === 0xc7) target = op & 0x38; // RST
+      if (entry.traceOn) { // ring: pre-execution state of every instruction
+        const tr = entry.trace, i2 = tr.n % tr.cap;
+        tr.pc[i2] = pcB;
+        tr.af[i2] = cpu.af; tr.bc[i2] = cpu.bc; tr.de[i2] = cpu.de;
+        tr.hl[i2] = cpu.hl; tr.sp[i2] = spB;
+        tr.frame[i2] = self.machine?.frame ?? 0;
+        tr.n++;
+      }
+      if (entry.coverage) entry.coverage[pcB] = 1;
+      // shadow call stack: detect CALL/RST before executing, confirm after
+      // (conditional calls only push when actually taken). Unwind by SP, so
+      // RET variants / popped return addresses / interrupts all resolve
+      // without opcode bookkeeping.
+      let target = -1, retTo = 0;
+      if (entry.stackOn) {
+        const op = entry.read(pcB) & 0xff;
+        if (op === 0xcd || (op & 0xc7) === 0xc4) {
+          target = (entry.read((pcB + 1) & 0xffff) | (entry.read((pcB + 2) & 0xffff) << 8)) & 0xffff;
+          retTo = (pcB + 3) & 0xffff;
+        } else if ((op & 0xc7) === 0xc7) { target = op & 0x38; retTo = (pcB + 1) & 0xffff; } // RST
+      }
       const t = origStep.call(cpu);
       entry.tTotal += t;
-      const P = entry.profData;
-      const top = P.stack[P.stack.length - 1];
-      if (top) top.self += t; else P.rootSelf += t;
-      if (target >= 0 && cpu.pc === target && cpu.sp === ((spB - 2) & 0xffff) && P.stack.length < 512) {
-        P.stack.push({ entry: target, sp: cpu.sp, self: 0, child: 0 });
-        let r = P.routines.get(target);
-        if (!r) { r = { calls: 0, self: 0, total: 0 }; P.routines.set(target, r); }
-        r.calls++;
+      if (entry.stackOn) {
+        const P = entry.profData;
+        const top = P.stack[P.stack.length - 1];
+        if (top) top.self += t; else P.rootSelf += t;
+        if (target >= 0 && cpu.pc === target && cpu.sp === ((spB - 2) & 0xffff) && P.stack.length < 512) {
+          P.stack.push({ entry: target, sp: cpu.sp, retTo, self: 0, child: 0 });
+          if (entry.profOn) {
+            let r = P.routines.get(target);
+            if (!r) { r = { calls: 0, self: 0, total: 0 }; P.routines.set(target, r); }
+            r.calls++;
+          }
+        }
+        while (P.stack.length) { // unwind every frame whose return slot is gone
+          const f = P.stack[P.stack.length - 1];
+          const d = (cpu.sp - f.sp) & 0xffff;
+          if (d < 2 || d >= 0x8000) break;
+          P.stack.pop();
+          const tot = f.self + f.child;
+          if (entry.profOn) {
+            let r = P.routines.get(f.entry);
+            if (!r) { r = { calls: 0, self: 0, total: 0 }; P.routines.set(f.entry, r); }
+            r.self += f.self;
+            r.total += tot;
+          }
+          const nt = P.stack[P.stack.length - 1];
+          if (nt) nt.child += tot;
+        }
       }
-      while (P.stack.length) { // unwind every frame whose return slot is gone
-        const f = P.stack[P.stack.length - 1];
-        const d = (cpu.sp - f.sp) & 0xffff;
-        if (d < 2 || d >= 0x8000) break;
-        P.stack.pop();
-        const tot = f.self + f.child;
-        let r = P.routines.get(f.entry);
-        if (!r) { r = { calls: 0, self: 0, total: 0 }; P.routines.set(f.entry, r); }
-        r.self += f.self;
-        r.total += tot;
-        const nt = P.stack[P.stack.length - 1];
-        if (nt) nt.child += tot;
+      if (self.pendingBreak) { // a watch/IO tap fired inside this instruction
+        const pb = self.pendingBreak;
+        self.pendingBreak = null;
+        pb.pc = pcB; // the instruction that did the deed
+        self.paused = true;
+        self.hit = pb;
+        throw BREAK;
       }
       return t;
     };
     this.cpus.push(entry);
+  }
+
+  // shared checker for watchpoints (rw: r/w) and I/O breaks (rw: in/out)
+  _accessCheck(entry, list, addr, value, rw, type) {
+    if (this.pendingBreak) return; // first hit of the instruction wins
+    for (const w of list) {
+      if (!w.enabled) continue;
+      if (!w[rw]) continue;
+      if (addr < w.lo || addr > w.hi) continue;
+      if (w.fn) {
+        const cpu = entry.cpu;
+        let ok = false;
+        try {
+          ok = !!w.fn(value, addr,
+            cpu.a, cpu.f, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l,
+            cpu.af, cpu.bc, cpu.de, cpu.hl, cpu.ix, cpu.iy, cpu.sp, cpu.pc,
+            cpu.i, cpu.r, cpu.im, cpu.iff1, entry.read);
+        } catch (e) {
+          w.enabled = false; // a broken condition must not wedge the machine
+          w.error = String(e?.message ?? e);
+          continue;
+        }
+        if (!ok) continue;
+      }
+      this.pendingBreak = { type, cpu: entry.name, addr, value, rw, id: w.id };
+      return;
+    }
+  }
+
+  _addAccessBreak(list, { lo, hi = null, cond = null, ...flags }) {
+    let fn = null;
+    if (cond) {
+      try { fn = compileAccessCond(cond); }
+      catch (e) { return { ok: false, error: String(e?.message ?? e) }; }
+    }
+    const id = ++this._accessId;
+    list.push({ id, lo: lo & 0xffff, hi: (hi ?? lo) & 0xffff, cond, fn, enabled: true, error: null, ...flags });
+    return { ok: true, id };
+  }
+
+  setWatch(name, { lo, hi = null, r = false, w = true, cond = null }) {
+    const c = this.cpu(name);
+    if (!c) return { ok: false, error: 'no such CPU' };
+    return this._addAccessBreak(c.watches, { lo, hi, cond, r, w });
+  }
+
+  setIoBreak(name, { lo, hi = null, dirIn = false, dirOut = true, cond = null }) {
+    const c = this.cpu(name);
+    if (!c) return { ok: false, error: 'no such CPU' };
+    return this._addAccessBreak(c.iobps, { lo: lo & 0xff, hi: (hi ?? lo) & 0xff, cond, in: dirIn, out: dirOut });
+  }
+
+  clearWatch(name, id) {
+    const c = this.cpu(name);
+    if (c) c.watches = c.watches.filter((x) => x.id !== id);
+  }
+
+  clearIoBreak(name, id) {
+    const c = this.cpu(name);
+    if (c) c.iobps = c.iobps.filter((x) => x.id !== id);
+  }
+
+  // shadow-stack backtrace, innermost first: [{entry, retTo, sp}]
+  backtrace(name) {
+    const c = this.cpu(name);
+    if (!c) return [];
+    return [...c.profData.stack].reverse().map((f) => ({ entry: f.entry, retTo: f.retTo ?? 0, sp: f.sp }));
+  }
+
+  // run until the current shadow frame returns. Falls back to the SP
+  // heuristic (run until SP rises above here) when the stack is empty —
+  // e.g. right after attach, before any CALL was observed.
+  stepOut(name) {
+    const c = this.cpu(name);
+    if (!c) return { done: false };
+    const depth0 = c.profData.stack.length;
+    const sp0 = c.cpu.sp;
+    const hit0 = this.hit;
+    let budget = 2_000_000;
+    let first = true;
+    while (budget-- > 0) {
+      // the first step walks off the breakpoint we're parked on; after
+      // that, breakpoints stay armed on the way out
+      this.stepInto(name, first);
+      first = false;
+      if (this.hit !== hit0) return { done: false, brk: true };
+      if (depth0 > 0) {
+        if (c.profData.stack.length < depth0) return { done: true };
+      } else {
+        const d = (c.cpu.sp - sp0) & 0xffff;
+        if (d >= 2 && d < 0x8000) return { done: true }; // return slot consumed
+      }
+    }
+    return { done: false, budget: false };
+  }
+
+  // trace ring, oldest→newest: [{pc, af, bc, de, hl, sp, frame}]
+  traceView(name, count = 32) {
+    const c = this.cpu(name);
+    if (!c) return [];
+    const tr = c.trace;
+    const n = Math.min(count, tr.n, tr.cap);
+    const out = [];
+    for (let k = tr.n - n; k < tr.n; k++) {
+      const i = k % tr.cap;
+      out.push({
+        pc: tr.pc[i], af: tr.af[i], bc: tr.bc[i], de: tr.de[i],
+        hl: tr.hl[i], sp: tr.sp[i], frame: tr.frame[i],
+      });
+    }
+    return out;
+  }
+
+  traceClear(name) {
+    const c = this.cpu(name);
+    if (c) c.trace.n = 0;
   }
 
   profReset(name) {
@@ -404,7 +615,13 @@ export function mountIcePage(doc, env) {
     labelsKey: null,
     lastAsm: null,
     editing: null, // { field, input } while a register cell is being typed into
+    disFocus: null, // backtrace-frame view override for the disasm window
+    watchExprs: [], // live watch expressions {expr, fn, error}
+    changeSearch: new ChangeSearch(),
+    // ROM annotation presets (romlabels.js): per-CPU, user labels win
+    presets: { main: new Map(), sub: new Map() },
   };
+  const lang = env.lang ?? 'ja';
   // time travel: snapshot nodes form a tree; branches are born when you
   // resume from the past. Needs machine.snapshot()/restore() in the core.
   const SNAP_EVERY = 30, SNAP_CAP = 80;
@@ -416,18 +633,34 @@ export function mountIcePage(doc, env) {
 
   const els = {};
   for (const id of ['conn', 'minfo', 'clock', 'tabmain', 'tabsub', 'bpause', 'bcont', 'bstep',
-    'bover', 'bframe', 'bsyntax', 'regs', 'reginfo', 'regshadow', 'dis', 'memaddr', 'mem',
-    'waddr', 'wdata', 'bwrite', 'bpaddr', 'bpcond', 'bpbtn', 'bplist', 'fdc', 'fdcbox',
+    'bover', 'bstepout', 'bframe', 'bsyntax', 'regs', 'reginfo', 'regshadow', 'dis', 'memaddr', 'mem',
+    'memregion', 'waddr', 'wdata', 'bwrite', 'bpaddr', 'bpcond', 'bpbtn', 'bplist', 'fdc', 'fdcbox',
     'asrc', 'aorg', 'basm', 'bsetpc', 'brun', 'aout', 'anal',
     'btundo', 'btredo', 'btsnap', 'tree', 'ttinfo',
-    'bprof', 'bprofreset', 'prof',
+    'bprof', 'bprofreset', 'prof', 'stack',
     'laddr', 'lname', 'bladd', 'blexport', 'blimport',
-    'exps', 'expe', 'expo', 'bexp', 'bexpsave', 'bexpwrite', 'exptext']) {
+    'exps', 'expe', 'expo', 'bexp', 'bexpsave', 'bexpwrite', 'exptext', 'pinnote',
+    'walo', 'wahi', 'war', 'waw', 'wacond', 'bwadd', 'wlist',
+    'iosel', 'iolo', 'iohi', 'ioin', 'ioout', 'iocond', 'bioadd', 'iolist',
+    'spat', 'bsearch', 'sres', 'bcsinit', 'bcsne', 'bcseq', 'bcsgt', 'bcslt',
+    'csval', 'bcsval', 'csinfo', 'csres', 'bunused', 'unusedout',
+    'wxexpr', 'bwxadd', 'wxlist',
+    'trace', 'btrace', 'btraceclr', 'vram', 'vraminfo', 'metabox', 'presetnote']) {
     els[id] = $(id);
   }
 
   const activeCpu = () => ctrl.cpu(state.active) ?? ctrl.cpus[0] ?? null;
-  const labelOf = (a) => state.labels.get(a & 0xffff) ?? null;
+  // label resolution: the user's own names shadow the ROM presets
+  const presetAt = (a) => state.presets[state.active]?.get(a & 0xffff) ?? null;
+  const labelOf = (a) => state.labels.get(a & 0xffff) ?? presetAt(a)?.name ?? null;
+  const kindOf = (m) => (m?.sys ? 'pc8001' : 'pc8801'); // for memmap lookups
+  const regionText = (addr) => {
+    const m = ctrl.machine;
+    if (!m || state.active !== 'main') return '';
+    const r = regionAt(kindOf(m), addr & 0xffff);
+    if (!r) return '';
+    return `${r.name} [${r.kind}]` + (r.confidence !== 'verified' ? ` (${r.confidence})` : '');
+  };
 
   // --- register cells (click to edit while paused) -------------------------
   const regCells = new Map();
@@ -518,6 +751,19 @@ export function mountIcePage(doc, env) {
       plantBps();
       if (!ctrl.cpu(state.active)) state.active = 'main';
       loadLabels(m);
+      // ROM annotation presets — the analyzed understanding of the ROMs
+      // (romlabels.js). User labels shadow these; deleting reverts.
+      state.presets = {
+        main: kindOf(m) === 'pc8801' ? labelMap('n88-fr') : new Map(),
+        sub: m.sub ? labelMap('pc80s31') : new Map(),
+      };
+      const pm = state.presets.main.size, ps = state.presets.sub.size;
+      els.presetnote.textContent = pm + ps
+        ? `${t('ROM注釈プリセット')}: main ${pm} / sub ${ps} — ${t('ラベル行クリックで解説とmetaが出る')}`
+        : t('（このROMの注釈プリセットは無い）');
+      els.pinnote.textContent = t('pin推奨（動かせない領域）') + ': '
+        + pinPresets(kindOf(m)).slice(0, 5).map((r) => `${hex(r.start, 4)}-${hex(r.end, 4)} ${r.name}`).join(' / ')
+        + (pinPresets(kindOf(m)).length > 5 ? ' …' : '');
       // reset the timeline for the fresh machine
       tl.nodes.clear();
       tl.inputLog = [];
@@ -542,6 +788,22 @@ export function mountIcePage(doc, env) {
     els.tabmain.className = state.active === 'main' ? 'tab on' : 'tab';
     els.tabsub.className = state.active === 'sub' ? 'tab on' : 'tab';
     els.fdcbox.style.display = hasSub && state.active === 'sub' ? '' : 'none';
+    rebuildIoSel();
+  }
+
+  function rebuildIoSel() { // port-name presets from z80anal's tables
+    els.iosel.textContent = '';
+    const table = state.active === 'sub' ? PORTS_PC88_SUB : PORTS_PC88_MAIN;
+    const opt0 = doc.createElement('option');
+    opt0.value = '';
+    opt0.textContent = t('（ポート名から選ぶ）');
+    els.iosel.appendChild(opt0);
+    for (const [lo, hi, name] of table) {
+      const o = doc.createElement('option');
+      o.value = `${lo}-${hi}`;
+      o.textContent = `${hex(lo, 2)}${hi !== lo ? '-' + hex(hi, 2) : ''}h ${name}`;
+      els.iosel.appendChild(o);
+    }
   }
 
   // --- time travel -------------------------------------------------------------
@@ -656,6 +918,7 @@ export function mountIcePage(doc, env) {
         if (div._addr < 0) return;
         els.laddr.value = hex(div._addr, 4);
         els.lname.value = labelOf(div._addr) ?? '';
+        els.metabox.textContent = metaText(div._addr); // the reverse-engineer's tooltip
         els.lname.focus?.();
       };
       els.dis.appendChild(div);
@@ -663,30 +926,206 @@ export function mountIcePage(doc, env) {
     }
     return disPool[i];
   }
+
+  // romlabels meta: everything we verified about a ROM routine, one glance
+  function metaText(addr) {
+    const pe = presetAt(addr);
+    if (!pe) return '';
+    const lines = [`${pe.name} — ${commentFor(pe, lang)}`
+      + (pe.confidence !== 'verified' ? `  (${pe.confidence})` : '')];
+    const mt = pe.meta;
+    if (mt) {
+      const parts = [];
+      if (mt.clobbers?.length) parts.push(`${t('破壊')}: ${mt.clobbers.join(',')}`);
+      if (mt.inputs?.length) parts.push(`${t('入力')}: ${mt.inputs.join(',')}`);
+      if (mt.saves?.length) parts.push(`${t('保存')}: ${mt.saves.join(',')}`);
+      for (const io of mt.io ?? []) {
+        parts.push(`${io.dir === 'in' ? 'IN' : 'OUT'} ${io.port == null ? '(C)' : hex(io.port, 2) + 'h'}${io.name ? '(' + io.name + ')' : ''}`);
+      }
+      for (const mm of mt.mem ?? []) parts.push(`${mm.rw}:${hex(mm.addr, 4)}${mm.name ? '(' + mm.name + ')' : ''}`);
+      if (mt.tStates) {
+        parts.push(`${mt.tStates.min}${mt.tStates.max !== mt.tStates.min ? '〜' + mt.tStates.max : ''}T`
+          + (mt.tStates.loop ? t('（ループ・下限のみ）') : ''));
+      }
+      if (parts.length) lines.push(parts.join(' / '));
+      if (mt.unknown) lines.push(t('⚠ 間接フローあり — 解析は不完全'));
+    }
+    return lines.join('\n');
+  }
   function renderDis(c) {
-    const rows = disasmList(c.read, c.cpu.pc, 20, 6, { syntax: state.syntax, label: labelOf });
+    const center = state.disFocus ?? c.cpu.pc; // a clicked backtrace frame wins
+    const rows = disasmList(c.read, center, 20, 6, { syntax: state.syntax, label: labelOf });
     let i = 0;
     for (const r of rows) {
       if (r.label) {
         const lp = disLine(i++);
-        lp.textContent = `        ${r.label}:`;
+        const pe = presetAt(r.addr);
+        const cm = pe ? commentFor(pe, lang) : '';
+        lp.textContent = `        ${r.label}:` + (cm ? `  ; ${cm}` : '');
         lp._addr = r.addr;
         lp.className = 'disline dislabel';
       }
       const bp = c.bps.get(r.addr);
       const mark = bp ? (bp.enabled ? '●' : '○') : ' ';
-      const cur = r.current ? '▶' : ' ';
+      const cur = r.addr === c.cpu.pc ? '▶' : ' '; // ▶ stays on the real PC even when a frame is focused
       const bytes = r.bytes.map((b) => hex(b, 2)).join(' ').padEnd(12);
       const line = disLine(i++);
       line.textContent = `${mark}${cur} ${hex(r.addr, 4)}  ${bytes} ${r.text}`;
       line._addr = r.addr;
-      line.className = 'disline' + (r.current ? ' discur' : '');
+      line.className = 'disline' + (r.addr === c.cpu.pc ? ' discur' : '');
     }
     for (; i < disPool.length; i++) { disPool[i].textContent = ''; disPool[i]._addr = -1; }
   }
 
   function renderMem(c) {
     els.mem.textContent = hexDump(c.read, state.memAddr, 16);
+    els.memregion.textContent = regionText(state.memAddr); // memmap annotation
+    els.memregion.className = 'region' + (/approx/.test(els.memregion.textContent) ? ' approx' : '');
+  }
+
+  // --- round 2 panels ------------------------------------------------------
+  function renderStack(c) {
+    els.stack.textContent = '';
+    const mkRow = (text, addr) => {
+      const row = doc.createElement('div');
+      row.className = 'stackrow';
+      row.textContent = text;
+      row.onclick = () => { state.disFocus = addr; renderAll(); };
+      els.stack.appendChild(row);
+    };
+    const nm = (a) => labelOf(a) ?? hex(a, 4);
+    mkRow(`#0 ▶ ${nm(c.cpu.pc)}  PC=${hex(c.cpu.pc, 4)}`, c.cpu.pc);
+    const bt = ctrl.backtrace(c.name).slice(0, 16);
+    bt.forEach((f, i) => {
+      mkRow(`#${i + 1}  ${nm(f.entry)}  ${t('戻り先')} ${hex(f.retTo, 4)}  SP=${hex(f.sp, 4)}`, f.entry);
+    });
+    if (!bt.length) {
+      const row = doc.createElement('div');
+      row.className = 'stackrow dim';
+      row.textContent = t('（CALL未観測 — attach後にCALLが実行されると積まれる）');
+      els.stack.appendChild(row);
+    }
+  }
+
+  function renderWatchList() {
+    const c = activeCpu();
+    els.wlist.textContent = '';
+    for (const cc of ctrl.cpus) {
+      for (const w of cc.watches) {
+        const row = doc.createElement('div');
+        row.className = 'listrow' + (w.enabled ? '' : ' dim');
+        const range = w.lo === w.hi ? hex(w.lo, 4) : `${hex(w.lo, 4)}-${hex(w.hi, 4)}`;
+        const reg = cc.name === 'main' ? regionText(w.lo) : '';
+        row.textContent = `${cc.name} ${range} ${w.r ? 'R' : ''}${w.w ? 'W' : ''}`
+          + (w.cond ? ` if ${w.cond}` : '') + (reg ? `  — ${reg}` : '')
+          + (w.enabled ? '' : `  ${t('無効')}: ${w.error}`);
+        row.onclick = () => { ctrl.clearWatch(cc.name, w.id); renderAll(); };
+        els.wlist.appendChild(row);
+      }
+    }
+    if (!els.wlist.children.length) els.wlist.textContent = t('（なし — クリックで削除）');
+    void c;
+  }
+
+  function renderIoList() {
+    els.iolist.textContent = '';
+    for (const cc of ctrl.cpus) {
+      for (const w of cc.iobps) {
+        const row = doc.createElement('div');
+        row.className = 'listrow' + (w.enabled ? '' : ' dim');
+        const range = w.lo === w.hi ? hex(w.lo, 2) : `${hex(w.lo, 2)}-${hex(w.hi, 2)}`;
+        row.textContent = `${cc.name} port ${range} ${w.in ? 'IN' : ''}${w.in && w.out ? '/' : ''}${w.out ? 'OUT' : ''}`
+          + (w.cond ? ` if ${w.cond}` : '')
+          + (w.enabled ? '' : `  ${t('無効')}: ${w.error}`);
+        row.onclick = () => { ctrl.clearIoBreak(cc.name, w.id); renderAll(); };
+        els.iolist.appendChild(row);
+      }
+    }
+    if (!els.iolist.children.length) els.iolist.textContent = t('（なし — クリックで削除）');
+  }
+
+  function renderWx(c) {
+    els.wxlist.textContent = '';
+    for (const wx of state.watchExprs) {
+      const row = doc.createElement('div');
+      row.className = 'listrow';
+      let text;
+      try {
+        const cpu = c.cpu;
+        const v = wx.fn(cpu.a, cpu.f, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l,
+          cpu.af, cpu.bc, cpu.de, cpu.hl, cpu.ix, cpu.iy, cpu.sp, cpu.pc,
+          cpu.i, cpu.r, cpu.im, cpu.iff1, c.read);
+        text = typeof v === 'number' ? `${wx.expr} = ${hex(v & 0xffff, v > 0xff ? 4 : 2)} (${v})` : `${wx.expr} = ${v}`;
+      } catch (e) { text = `${wx.expr} — ${String(e?.message ?? e)}`; }
+      row.textContent = text;
+      row.onclick = () => { state.watchExprs = state.watchExprs.filter((x) => x !== wx); renderAll(); };
+      els.wxlist.appendChild(row);
+    }
+    if (!state.watchExprs.length) els.wxlist.textContent = t('（式を追加 — 例: hl, mem(0xEF14), bc+de）');
+  }
+
+  function renderTrace(c) {
+    els.trace.textContent = '';
+    if (!c.traceOn) { els.trace.textContent = t('（トレースOFF）'); return; }
+    const rows = ctrl.traceView(c.name, 24);
+    for (const r of rows) {
+      const row = doc.createElement('div');
+      row.className = 'listrow';
+      let text = '';
+      try { text = disasm(c.read, r.pc, { syntax: state.syntax }).text; } catch { text = '?'; }
+      row.textContent = `f=${String(r.frame).padStart(6)} ${hex(r.pc, 4)} ${text.padEnd(18)}`
+        + ` AF=${hex(r.af, 4)} BC=${hex(r.bc, 4)} DE=${hex(r.de, 4)} HL=${hex(r.hl, 4)} SP=${hex(r.sp, 4)}`;
+      row.onclick = () => traceJump(r);
+      els.trace.appendChild(row);
+    }
+    if (!rows.length) els.trace.textContent = t('（まだ何も実行してない）');
+  }
+
+  function renderVram(m) {
+    let model = null;
+    try { model = textVramModel(m); } catch { model = null; }
+    if (!model) {
+      els.vraminfo.textContent = t('CRTC/DMACが見つからない');
+      els.vram.textContent = '';
+      return;
+    }
+    els.vraminfo.textContent =
+      `base=${hex(model.base, 4)} stride=${model.stride} count=${model.count}`
+      + ` ${model.cols}×${model.rows} attrs/row=${model.attrsPerRow}`
+      + ` DMA:${model.enabled ? 'ON' : 'OFF'} VE:${model.ve ? 'ON' : 'OFF'}`;
+    const lines = [];
+    for (const row of model.rowsData) {
+      lines.push(`${String(row.y).padStart(2)} ${hex(row.addr, 4)} |${row.text}|`);
+      if (row.pairs.length || row.spans.length > 1) {
+        const pairs = row.pairs.map((p) => `(${p.pos},${hex(p.val, 2)} ${p.text})`).join(' ');
+        const spans = row.spans.map((s) => {
+          const parts = [attrShort(s.color)];
+          if (s.func) parts.push(attrShort(s.func));
+          return `${s.from}-${s.to}:${parts.join('+')}`;
+        }).join(' ');
+        lines.push(`        ${pairs}${pairs && spans ? '  →  ' : ''}${spans}`);
+      }
+    }
+    els.vram.textContent = lines.join('\n');
+  }
+
+  // trace row click → time travel to (approximately) that instruction:
+  // rewind to the row's frame, then crawl forward until the recorded
+  // pc/sp/af triple matches. Breakpoints hold their fire during the crawl.
+  function traceJump(row) {
+    const m = ctrl.machine;
+    if (!m || !ttOK(m)) return;
+    seekFrame(row.frame);
+    const c = activeCpu();
+    if (!c) return;
+    let budget = 400000;
+    ctrl.replaying = true;
+    try {
+      while (budget-- > 0 && !(c.cpu.pc === row.pc && c.cpu.sp === row.sp && c.cpu.af === row.af)) {
+        ctrl.stepInto(state.active, false);
+      }
+    } finally { ctrl.replaying = false; }
+    renderAll();
   }
 
   function renderBps() {
@@ -768,7 +1207,13 @@ export function mountIcePage(doc, env) {
     const c = activeCpu();
     if (!c) return;
     if (ctrl.paused) {
-      setConn(ctrl.hit ? `⛔ BREAK ${ctrl.hit.cpu} @ ${hex(ctrl.hit.pc, 4)}` : t('一時停止中'), 'pause');
+      const h = ctrl.hit;
+      let msg;
+      if (!h) msg = t('一時停止中');
+      else if (h.type === 'watch') msg = `⛔ WATCH ${h.rw.toUpperCase()} ${hex(h.addr, 4)}=${hex(h.value, 2)} @${hex(h.pc, 4)} (${h.cpu})`;
+      else if (h.type === 'io') msg = `⛔ I/O ${h.rw.toUpperCase()} port ${hex(h.addr, 2)}=${hex(h.value, 2)} @${hex(h.pc, 4)} (${h.cpu})`;
+      else msg = `⛔ BREAK ${h.cpu} @ ${hex(h.pc, 4)}`;
+      setConn(msg, 'pause');
     } else setConn(t('実行中'), 'run');
     els.minfo.textContent = `${m.sub ? 'PC-8801 main+sub' : 'PC-8001'}  [${state.active}]`;
     renderClock(m, c);
@@ -776,25 +1221,40 @@ export function mountIcePage(doc, env) {
     renderDis(c);
     renderMem(c);
     renderBps();
+    renderStack(c);
+    renderWatchList();
+    renderIoList();
+    renderWx(c);
+    renderTrace(c);
+    renderVram(m);
     renderFdc(m);
     renderTree(m);
     renderProf(c, m);
   }
 
   // --- controls -----------------------------------------------------------------
-  els.bpause.onclick = () => { ctrl.pause(); renderAll(); };
-  els.bcont.onclick = () => { branchIfNeeded(); ctrl.resume(); renderAll(); };
+  els.bpause.onclick = () => { state.disFocus = null; ctrl.pause(); renderAll(); };
+  els.bcont.onclick = () => { state.disFocus = null; branchIfNeeded(); ctrl.resume(); renderAll(); };
   els.bstep.onclick = () => {
+    state.disFocus = null;
     if (!ctrl.paused) ctrl.pause();
     ctrl.stepInto(state.active);
     renderAll();
   };
   els.bover.onclick = () => {
+    state.disFocus = null;
     if (!ctrl.paused) ctrl.pause();
     ctrl.stepOver(state.active);
     renderAll();
   };
+  els.bstepout.onclick = () => {
+    state.disFocus = null;
+    if (!ctrl.paused) ctrl.pause();
+    ctrl.stepOut(state.active);
+    renderAll();
+  };
   els.bframe.onclick = () => {
+    state.disFocus = null;
     if (!ctrl.paused) ctrl.pause();
     branchIfNeeded();
     ctrl.frameStep();
@@ -860,6 +1320,114 @@ export function mountIcePage(doc, env) {
     }
     renderAll();
   };
+
+  // --- watchpoints / I/O breaks ---------------------------------------------------
+  els.bwadd.onclick = () => {
+    const lo = parseNum(els.walo.value);
+    if (lo === null) return;
+    const hi = parseNum(els.wahi.value);
+    const r = !!els.war.checked, w = !!els.waw.checked;
+    if (!r && !w) return;
+    const res = ctrl.setWatch(state.active, { lo, hi, r, w, cond: els.wacond.value.trim() || null });
+    if (!res.ok) { els.wlist.textContent = t('条件式エラー') + ': ' + res.error; return; }
+    renderAll();
+  };
+  els.bioadd.onclick = () => {
+    const lo = parseNum(els.iolo.value);
+    if (lo === null) return;
+    const hi = parseNum(els.iohi.value);
+    const dirIn = !!els.ioin.checked, dirOut = !!els.ioout.checked;
+    if (!dirIn && !dirOut) return;
+    const res = ctrl.setIoBreak(state.active, { lo, hi, dirIn, dirOut, cond: els.iocond.value.trim() || null });
+    if (!res.ok) { els.iolist.textContent = t('条件式エラー') + ': ' + res.error; return; }
+    renderAll();
+  };
+  els.iosel.onchange = () => { // port-name preset → fills the range fields
+    const v = els.iosel.value;
+    if (!v) return;
+    const [lo, hi] = v.split('-').map(Number);
+    els.iolo.value = hex(lo, 2);
+    els.iohi.value = hi !== lo ? hex(hi, 2) : '';
+  };
+
+  // --- memory search / change search / watch expressions ---------------------------
+  els.bsearch.onclick = () => {
+    const c = activeCpu();
+    const pat = parsePattern(els.spat.value);
+    els.sres.textContent = '';
+    if (!c || !pat) { els.sres.textContent = t('パターンが変（hex列 か "文字列"）'); return; }
+    const hits = searchBytes(c.read, pat, { limit: 64 });
+    if (!hits.length) { els.sres.textContent = t('（見つからない）'); return; }
+    for (const a of hits) {
+      const row = doc.createElement('div');
+      row.className = 'listrow';
+      row.textContent = `${hex(a, 4)}  ${regionText(a)}`;
+      row.onclick = () => { state.memAddr = a & 0xfff0; els.memaddr.value = hex(state.memAddr, 4); renderAll(); };
+      els.sres.appendChild(row);
+    }
+  };
+  function renderCsList() {
+    const c = activeCpu();
+    els.csres.textContent = '';
+    if (!c) return;
+    for (const x of state.changeSearch.list(c.read, 24)) {
+      const row = doc.createElement('div');
+      row.className = 'listrow';
+      row.textContent = `${hex(x.addr, 4)} = ${hex(x.value, 2)}  ${regionText(x.addr)}`;
+      row.onclick = () => { state.memAddr = x.addr & 0xfff0; els.memaddr.value = hex(state.memAddr, 4); renderAll(); };
+      els.csres.appendChild(row);
+    }
+  }
+  const csFilter = (op, operand) => {
+    const c = activeCpu();
+    if (!c || !state.changeSearch.alive) { els.csinfo.textContent = t('まず📸初期化して'); return; }
+    const n = state.changeSearch.filter(c.read, op, operand);
+    els.csinfo.textContent = `${n} ${t('候補')}`;
+    renderCsList();
+  };
+  els.bcsinit.onclick = () => {
+    const c = activeCpu();
+    if (!c) return;
+    state.changeSearch.init(c.read);
+    els.csinfo.textContent = t('全64KBを撮影した — 値を動かしてから絞り込む');
+    els.csres.textContent = '';
+  };
+  els.bcsne.onclick = () => csFilter('ne');
+  els.bcseq.onclick = () => csFilter('eq');
+  els.bcsgt.onclick = () => csFilter('gt');
+  els.bcslt.onclick = () => csFilter('lt');
+  els.bcsval.onclick = () => {
+    const v = parseNum(els.csval.value);
+    if (v !== null) csFilter('val', v);
+  };
+  els.bunused.onclick = () => { // execution-coverage complement of user RAM
+    const c = ctrl.cpu('main');
+    const m = ctrl.machine;
+    if (!c || !m) return;
+    const runs = estimateUnused(kindOf(m), c.coverage).sort((a, b) => b.bytes - a.bytes).slice(0, 8);
+    els.unusedout.textContent = runs.length
+      ? runs.map((r2) => `${hex(r2.start, 4)}-${hex(r2.end, 4)} (${r2.bytes}B)`).join('\n')
+      : t('（userRAMに未実行領域なし）');
+  };
+  els.bwxadd.onclick = () => {
+    const expr = els.wxexpr.value.trim();
+    if (!expr) return;
+    try { state.watchExprs.push({ expr, fn: compileCond(expr) }); }
+    catch (e) { els.wxlist.textContent = t('条件式エラー') + ': ' + String(e?.message ?? e); return; }
+    els.wxexpr.value = '';
+    renderAll();
+  };
+
+  // --- trace ------------------------------------------------------------------------
+  els.btrace.className = 'on';
+  els.btrace.onclick = () => {
+    const c = activeCpu();
+    if (!c) return;
+    c.traceOn = !c.traceOn;
+    els.btrace.className = c.traceOn ? 'on' : '';
+    renderAll();
+  };
+  els.btraceclr.onclick = () => { ctrl.traceClear(state.active); renderAll(); };
 
   // --- labels -------------------------------------------------------------------
   els.bladd.onclick = () => {
