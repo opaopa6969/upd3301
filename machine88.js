@@ -232,10 +232,11 @@ export class Pc8801Machine {
     if (port === 0x44) return this.opn.readStatus(); // OPN status (timer flags)
     if (port === 0x45) return this.opn.reg[this.opn.addr];
     if (this.opna) { // Sound Board II (OPNA) at A8h-ABh
-      if (port === 0xa8) return this.opna.readStatus();
-      if (port === 0xa9) return this.opna.reg[this.opna.addr];
-      if (port === 0xaa) return this.opna.readStatus();
-      if (port === 0xab) return this.opna.reg1[this.opna.addr1];
+      // YM chips are write-only for registers; a read of the DATA port returns
+      // the STATUS byte (busy + timer flags), which is exactly what the SB2
+      // detection routine polls at 0xA9 (disassembled: OUT(C=A8),E; INC C; IN A,(C)).
+      if (port === 0xa8 || port === 0xa9) return this.opna.readStatus();
+      if (port === 0xaa || port === 0xab) return this.opna.readStatus(); // bank1 status (ADPCM flags: stubbed)
     }
     if (port === 0xe2 || port === 0xe3) return 0xff; // EMM
     // FCh-FFh: the main half of the 8255 pair to the disk sub-system. With
