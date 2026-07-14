@@ -6,7 +6,13 @@
 // the browser's IndexedDB, keyed by role, so a return visit auto-boots. The
 // bytes never leave the machine — this is "upload once", not "upload to us".
 //
-// Roles: 'rom' (boot ROM), 'font' (CGROM), 'disk' (a .d88 image). Extend freely.
+// Roles are free-form strings (the object store is keyed by `role`), so new
+// machines just pick new role names — no schema change. In use today:
+//   PC-8001:  'rom' (single N80 boot ROM), 'font' (CGROM), 'disk' (.d88)
+//   PC-8801:  'n88main' (n88.rom, 32KB), 'n88ext0'..'n88ext3' (the four 8KB
+//             extension banks), 'n88sub' (disk.rom, the FDD sub-CPU ROM),
+//             'n88n80' (optional n80.rom). Together these auto-boot N88 mode.
+// Extend freely.
 
 const DB = 'upd3301-roms';
 const STORE = 'blobs';
