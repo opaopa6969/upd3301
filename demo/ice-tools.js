@@ -100,6 +100,135 @@ export class ChangeSearch {
   }
 }
 
+// ---- time-travel snapshot thinning (the rrdtool move) -----------------------------
+// A machine running free mints a snapshot every ~30 frames; without pruning
+// the tree becomes an unreadable centipede. Thinning rule: the recent past
+// stays dense, the deep past goes exponentially sparse (keep 1-in-2, then
+// 1-in-4, …). Never removed: the root, branch points, branch tips, the
+// current node, user-pinned (manual 📸) nodes, and the newest keepRecent
+// snapshots. Correctness is untouched — the machine is deterministic, so a
+// sparser past only means a longer replay from the nearest kept node.
+//
+// nodes: Map(id → {id, parent, frame, children:[], pinned?}) — ids ascend in
+// creation order, so Map insertion order doubles as the age order.
+
+export function removeTimelineNode(nodes, id) {
+  const n = nodes.get(id);
+  if (!n) return;
+  const p = nodes.get(n.parent);
+  if (p) {
+    const i = p.children.indexOf(id);
+    if (i >= 0) p.children.splice(i, 1, ...n.children); // grandchildren take its slot
+  }
+  for (const cid of n.children) {
+    const c = nodes.get(cid);
+    if (c) c.parent = n.parent;
+  }
+  nodes.delete(id);
+}
+
+export function timelineHardProtected(nodes, rootId, current, keepRecent) {
+  const hard = new Set([rootId, current]);
+  for (const n of nodes.values()) if (n.pinned) hard.add(n.id);
+  const ids = [...nodes.keys()];
+  for (const id of ids.slice(-keepRecent)) hard.add(id); // the dense recent window
+  return hard;
+}
+
+export function thinTimeline(nodes, rootId, {
+  current, keepRecent = 8, cap = 80, baseSpacing = 30,
+} = {}) {
+  const removed = [];
+  if (!nodes.size || !nodes.has(rootId)) return { removed };
+  const hard = timelineHardProtected(nodes, rootId, current, keepRecent);
+  let newestFrame = -Infinity;
+  for (const n of nodes.values()) if (n.frame > newestFrame) newestFrame = n.frame;
+  const recentFrames = Math.max(1, keepRecent * baseSpacing);
+
+  // pass 1: exponential decimation along linear runs. Greedy walk that keeps
+  // a node only when it sits far enough (for its age) from the last kept one.
+  const walk = (id, lastKeptFrame) => {
+    const n = nodes.get(id);
+    if (!n) return;
+    const children = [...n.children]; // removal reshuffles the live array
+    const isBranch = n.children.length >= 2;
+    const isTip = n.children.length === 0;
+    let kept = true;
+    if (!hard.has(id) && !isBranch && !isTip) {
+      const age = newestFrame - n.frame;
+      if (age > recentFrames) {
+        const levels = Math.floor(Math.log2(age / recentFrames)); // 0,1,2,…
+        const spacing = baseSpacing * Math.pow(2, levels + 1); // ×2 → ×4 → ×8…
+        if (n.frame - lastKeptFrame < spacing) {
+          removeTimelineNode(nodes, id);
+          removed.push(id);
+          kept = false;
+        }
+      }
+    }
+    const base = kept ? n.frame : lastKeptFrame;
+    for (const cid of children) walk(cid, base);
+  };
+  walk(rootId, -Infinity);
+
+  // pass 2: hard cap — oldest first, never a hard-protected node, never a
+  // live branch point (removing leaves may demote one; a later pass eats it)
+  let guard = nodes.size;
+  while (nodes.size > cap && guard-- > 0) {
+    let victim = null;
+    for (const n of nodes.values()) { // insertion order = oldest first
+      if (hard.has(n.id)) continue;
+      if (n.children.length <= 1) { victim = n; break; }
+    }
+    if (!victim) break; // everything left is protected — accept the overflow
+    removeTimelineNode(nodes, victim.id);
+    removed.push(victim.id);
+  }
+  return { removed };
+}
+
+// ---- timeline display compression --------------------------------------------------
+// Runs of boring degree-1 nodes render as one "─⋯×N─" edge. Visible: root,
+// branch points, tips, the current node, pinned nodes, a few ancestors of
+// the current node, and anything the user temporarily expanded.
+export function timelineView(nodes, rootId, { current, nearCurrent = 3, expanded = null } = {}) {
+  const rows = [];
+  if (!nodes.has(rootId)) return rows;
+  const near = new Set();
+  {
+    let n = nodes.get(current);
+    for (let k = 0; n && k <= nearCurrent; k++) { near.add(n.id); n = nodes.get(n.parent); }
+  }
+  const visible = (n) => n.id === rootId || n.id === current || !!n.pinned
+    || n.children.length !== 1 || near.has(n.id) || (expanded?.has(n.id) ?? false);
+  const walk = (startId, depth) => {
+    let gap = [];
+    const flush = () => {
+      if (gap.length) { rows.push({ type: 'gap', count: gap.length, ids: gap, depth }); gap = []; }
+    };
+    let cursor = startId;
+    while (cursor !== undefined) {
+      const n = nodes.get(cursor);
+      if (!n) break;
+      if (visible(n)) {
+        flush();
+        rows.push({
+          type: 'node', id: n.id, frame: n.frame, depth,
+          pinned: !!n.pinned, current: n.id === current,
+          branch: n.children.length > 1, tip: n.children.length === 0,
+        });
+      } else gap.push(n.id);
+      if (n.children.length === 1) { cursor = n.children[0]; continue; }
+      flush(); // tips and branch points are always visible, but stay safe
+      for (const cid of n.children) walk(cid, depth + 1);
+      return;
+    }
+    flush();
+  };
+  walk(rootId, 0);
+  return rows;
+}
+
 // ---- text VRAM / attribute viewer (the μPD3301 specialty) ------------------------
 // Reads what the DMA channel 2 would haul: base address and stride from the
 // live DMAC/CRTC programming, characters + raw attribute pairs from RAM

@@ -44,8 +44,10 @@
   self T / total T / 呼び出し回数。実時間換算付き。シンボル名解決
 
 ### アセンブラ（`z80asm.js`）と静的解析（`z80anal.js`）
-- 2パス・マクロ・`PROC USES`（自動push/pop）・`STRUC`（IXオフセット名）・
-  `RELOC`（fixupテーブル出力）
+- 2パス・MACRO-80互換マクロ層（IF族/IRP/LOCAL/EXITM/&連結/%式・
+  ニーモニックシャドウ＋PURGE）・`PROC USES`（自動push/pop）・`STRUC`
+  （IXオフセット名）・`RELOC`（fixupテーブル出力）。構文の全詳細と
+  M80差分表は [z80asm.ja.md](./z80asm.ja.md)
 - 解析: ルーチン毎の破壊/入力/保存レジスタ（CALL先へ推移的伝播）、
   I/Oポート使用（機種別ポート名注釈）、メモリアクセスマップ（既知領域名）、
   スタックバランスlint、Tステートmin/max、自己書き換え検出（⚡表示）

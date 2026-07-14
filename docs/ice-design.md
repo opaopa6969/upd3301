@@ -47,8 +47,10 @@ every tool underneath is a pure module in the repo root.
   and call counts per routine, with real-time equivalents and symbol names.
 
 ### Assembler (`z80asm.js`) and static analysis (`z80anal.js`)
-- Two-pass, macros, `PROC USES` (auto push/pop), `STRUC` (named IX
-  offsets), `RELOC` (fixup table emission).
+- Two-pass, MACRO-80-compatible macro layer (IF/IRP/LOCAL/EXITM/&/%,
+  mnemonic shadowing + PURGE), `PROC USES` (auto push/pop), `STRUC` (named
+  IX offsets), `RELOC` (fixup table emission). Full syntax reference and
+  the M80 difference table: [z80asm.md](./z80asm.md).
 - Analysis per routine: clobbered/input/saved registers (propagated
   transitively through calls), I/O ports with machine-specific names,
   memory access map with known-region names, stack-balance lint, T-state

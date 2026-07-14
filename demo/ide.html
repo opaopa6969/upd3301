@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>IDE — Z80 project workbench</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#101014; color:#ccd; font-family:ui-monospace,monospace; margin:12px; font-size:13px; }
+  h1 { font-size:16px; color:#8fd; margin:0 0 8px; }
+  .row { margin:6px 0; display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  button { background:#223; color:#cde; border:1px solid #446; border-radius:4px; padding:4px 10px; cursor:pointer; font-family:inherit; font-size:12px; }
+  button.on { background:#265; border-color:#4a8; }
+  input, textarea, select { background:#181820; color:#cde; border:1px solid #446; border-radius:3px; font-family:inherit; font-size:12px; padding:3px 6px; }
+  pre { margin:0; white-space:pre; }
+  .panel { background:#16161c; border:1px solid #2a3140; border-radius:6px; padding:8px 10px; }
+  .panel h2 { font-size:12px; color:#778; margin:0 0 6px; font-weight:normal; }
+  #grid { display:grid; grid-template-columns: 220px minmax(480px, 1fr) 340px; gap:10px; align-items:start; }
+  @media (max-width: 1100px) { #grid { grid-template-columns: 1fr; } }
+  .frow, .srow, .erow { cursor:pointer; font-size:11px; line-height:1.6; color:#9ab; white-space:pre; overflow-x:hidden; text-overflow:ellipsis; }
+  .frow:hover, .srow:hover, .erow:hover { color:#8fd; background:#1c2430; }
+  .frow.on { color:#8fd; }
+  .frow.dim { color:#556; }
+  .srow.head { color:#778; border-bottom:1px solid #2a3140; cursor:default; }
+  .erow { color:#e88; }
+  #ftree { max-height:16em; overflow-y:auto; }
+  #symlist { max-height:16em; overflow-y:auto; }
+  #reflist { max-height:10em; overflow-y:auto; }
+  #errlist { max-height:8em; overflow-y:auto; }
+  /* the hand-rolled editor: textarea over a highlighted <pre>, kept in sync */
+  #edwrap { position:relative; display:flex; border:1px solid #2a3140; border-radius:4px; background:#0d0d12; height:32em; overflow:hidden; }
+  #gutter { color:#556; font-size:12px; line-height:18px; padding:6px 4px; text-align:right; user-select:none; white-space:pre; overflow:hidden; }
+  #edmain { position:relative; flex:1; overflow:auto; }
+  #hl, #ed { font-family:inherit; font-size:12px; line-height:18px; tab-size:8; margin:0; padding:6px; border:0; white-space:pre; }
+  #hl { color:#9db; min-height:100%; }
+  #ed { position:absolute; inset:0; background:transparent; color:transparent; caret-color:#8fd; resize:none; width:100%; height:100%; overflow:auto; outline:none; white-space:pre; }
+  .hl-mn { color:#8fd; } .hl-ps { color:#da8; } .hl-reg { color:#ade; }
+  .hl-num { color:#dc9; } .hl-str { color:#9d9; } .hl-com { color:#667; font-style:italic; }
+  .hl-lab { color:#fd8; } .hl-id { color:#9db; }
+  #board { border:1px solid #2a3140; image-rendering:pixelated; cursor:crosshair; max-width:100%; }
+  #meter { font-size:10px; line-height:1.3; color:#9ab; max-height:12em; overflow-y:auto; }
+  .dwarn { color:#7fa; font-size:11px; }
+  .dwarn.over { color:#f88; }
+  .pal { width:26px; height:22px; border:2px solid #446; padding:0; }
+  .pal.on { border-color:#8fd; }
+  #outtext { width:100%; min-height:8em; box-sizing:border-box; white-space:pre; }
+  #promotebox { border-color:#4a8; }
+  .note { color:#778; font-size:12px; max-width:960px; }
+</style>
+</head>
+<body>
+<h1>🛠 IDE — Z80プロジェクト工房</h1>
+<div class="row">
+  <button id="bopen">📁 フォルダを開く</button>
+  <button id="brecent" style="display:none">↻ 前回のフォルダ</button>
+  <button id="bvirtual">🗂 仮想プロジェクト</button>
+  <span id="projname" style="color:#778;font-size:12px"></span>
+  <span style="flex:1"></span>
+  <label style="color:#778;font-size:12px">entry <select id="entrysel"></select></label>
+  <button id="bbuild">🔨 ビルド</button>
+  <button id="brunm">▶ 実機へ</button>
+  <button id="bsendsym">🔬 シンボルをICEへ</button>
+  <span id="mstatus" style="color:#8d9;font-size:12px"></span>
+</div>
+
+<div class="panel" id="promotebox" style="display:none">
+  <h2>📤 ICEからの持ち込み</h2>
+  <div class="row" style="margin:0">
+    <span id="prominfo" style="color:#9ab;font-size:12px"></span>
+    <label style="color:#778;font-size:12px">ファイル名 <input id="promname" size="16" value="from-ice.z80"></label>
+    <button id="bpromsave">プロジェクトに保存</button>
+    <button id="bpromdrop">破棄</button>
+  </div>
+</div>
+
+<div id="grid">
+  <div style="display:flex;flex-direction:column;gap:10px">
+    <div class="panel">
+      <h2>ファイル</h2>
+      <div id="ftree"></div>
+      <div class="row" style="margin-bottom:0">
+        <input id="newfname" size="12" placeholder="new.z80">
+        <button id="bnewfile">＋</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>シンボル（クリック=定義へ / 右クリック=参照元）</h2>
+      <input id="symfilter" size="16" placeholder="filter">
+      <div id="symlist"></div>
+      <div id="reflist"></div>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:10px">
+    <div class="panel">
+      <div class="row" style="margin-top:0">
+        <span id="curfile" style="color:#8fd;font-size:12px"></span>
+        <span style="flex:1"></span>
+        <span id="edstatus" style="color:#778;font-size:11px"></span>
+        <button id="bsave">💾 保存 (Ctrl+S)</button>
+      </div>
+      <div id="edwrap">
+        <div id="gutter"></div>
+        <div id="edmain">
+          <pre id="hl"></pre>
+          <textarea id="ed" spellcheck="false"></textarea>
+        </div>
+      </div>
+      <div style="color:#667;font-size:11px;margin-top:4px">
+        F12 / Ctrl+クリック = 定義へジャンプ · Tab = 空白挿入 · ビルドエラーはクリックで該当行へ
+      </div>
+    </div>
+    <div class="panel">
+      <h2>ビルド結果</h2>
+      <div id="buildout" style="color:#9ab;font-size:12px"></div>
+      <div id="errlist"></div>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:10px">
+    <div class="panel">
+      <h2>アトリビュートデザイナ（3301の画面を塗る）</h2>
+      <div class="row" style="margin-top:0">
+        <span id="palette"></span>
+      </div>
+      <div class="row">
+        <label style="font-size:11px;color:#778"><input type="checkbox" id="dsemi"> semi</label>
+        <label style="font-size:11px;color:#778"><input type="checkbox" id="drev"> 反転</label>
+        <label style="font-size:11px;color:#778"><input type="checkbox" id="dblink"> blink</label>
+        <label style="font-size:11px;color:#778"><input type="checkbox" id="dsecret"> secret</label>
+        <label style="font-size:11px;color:#778"><input type="checkbox" id="dupline"> 上線</label>
+        <label style="font-size:11px;color:#778"><input type="checkbox" id="dlowline"> 下線</label>
+        <label style="font-size:11px;color:#778"><input type="checkbox" id="dreset"> リセット</label>
+      </div>
+      <canvas id="board" width="720" height="350"></canvas>
+      <div class="row">
+        <span style="color:#778;font-size:11px">範囲</span>
+        <input id="selx1" size="2" value="0"><input id="sely1" size="2" value="0">
+        <span style="color:#778">〜</span>
+        <input id="selx2" size="2" value="9"><input id="sely2" size="2" value="0">
+        <button id="bpaint">塗る</button>
+        <button id="bimport">⬇ 実機の画面を取り込む</button>
+      </div>
+      <div id="dwarn" class="dwarn"></div>
+      <pre id="meter"></pre>
+      <div class="row">
+        <button id="boutdb">DB行を出す</button>
+        <button id="boutterm">JSコード片</button>
+        <button id="bwritevram">実機VRAMへ書く</button>
+      </div>
+      <textarea id="outtext" spellcheck="false" placeholder="; 出力はここ（DB行はそのままアセンブル可）"></textarea>
+    </div>
+  </div>
+</div>
+
+<p class="note" id="note-ide">
+  作者のワークフローそのまま: <b>実験はICE、管理はIDE</b>。ICEで作ったサブルーチンは
+  「📤 IDEへ」で昇格 → ここでINCLUDE分割・ビルド → 「▶実機へ」でロード →
+  「🔬シンボルをICEへ」でラベル付きデバッグ、のループ。プロジェクトは実フォルダ
+  （File System Access API対応ブラウザ）か、非対応なら仮想プロジェクト（ブラウザ内保存）。
+  アトリビュートデザイナは3301の20ペア/行予算を常時メーター表示 — 溢れる行は実機で溢れる。
+</p>
+
+<script type="module">
+import { applyI18n, t, lang } from './i18n.js';
+applyI18n();
+import { mountIdePage, PROMOTE_KEY, CHANNEL } from './ide.js';
+
+// ---- tiny IndexedDB kv store (handles can't live in localStorage) ----------
+const idb = (() => {
+  let dbp = null;
+  const open = () => dbp ??= new Promise((res, rej) => {
+    const rq = indexedDB.open('upd3301-ide', 1);
+    rq.onupgradeneeded = () => rq.result.createObjectStore('kv');
+    rq.onsuccess = () => res(rq.result);
+    rq.onerror = () => rej(rq.error);
+  });
+  const op = async (mode, fn) => {
+    const db = await open();
+    return new Promise((res, rej) => {
+      const tx = db.transaction('kv', mode);
+      const st = tx.objectStore('kv');
+      const rq = fn(st);
+      rq.onsuccess = () => res(rq.result);
+      rq.onerror = () => rej(rq.error);
+    });
+  };
+  return {
+    get: (k) => op('readonly', (st) => st.get(k)).catch(() => null),
+    set: (k, v) => op('readwrite', (st) => st.put(v, k)).catch(() => {}),
+  };
+})();
+
+// ---- File System Access adapter --------------------------------------------
+const TEXT_EXT = /\.(z80|asm|inc|s|txt|md|json)$/i;
+async function walkDir(dir, prefix, files, handles, depth = 0) {
+  if (depth > 6) return;
+  for await (const [name, h] of dir.entries()) {
+    if (name.startsWith('.') || name === 'node_modules') continue;
+    const path = prefix ? `${prefix}/${name}` : name;
+    if (h.kind === 'directory') await walkDir(h, path, files, handles, depth + 1);
+    else if (TEXT_EXT.test(name)) {
+      try {
+        const f = await h.getFile();
+        if (f.size < 512 * 1024) {
+          files.set(path, await f.text());
+          handles.set(path, h);
+        }
+      } catch { /* unreadable — skip */ }
+    }
+  }
+}
+async function projectFromDir(dir) {
+  const files = new Map(), handles = new Map();
+  await walkDir(dir, '', files, handles);
+  return {
+    name: dir.name, kind: 'fsa', _dir: dir,
+    list: () => [...files.keys()],
+    read: (p) => files.get(p),
+    async write(p, text) {
+      files.set(p, text);
+      let h = handles.get(p);
+      if (!h) h = await this._create(p);
+      const w = await h.createWritable();
+      await w.write(text);
+      await w.close();
+    },
+    async _create(p) {
+      let d = dir;
+      const parts = p.split('/');
+      for (const part of parts.slice(0, -1)) d = await d.getDirectoryHandle(part, { create: true });
+      const h = await d.getFileHandle(parts[parts.length - 1], { create: true });
+      handles.set(p, h);
+      return h;
+    },
+    async create(p, text) {
+      files.set(p, text);
+      await this.write(p, text);
+    },
+  };
+}
+const fsa = {
+  supported: 'showDirectoryPicker' in window,
+  pick: async () => {
+    try {
+      const dir = await window.showDirectoryPicker();
+      await idb.set('recent-dir', dir); // handle persists; permission re-asked later
+      return await projectFromDir(dir);
+    } catch { return null; }
+  },
+};
+
+// ---- virtual project (browser-stored fallback, honest about being one) -----
+async function virtualProject() {
+  const saved = (await idb.get('vfs')) ?? { 'main.z80': '        ORG 9000h\nstart:  RET\n' };
+  const files = new Map(Object.entries(saved));
+  const persist = () => idb.set('vfs', Object.fromEntries(files));
+  return {
+    name: 'virtual', kind: 'virtual',
+    list: () => [...files.keys()],
+    read: (p) => files.get(p),
+    async write(p, text) { files.set(p, text); await persist(); },
+    async create(p, text) { files.set(p, text); await persist(); },
+  };
+}
+
+// ---- BroadcastChannel (ICE ⇄ IDE) -------------------------------------------
+const chan = typeof BroadcastChannel === 'function' ? new BroadcastChannel(CHANNEL) : null;
+const listeners = [];
+if (chan) chan.onmessage = (e) => listeners.forEach((fn) => fn(e.data));
+
+const page = mountIdePage(document, {
+  t, lang,
+  storage: {
+    get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch { } },
+  },
+  fsa,
+  virtual: virtualProject,
+  broadcast: { send: (m) => chan?.postMessage(m), listen: (fn) => listeners.push(fn) },
+  getMachine: () => (window.opener && !window.opener.closed ? window.opener.__machine ?? null : null),
+});
+
+// recent project: the stored handle needs a fresh permission grant
+(async () => {
+  const dir = await idb.get('recent-dir');
+  if (!dir) return;
+  const b = document.getElementById('brecent');
+  b.style.display = '';
+  b.textContent = `↻ ${dir.name}`;
+  b.onclick = async () => {
+    try {
+      if ((await dir.requestPermission({ mode: 'readwrite' })) !== 'granted') return;
+      const project = await projectFromDir(dir);
+      // reuse the page's normal open path
+      page.state.project = project;
+      page.openFile(project.list()[0]);
+    } catch { /* stale handle */ }
+  };
+})();
+void t; void lang; void PROMOTE_KEY;
+</script>
+</body>
+</html>

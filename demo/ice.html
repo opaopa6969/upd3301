@@ -28,6 +28,8 @@
   .treerow { cursor:pointer; font-size:11px; line-height:1.5; color:#9ab; white-space:pre; }
   .treerow:hover { color:#8fd; }
   .treerow.on { color:#8fd; }
+  .treerow.pin { color:#fd8; } /* manual 📸 = pinned, thinning never eats it */
+  .treerow.gap { color:#556; }
   .listrow, .stackrow { cursor:pointer; font-size:11px; line-height:1.55; color:#9ab; white-space:pre; overflow-x:auto; }
   .listrow:hover, .stackrow:hover { color:#8fd; background:#1c2430; }
   .listrow.dim, .stackrow.dim { color:#556; }
@@ -124,7 +126,7 @@
       <div class="row" style="margin-top:0">
         <button id="btundo">⏪ 1フレーム戻る</button>
         <button id="btredo">⏩ 1フレーム進む</button>
-        <button id="btsnap">📸 今すぐsnap</button>
+        <button id="btsnap">📸 snap（保護・間引かれない）</button>
       </div>
       <div id="tree"></div>
       <div id="ttinfo"></div>
@@ -235,6 +237,7 @@ start:  LD B,8
         <button id="basmhelp">❓ 構文</button>
         <button id="bsetpc">PCセット</button>
         <button id="brun">▶ 実行</button>
+        <button id="bpromasm">📤 IDEへ</button>
       </div>
       <pre id="aout"></pre>
       <div id="anal" style="margin-top:6px"></div>
@@ -247,6 +250,7 @@ start:  LD B,8
         <button id="bexp">ソース化</button>
         <button id="bexpsave">.z80保存</button>
         <button id="bexpwrite">再ASM→メモリ</button>
+        <button id="bpromexp">📤 IDEへ</button>
       </div>
       <textarea id="exptext" spellcheck="false" placeholder="; 範囲を指定してソース化 — 出力はそのまま再アセンブル可能（範囲外への絶対参照はそのまま残る）"></textarea>
       <div id="pinnote" class="region"></div>
@@ -273,77 +277,80 @@ applyI18n();
 import { mountTourButton, showModal } from './tour.js';
 // ---- assembler syntax help --------------------------------------------------
 const ASM_HELP_JA = `
-<h3>基本</h3>
+<p style="margin:0 0 8px"><a href="#asmh-basic">基本</a> · <a href="#asmh-expr">数値式</a> ·
+<a href="#asmh-pseudo">疑似命令</a> · <a href="#asmh-macro">マクロ</a> ·
+<a href="#asmh-m80">M80互換</a> · <a href="#asmh-ext">拡張</a>
+&nbsp;|&nbsp; <a href="../docs/z80asm.ja.md" target="_blank">フルリファレンス→</a></p>
+<h3 id="asmh-basic">基本</h3>
 <pre>label:  LD A,10        ; コロンラベル（EQU/MACRO/PROC/STRUC形は不要）
-.loop:  DJNZ .loop      ; ローカルラベル（直前のグローバルラベル配下）
-        JR label</pre>
-<h3>数値と式</h3>
-<pre>10  0x1F  1Fh  0FFh  1010b  0b1010  'A'  $   ← $=現在アドレス
-+ - * / % &amp; | ^ &lt;&lt; &gt;&gt; ~ ( )               ; 前方参照OK（2パス）</pre>
-<h3>疑似命令</h3>
-<pre>ORG 9000h            ; 配置先
-name EQU 42          ; 定数
-DB 1,2,'text'        ; バイト列（DEFB/DEFM同義、文字列可）
-DW addr,1234h        ; ワード / DS 16[,fill] 領域確保 / END</pre>
-<h3>マクロ</h3>
-<pre>MACRO out2 port,val  ; （name MACRO … の形式も可）
-        LD A,val
-        OUT (port),A
-        ENDM
-        out2 51h,0    ; 展開。マクロ内.localは呼び出し毎に独立
-REPT 8
-        NOP
-        ENDM</pre>
-<h3>PROC USES — 使用レジスタannotationの自動push/pop</h3>
-<pre>foo PROC USES bc,de
-        LD B,8
-        RET           ; ← POP DE/POP BC/RETに自動展開
-foo ENDP              ; 条件付きRET(RET NZ等)はエラー（意味が変わるため）</pre>
-<h3>STRUC — IXオフセットの名前化</h3>
-<pre>player STRUC
-x   DB 0
-hp  DW 0
-player ENDS           ; player.x=0, player.hp=1, player=サイズ3
-        LD A,(IX+player.x)</pre>
-<h3>RELOC — リロケータブル支援</h3>
-<pre>RELOC
-start:  CALL start    ; 領域内ラベルへの絶対参照を自動記録
-ENDRELOC
-FIXUPTABLE            ; DW 件数, DW オフセット… を埋め込み
-; JRで書ける距離のJPには警告（JRはタダでリロケータブル）</pre>
+.loop:  DJNZ .loop      ; ローカルラベル（直前のグローバル配下・展開毎に独立）</pre>
+<h3 id="asmh-expr">数値式</h3>
+<pre>10  0x1F  1Fh  0FFh  1010b  'A'  $=現在アドレス
++ - * / % &amp; | ^ &lt;&lt; &gt;&gt; ~ ( )   ; 前方参照OK（2パス）</pre>
+<h3 id="asmh-pseudo">疑似命令</h3>
+<pre>ORG a / name EQU v / DB 1,'text' / DW a / DS n[,fill] / END / INCLUDE "f"(IDE)</pre>
+<h3 id="asmh-macro">マクロ</h3>
+<pre>name MACRO p1,p2 … ENDM     ; MACRO name p1,p2 も可。呼び出し: name 1,&lt;a,b&gt;
+REPT n … ENDM               ; n回反復
+LOCAL lab                   ; 展開毎ユニーク名（M80式。.labelでも同じ効果）
+EXITM                       ; 展開の途中脱出（IF内から使うのが定番）</pre>
+<h3 id="asmh-m80">M80互換</h3>
+<pre>IF 式/IFE 式/ELSE/ENDIF     ; 条件アセンブル（ネスト可・IF内の前方参照はエラー）
+IFDEF n / IFNDEF n          ; シンボル/マクロ定義済みか
+IFB &lt;p&gt; / IFNB &lt;p&gt;          ; 引数が空か（可変長風マクロに）
+IFIDN &lt;a&gt;,&lt;b&gt; / IFDIF      ; 引数テキスト比較（大文字小文字無視）
+IRP r,&lt;bc,de&gt; … ENDM        ; リスト反復（&lt;&gt;内のカンマは分割しない）
+IRPC c,ABC … ENDM           ; 文字反復。文字列内は '&amp;c' で置換
+label&amp;n:                    ; &amp;連結（空白なし隣接のみ。空白ありはAND演算子）
+name %(式)                  ; 値渡し引数（テキストでなく評価結果）
+RET MACRO … ENDM / PURGE    ; 組み込みシャドウ（内側の同名は組み込みに解決）
+IF1/IF2                     ; 非対応（1回展開+2パス構造のため）— 正直にエラー</pre>
+<h3 id="asmh-ext">拡張（うち独自）</h3>
+<pre>foo PROC USES bc,de … RET … foo ENDP   ; 自動push/pop（条件RETはエラー）
+player STRUC / x DB 0 / player ENDS    ; (IX+player.x) のオフセット名
+RELOC … ENDRELOC / FIXUPTABLE          ; 自己再配置支援＋JR推奨lint
+.local自動スコープ / エラーの展開元行番号 / 前方参照可の式</pre>
 <p>アセンブル成功時は下に静的解析（破壊レジスタ・I/O・スタックlint・
-Tステート・⚡自己書き換え検出）が出る。</p>`;
+Tステート・⚡自己書き換え）。詳細と「M80との差分表」は
+<a href="../docs/z80asm.ja.md" target="_blank">フルリファレンス</a>へ。</p>`;
 
 const ASM_HELP_EN = `
-<h3>Basics</h3>
-<pre>label:  LD A,10        ; colon labels (not needed for EQU/MACRO/PROC/STRUC)
-.loop:  DJNZ .loop      ; local label, scoped to the previous global
-        JR label</pre>
-<h3>Numbers &amp; expressions</h3>
-<pre>10  0x1F  1Fh  0FFh  1010b  0b1010  'A'  $   ($ = here)
-+ - * / % &amp; | ^ &lt;&lt; &gt;&gt; ~ ( )               ; forward refs OK (two-pass)</pre>
-<h3>Pseudo-ops</h3>
-<pre>ORG 9000h / name EQU 42 / DB 1,'text' (DEFB/DEFM) / DW / DS n[,fill] / END</pre>
-<h3>Macros</h3>
-<pre>MACRO out2 port,val   (or: name MACRO …)
-        LD A,val
-        OUT (port),A
-        ENDM
-        out2 51h,0     ; .locals stay private per expansion
-REPT 8 … ENDM</pre>
-<h3>PROC USES — auto push/pop from a register annotation</h3>
-<pre>foo PROC USES bc,de
-        RET            ; becomes POP DE / POP BC / RET
-foo ENDP               ; conditional RET inside = error, on purpose</pre>
-<h3>STRUC — named IX offsets</h3>
-<pre>player STRUC / x DB 0 / hp DW 0 / player ENDS
-        LD A,(IX+player.x)</pre>
-<h3>RELOC</h3>
-<pre>RELOC … ENDRELOC       ; records absolute refs to region-born labels
-FIXUPTABLE             ; emits DW count, DW offsets… for a self-reloc loader
-; a JP that fits a JR gets a warning (JR relocates for free)</pre>
-<p>On success the static analysis appears below (clobbers, I/O, stack lint,
-T-states, ⚡ self-modifying writes).</p>`;
+<p style="margin:0 0 8px"><a href="#asmh-basic">basics</a> · <a href="#asmh-expr">expressions</a> ·
+<a href="#asmh-pseudo">pseudo-ops</a> · <a href="#asmh-macro">macros</a> ·
+<a href="#asmh-m80">M80 compat</a> · <a href="#asmh-ext">extensions</a>
+&nbsp;|&nbsp; <a href="../docs/z80asm.md" target="_blank">full reference →</a></p>
+<h3 id="asmh-basic">Basics</h3>
+<pre>label:  LD A,10        ; colon labels (not needed for EQU/MACRO/PROC/STRUC forms)
+.loop:  DJNZ .loop      ; local label, scoped to the last global (and per expansion)</pre>
+<h3 id="asmh-expr">Expressions</h3>
+<pre>10  0x1F  1Fh  0FFh  1010b  'A'  $ = here
++ - * / % &amp; | ^ &lt;&lt; &gt;&gt; ~ ( )   ; forward references OK (two passes)</pre>
+<h3 id="asmh-pseudo">Pseudo-ops</h3>
+<pre>ORG a / name EQU v / DB 1,'text' / DW a / DS n[,fill] / END / INCLUDE "f" (IDE)</pre>
+<h3 id="asmh-macro">Macros</h3>
+<pre>name MACRO p1,p2 … ENDM     ; or MACRO name p1,p2. Call: name 1,&lt;a,b&gt;
+REPT n … ENDM               ; repeat n times
+LOCAL lab                   ; unique name per expansion (M80 style; .label works too)
+EXITM                       ; bail out of the expansion (classically from inside IF)</pre>
+<h3 id="asmh-m80">M80 compatibility</h3>
+<pre>IF e / IFE e / ELSE / ENDIF ; conditional assembly (nests; fwd-refs in IF = error)
+IFDEF n / IFNDEF n          ; is the symbol/macro defined
+IFB &lt;p&gt; / IFNB &lt;p&gt;          ; is the argument blank (variadic-style macros)
+IFIDN &lt;a&gt;,&lt;b&gt; / IFDIF      ; textual argument comparison (case-insensitive)
+IRP r,&lt;bc,de&gt; … ENDM        ; iterate a list (commas inside &lt;&gt; don't split)
+IRPC c,ABC … ENDM           ; iterate characters; '&amp;c' substitutes inside strings
+label&amp;n:                    ; &amp;-pasting (only when directly adjacent; spaced &amp; = AND)
+name %(expr)                ; pass the evaluated VALUE, not the text
+RET MACRO … ENDM / PURGE    ; shadow a builtin (its own name inside = the builtin)
+IF1/IF2                     ; unsupported (expand-once + two passes) — honest error</pre>
+<h3 id="asmh-ext">Extensions (ours)</h3>
+<pre>foo PROC USES bc,de … RET … foo ENDP   ; auto push/pop (conditional RET = error)
+player STRUC / x DB 0 / player ENDS    ; named (IX+player.x) offsets
+RELOC … ENDRELOC / FIXUPTABLE          ; self-relocation support + JR-fits lint
+auto-scoped .locals / expansion-origin line numbers in errors / fwd-ref expressions</pre>
+<p>A successful assemble prints the static analysis below (clobbers, I/O, stack
+lint, T-states, ⚡ self-modifying writes). Details and the M80 difference table:
+<a href="../docs/z80asm.md" target="_blank">full reference</a>.</p>`;
 
 document.getElementById('basmhelp').onclick = () => {
   showModal({
@@ -442,9 +449,14 @@ mountTourButton(document.querySelector('h1'), [
 
 import { mountIcePage } from './ice.js';
 
+const chan = typeof BroadcastChannel === 'function' ? new BroadcastChannel('upd3301-ide') : null;
+const chanListeners = [];
+if (chan) chan.onmessage = (e) => chanListeners.forEach((fn) => fn(e.data));
+
 const page = mountIcePage(document, {
   t,
   lang, // ROM-label comments follow the page language (ja is the default)
+  broadcast: { send: (m) => chan?.postMessage(m), listen: (fn) => chanListeners.push(fn) },
   raf: (cb) => requestAnimationFrame(cb),
   getMachine: () => (window.opener && !window.opener.closed ? window.opener.__machine ?? null : null),
   openerAlive: () => !!(window.opener && !window.opener.closed),

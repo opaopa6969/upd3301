@@ -8,7 +8,10 @@ import { readFile } from 'node:fs/promises';
 import { Z80 } from './z80.js';
 import { assemble } from './z80asm.js';
 import { IceController } from './demo/ice.js';
-import { parsePattern, searchBytes, ChangeSearch, textVramModel, attrShort } from './demo/ice-tools.js';
+import {
+  parsePattern, searchBytes, ChangeSearch, textVramModel, attrShort,
+  thinTimeline, timelineView,
+} from './demo/ice-tools.js';
 import { Pc8001TextSystem } from './pc8001.js';
 import { Pc8001Machine } from './machine.js';
 import { regionAt } from './memmap.js';
@@ -326,4 +329,114 @@ test('ice: change search finds the N-BASIC cursor work in 3 refinements', async 
   const tracking = before.filter((x) => read(x.addr) === (x.v + 1) & 0xff || read(x.addr) === x.v + 1);
   assert.ok(tracking.length >= 1, 'at least one survivor increments with the cursor');
   ctrl.detach();
+});
+
+// ---- time-travel snapshot thinning (author feedback: "the tree explodes") -------
+function mkTl() {
+  const nodes = new Map();
+  let next = 1;
+  const add = (parent, frame, pinned = false) => {
+    const id = next++;
+    nodes.set(id, { id, parent, frame, children: [], pinned });
+    const p = nodes.get(parent);
+    if (p) p.children.push(id);
+    return id;
+  };
+  return { nodes, add };
+}
+function chainFrom(t, from, count, startFrame, step = 30) {
+  let p = from;
+  for (let i = 0; i < count; i++) p = t.add(p, startFrame + i * step);
+  return p;
+}
+function checkConsistent(nodes, rootId) {
+  // every parent link resolves and the whole tree hangs off the root
+  const seen = new Set();
+  const walk = (id) => {
+    const n = nodes.get(id);
+    assert.ok(n, `node ${id} exists`);
+    seen.add(id);
+    for (const c of n.children) {
+      assert.equal(nodes.get(c)?.parent, id, `child ${c} points back at ${id}`);
+      walk(c);
+    }
+  };
+  walk(rootId);
+  assert.equal(seen.size, nodes.size, 'no orphans after thinning');
+}
+
+test('ice-tools: thinning never eats root / branch points / tips / pins / recent M', () => {
+  const t = mkTl();
+  const root = t.add(0, 0);
+  const mid = chainFrom(t, root, 20, 30); // long boring run
+  const branch = t.add(mid, 700); // this node will fork
+  const tipA = chainFrom(t, branch, 10, 730);
+  const pinned = t.add(branch, 1000, true); // manual snap on branch B
+  const tipB = chainFrom(t, pinned, 15, 1030);
+  const current = tipB;
+  const before = t.nodes.size;
+  const recent = [...t.nodes.keys()].slice(-8);
+  const { removed } = thinTimeline(t.nodes, root, { current, keepRecent: 8, cap: 80, baseSpacing: 30 });
+  assert.ok(removed.length > 0, 'something was thinned');
+  assert.ok(t.nodes.size < before);
+  for (const id of [root, branch, tipA, tipB, pinned, current]) {
+    assert.ok(t.nodes.has(id), `protected node ${id} survives`);
+  }
+  for (const id of recent) assert.ok(t.nodes.has(id), `recent node ${id} untouched`);
+  assert.ok(t.nodes.get(branch).children.length >= 2, 'still a branch point');
+  checkConsistent(t.nodes, root);
+});
+
+test('ice-tools: deep past thins exponentially, recent past stays dense', () => {
+  const t = mkTl();
+  const root = t.add(0, 0);
+  const tip = chainFrom(t, root, 120, 30);
+  thinTimeline(t.nodes, root, { current: tip, keepRecent: 8, cap: 999, baseSpacing: 30 });
+  // average frame gap in the oldest surviving third ≫ the newest third
+  const frames = [...t.nodes.values()].map((n) => n.frame).sort((a, b) => a - b);
+  const gaps = frames.slice(1).map((f, i) => f - frames[i]);
+  const third = Math.floor(gaps.length / 3);
+  const avg = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  assert.ok(avg(gaps.slice(0, third)) > avg(gaps.slice(-third)) * 1.5,
+    `old ${avg(gaps.slice(0, third)).toFixed(0)} vs new ${avg(gaps.slice(-third)).toFixed(0)}`);
+  // the newest 8 survived wall-to-wall (gap = base spacing)
+  assert.deepEqual(gaps.slice(-7), [30, 30, 30, 30, 30, 30, 30]);
+  checkConsistent(t.nodes, root);
+});
+
+test('ice-tools: the cap holds even after exponential thinning', () => {
+  const t = mkTl();
+  const root = t.add(0, 0);
+  let p = root;
+  for (let i = 0; i < 300; i++) p = t.add(p, (i + 1) * 30);
+  thinTimeline(t.nodes, root, { current: p, keepRecent: 8, cap: 80, baseSpacing: 30 });
+  assert.ok(t.nodes.size <= 80, `size ${t.nodes.size} ≤ 80`);
+  assert.ok(t.nodes.has(root) && t.nodes.has(p));
+  checkConsistent(t.nodes, root);
+});
+
+test('ice-tools: timelineView folds boring runs into counted gaps', () => {
+  const t = mkTl();
+  const root = t.add(0, 0);
+  const mid = chainFrom(t, root, 30, 30);
+  const branch = t.add(mid, 1000);
+  const tipA = chainFrom(t, branch, 12, 1030);
+  const tipB = chainFrom(t, branch, 12, 1030);
+  const rows = timelineView(t.nodes, root, { current: tipB, nearCurrent: 3 });
+  const gaps = rows.filter((r) => r.type === 'gap');
+  const nodesShown = rows.filter((r) => r.type === 'node');
+  assert.ok(gaps.length >= 2, 'runs folded');
+  // every node is either shown or accounted for inside a gap
+  const total = nodesShown.length + gaps.reduce((a, g) => a + g.count, 0);
+  assert.equal(total, t.nodes.size, 'nothing lost in the folding');
+  // root, branch, both tips, current visible
+  for (const id of [root, branch, tipA, tipB]) {
+    assert.ok(nodesShown.some((r) => r.id === id), `node ${id} visible`);
+  }
+  // near-current ancestors stay visible even mid-chain
+  const cur = rows.find((r) => r.type === 'node' && r.current);
+  assert.equal(cur.id, tipB);
+  // expanding a gap reveals its nodes
+  const rows2 = timelineView(t.nodes, root, { current: tipB, nearCurrent: 3, expanded: new Set(gaps[0].ids) });
+  assert.ok(rows2.filter((r) => r.type === 'node').length > nodesShown.length, 'expansion shows more');
 });

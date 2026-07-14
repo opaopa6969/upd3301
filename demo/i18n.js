@@ -135,7 +135,8 @@ const DICT = {
   'タイムトラベル（30フレーム毎に自動snap・分岐ツリー）': 'Time travel (auto-snapshot every 30 frames, branch tree)',
   '⏪ 1フレーム戻る': '⏪ 1 frame back',
   '⏩ 1フレーム進む': '⏩ 1 frame forward',
-  '📸 今すぐsnap': '📸 snap now',
+  '📸 snap（保護・間引かれない）': '📸 snap (pinned — never thinned)',
+  '古い一本道は間引き済み（決定論再実行で正確性は不変・再実行が伸びるだけ）': 'old linear runs are thinned (deterministic replay keeps accuracy — only the re-run gets longer)',
   'プロファイラ（シャドウコールスタック、CPU毎）': 'Profiler (shadow call stack, per CPU)',
   '⏱ 計測': '⏱ Profile',
   'ラベル±': 'Label ±',
@@ -195,11 +196,58 @@ const DICT = {
   '保存': 'saves',
   '（ループ・下限のみ）': ' (loop — lower bound only)',
   '⚠ 間接フローあり — 解析は不完全': '⚠ indirect flow — analysis incomplete',
+  // IDE (ide.html)
+  '🛠 IDE — Z80プロジェクト工房': '🛠 IDE — Z80 project workbench',
+  '📁 フォルダを開く': '📁 Open folder',
+  '🗂 仮想プロジェクト': '🗂 Virtual project',
+  '🔨 ビルド': '🔨 Build',
+  '▶ 実機へ': '▶ To machine',
+  '🔬 シンボルをICEへ': '🔬 Symbols to ICE',
+  '💾 保存 (Ctrl+S)': '💾 Save (Ctrl+S)',
+  'ファイル': 'Files',
+  'シンボル（クリック=定義へ / 右クリック=参照元）': 'Symbols (click = definition / right-click = references)',
+  'ビルド結果': 'Build result',
+  'アトリビュートデザイナ（3301の画面を塗る）': 'Attribute designer (paint the 3301 screen)',
+  '📤 ICEからの持ち込み': '📤 Brought over from the ICE',
+  'プロジェクトに保存': 'Save into project',
+  '破棄': 'Discard',
+  'ファイル名': 'file name',
+  '反転': 'reverse',
+  '上線': 'upline',
+  '下線': 'lowline',
+  'リセット': 'reset',
+  '塗る': 'Paint',
+  '⬇ 実機の画面を取り込む': '⬇ Import the live screen',
+  'DB行を出す': 'Emit DB rows',
+  'JSコード片': 'JS snippet',
+  '実機VRAMへ書く': 'Write to machine VRAM',
+  '（プロジェクト未オープン）': '(no project open)',
+  '実フォルダ': 'real folder',
+  '仮想（ブラウザ内）': 'virtual (in-browser)',
+  '保存した': 'saved',
+  '行': 'line(s)',
+  'エントリファイルがない': 'no entry file',
+  'エラー': 'error(s)',
+  '（まずビルド）': '(build first)',
+  '定義が見つからない': 'definition not found',
+  '参照元': 'references',
+  '実機がいない — machine.htmlから開くと繋がる': 'no machine — open this from machine.html to connect',
+  'シンボルをICEへ送った': 'symbols sent to the ICE',
+  'ICEからの持ち込み': 'brought from the ICE',
+  '行が20ペア超過 — 実機では溢れる（EXモードならセル毎で制限なし）': 'row(s) exceed 20 pairs — the real chip overflows (EX mode is per-cell, no limit)',
+  '全行が20ペア以内 — 実機OK': 'all rows within 20 pairs — real-machine safe',
+  'アトリビュートを実機VRAMへ書いた': 'attributes written to machine VRAM',
+  '画面を読めなかった': 'could not read the screen',
+  '実機の現画面を取り込んだ — ここから編集できる': 'imported the live screen — edit from here',
+  'このブラウザはFile System Access API非対応 — 仮想プロジェクトをどうぞ': 'this browser lacks the File System Access API — use a virtual project',
+  '📤 IDEへ': '📤 To IDE',
+  '📤 IDEへ送った（IDE未起動でも起動時に拾われる）': '📤 sent to the IDE (picked up at IDE start even if closed now)',
   // tour / help chrome (tour.js)
   '次へ': 'Next',
   'PC-8001/8801実機': 'PC-8001/8801 machine',
   '🖥 画面/タブ共有': '🖥 Share screen/tab',
   '🎮 ゲームアタッチ': '🎮 Attach a game',
+  '⚙ 設定': '⚙ Settings',
   'フリッカー': 'Flicker',
   '前へ': 'Back',
   '完了': 'Done',
@@ -226,6 +274,13 @@ const DICT = {
 };
 
 const NOTES_EN = {
+  'note-ide': `The author's workflow, verbatim: experiment in the ICE, manage in the IDE.
+    Subroutines born in the ICE get promoted here with "📤 To IDE"; split them into
+    INCLUDEs, build, load with "▶ To machine", then debug in the ICE with "🔬 Symbols
+    to ICE" — the loop closes. A project is a real folder (File System Access API
+    browsers) or an honest in-browser virtual project. The attribute designer meters
+    the 3301's 20-pairs-per-row budget live — a row that overflows here overflows on
+    the real chip.`,
   'note-ice': `Opened from machine.html's "🔬 ICE" button, this window clamps onto the live
     machine (window.opener.__machine) from the outside. Pause, step, step-out, conditional
     breakpoints, watchpoints (memory R/W), I/O port breaks (pickable by port name), a call

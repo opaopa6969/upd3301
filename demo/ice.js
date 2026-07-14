@@ -23,7 +23,10 @@ import { analyze, exportSource } from '../z80anal.js';
 import { PORTS_PC88_MAIN, PORTS_PC88_SUB } from '../z80anal.js';
 import { regionAt, pinPresets, estimateUnused } from '../memmap.js';
 import { labelMap, commentFor } from '../romlabels.js';
-import { parsePattern, searchBytes, ChangeSearch, textVramModel, attrShort } from './ice-tools.js';
+import {
+  parsePattern, searchBytes, ChangeSearch, textVramModel, attrShort,
+  thinTimeline, timelineView,
+} from './ice-tools.js';
 
 export const BREAK = Symbol('ice-break');
 
@@ -624,10 +627,11 @@ export function mountIcePage(doc, env) {
   const lang = env.lang ?? 'ja';
   // time travel: snapshot nodes form a tree; branches are born when you
   // resume from the past. Needs machine.snapshot()/restore() in the core.
-  const SNAP_EVERY = 30, SNAP_CAP = 80;
+  const SNAP_EVERY = 30, SNAP_CAP = 80, SNAP_RECENT = 8; // ≈4s of dense history
   const tl = {
     nodes: new Map(), rootId: 0, current: 0, next: 1,
     inputLog: [], treeVer: 0, renderVer: -1,
+    expanded: new Set(), // fold-rows the user clicked open
   };
   const ttOK = (m) => typeof m?.snapshot === 'function' && typeof m?.restore === 'function';
 
@@ -640,6 +644,7 @@ export function mountIcePage(doc, env) {
     'bprof', 'bprofreset', 'prof', 'stack',
     'laddr', 'lname', 'bladd', 'blexport', 'blimport',
     'exps', 'expe', 'expo', 'bexp', 'bexpsave', 'bexpwrite', 'exptext', 'pinnote',
+    'bpromasm', 'bpromexp',
     'walo', 'wahi', 'war', 'waw', 'wacond', 'bwadd', 'wlist',
     'iosel', 'iolo', 'iohi', 'ioin', 'ioout', 'iocond', 'bioadd', 'iolist',
     'spat', 'bsearch', 'sres', 'bcsinit', 'bcsne', 'bcseq', 'bcsgt', 'bcslt',
@@ -770,6 +775,7 @@ export function mountIcePage(doc, env) {
       tl.next = 1;
       tl.current = 0;
       tl.rootId = 0;
+      tl.expanded.clear();
       tl.treeVer++;
       if (ttOK(m)) takeSnap(m, 0);
       updateTabs();
@@ -816,10 +822,10 @@ export function mountIcePage(doc, env) {
     if (typeof o === 'object') return Object.values(o).reduce((s, x) => s + snapSize(x), 8);
     return 8;
   }
-  function takeSnap(m, parentId) {
+  function takeSnap(m, parentId, pinned = false) {
     let node;
     try {
-      node = { id: tl.next++, parent: parentId, frame: m.frame, snap: m.snapshot(), children: [] };
+      node = { id: tl.next++, parent: parentId, frame: m.frame, snap: m.snapshot(), children: [], pinned };
     } catch { return null; }
     node.size = snapSize(node.snap);
     tl.nodes.set(node.id, node);
@@ -828,28 +834,14 @@ export function mountIcePage(doc, env) {
     else tl.rootId = node.id;
     tl.current = node.id;
     tl.treeVer++;
-    prune();
+    // rr-style thinning: dense recent past, exponentially sparse deep past.
+    // Root / branch points / tips / pinned / current always survive; the
+    // deterministic replay just gets a longer run-up from a sparser region.
+    const { removed } = thinTimeline(tl.nodes, tl.rootId, {
+      current: tl.current, keepRecent: SNAP_RECENT, cap: SNAP_CAP, baseSpacing: SNAP_EVERY,
+    });
+    if (removed.length) tl.treeVer++;
     return node;
-  }
-  function ancestorsOfCurrent() {
-    const set = new Set();
-    let n = tl.nodes.get(tl.current);
-    while (n) { set.add(n.id); n = tl.nodes.get(n.parent); }
-    return set;
-  }
-  function prune() {
-    while (tl.nodes.size > SNAP_CAP) {
-      const keep = ancestorsOfCurrent();
-      let victim = null;
-      for (const n of tl.nodes.values()) { // Map iterates in insertion order → oldest first
-        if (!keep.has(n.id) && n.children.length === 0) { victim = n; break; }
-      }
-      if (!victim) break; // everything left is the current lineage
-      tl.nodes.delete(victim.id);
-      const p = tl.nodes.get(victim.parent);
-      if (p) p.children = p.children.filter((c) => c !== victim.id);
-      tl.treeVer++;
-    }
   }
   function ensureWrapped(m) {
     // restore() writes into the same objects on this core, but stay paranoid:
@@ -1162,7 +1154,7 @@ export function mountIcePage(doc, env) {
   }
 
   function renderTree(m) {
-    if (tl.renderVer === tl.treeVer) return;
+    if (tl.renderVer === tl.treeVer) return; // redraw only when the tree changed
     tl.renderVer = tl.treeVer;
     els.tree.textContent = '';
     if (!ttOK(m)) {
@@ -1170,20 +1162,35 @@ export function mountIcePage(doc, env) {
       return;
     }
     let total = 0;
-    const walk = (id, depth) => {
-      const n = tl.nodes.get(id);
-      if (!n) return;
-      total += n.size ?? 0;
+    for (const n of tl.nodes.values()) total += n.size ?? 0;
+    // compressed view: boring degree-1 runs fold into one "─⋯×N─" edge;
+    // clicking the fold expands it once (collapses again on the next fold)
+    const rows = timelineView(tl.nodes, tl.rootId, {
+      current: tl.current, nearCurrent: 3, expanded: tl.expanded,
+    });
+    for (const r of rows) {
       const row = doc.createElement('div');
-      row.className = 'treerow' + (id === tl.current ? ' on' : '');
-      row.textContent = `${'· '.repeat(depth)}${id === tl.current ? '▶' : '○'} f=${n.frame}`;
-      row.onclick = () => jumpTo(id);
+      if (r.type === 'gap') {
+        row.className = 'treerow gap';
+        row.textContent = `${'· '.repeat(r.depth)}│ ─⋯×${r.count}─`;
+        const ids = r.ids;
+        row.onclick = () => {
+          for (const id of ids) tl.expanded.add(id);
+          tl.treeVer++;
+          renderAll();
+        };
+      } else {
+        row.className = 'treerow' + (r.current ? ' on' : '') + (r.pinned ? ' pin' : '');
+        const mark = r.current ? '▶' : r.pinned ? '📸' : r.branch ? '┳' : '○';
+        row.textContent = `${'· '.repeat(r.depth)}${mark} f=${r.frame}`;
+        row.onclick = () => jumpTo(r.id);
+      }
       els.tree.appendChild(row);
-      for (const cid of n.children) walk(cid, depth + 1);
-    };
-    if (tl.nodes.size) walk(tl.rootId, 0);
+    }
     els.ttinfo.textContent =
-      `${tl.nodes.size}/${SNAP_CAP} snap ≈${(total / 1024) | 0}KB — ` + t('D88へのセクタ書込は巻き戻らない');
+      `${tl.nodes.size}/${SNAP_CAP} snap ≈${(total / 1024) | 0}KB — `
+      + t('古い一本道は間引き済み（決定論再実行で正確性は不変・再実行が伸びるだけ）') + ' / '
+      + t('D88へのセクタ書込は巻き戻らない');
   }
 
   function renderProf(c, m) {
@@ -1270,9 +1277,9 @@ export function mountIcePage(doc, env) {
 
   els.btundo.onclick = () => seekFrame((ctrl.machine?.frame ?? 1) - 1);
   els.btredo.onclick = () => seekFrame((ctrl.machine?.frame ?? 0) + 1);
-  els.btsnap.onclick = () => {
+  els.btsnap.onclick = () => { // manual snapshots are pinned — thinning never eats them
     const m = ctrl.machine;
-    if (m && ttOK(m)) { takeSnap(m, tl.current); renderAll(); }
+    if (m && ttOK(m)) { takeSnap(m, tl.current, true); renderAll(); }
   };
 
   els.bprof.onclick = () => {
@@ -1559,6 +1566,28 @@ export function mountIcePage(doc, env) {
     els.memaddr.value = hex(state.memAddr, 4);
     renderAll();
   };
+
+  // --- ICE → IDE promotion (author workflow: experiment here, manage there) ---
+  function promoteToIde(source, org, symbols) {
+    if (!source || !source.trim()) return;
+    const payload = { type: 'promote', source, org: org ?? null, symbols: symbols ?? null };
+    env.broadcast?.send?.(payload);
+    try { storage.set('upd3301-promote', JSON.stringify(payload)); } catch { /* box stays empty */ }
+    els.aout.textContent = t('📤 IDEへ送った（IDE未起動でも起動時に拾われる）');
+  }
+  els.bpromasm.onclick = () => promoteToIde(els.asrc.value, parseNum(els.aorg.value), state.lastAsm?.symbols ?? null);
+  els.bpromexp.onclick = () => {
+    const text = els.exptext.value || doExport();
+    if (text) promoteToIde(text, parseNum(els.expo.value) ?? parseNum(els.exps.value), null);
+  };
+  // …and the way back: the IDE broadcasts build symbols into the label DB
+  env.broadcast?.listen?.((msg) => {
+    if (msg?.type === 'labels' && Array.isArray(msg.labels)) {
+      for (const [a, n] of msg.labels) state.labels.set(a & 0xffff, String(n));
+      saveLabels();
+      renderAll();
+    }
+  });
 
   // --- main loop ---------------------------------------------------------------
   function tick() {

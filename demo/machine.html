@@ -40,6 +40,7 @@
   <button id="breset">リセット</button>
   <button id="bfull">⛶ 全画面</button>
   <button id="bice">🔬 ICE</button>
+  <button id="bide">🛠 IDE</button>
 </div>
 <div class="row"><span class="lbl">起動モード:</span>
   <button id="mn80" class="on">N-BASIC (N80)</button>
@@ -196,6 +197,7 @@ $('bfull').onclick = () => {
   else stage.requestFullscreen?.();
 };
 $('bice').onclick = () => window.open('ice.html', 'upd3301-ice', 'width=1200,height=900');
+$('bide').onclick = () => window.open('ide.html', 'upd3301-ide-win', 'width=1400,height=950');
 
 let bootMode = 'n80';
 const dipOf = (id, dflt) => {
