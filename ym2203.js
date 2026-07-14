@@ -193,7 +193,15 @@ export class Ym2203 {
 
   readStatus() { return this.status; }
 
-  get irq() { return (this.status & 3) !== 0; }
+  // The /IRQ line — NOT the status flags. On real OPN silicon the timer
+  // overflow LATCHES its status flag regardless of the $27 enable bit; the
+  // enable bit only gates whether that latched flag pulls /IRQ. (Verified on
+  // YM2612 by hardware test; kept for the OPN line here.) So a driver can poll
+  // the status flag for timing without ever taking the interrupt — and the SB2
+  // detection read at 0xA9 sees the flag whether or not IRQ was armed.
+  get irq() {
+    return (((this.status & 1) && this.irqEnableA) || ((this.status & 2) && this.irqEnableB)) ? true : false;
+  }
 
   writeData(v) {
     v &= 0xff;
@@ -492,18 +500,22 @@ export class Ym2203 {
   // caps every music driver at 60 Hz: half-tempo, melody notes dropped,
   // just the slow bass surviving. Ask the ear that caught it.)
   tickTimers(ticks) {
+    // The overflow flag latches UNCONDITIONALLY — the $27 enable bit gates the
+    // /IRQ line (see the `irq` getter), not the flag. Gating the flag here was
+    // wrong: it hid the flag from a poll-for-timing driver, and it conflated
+    // status with IRQ. (Independent RE review + YM2612 hardware tests.)
     if (this.timerARun) {
       this.timerACount -= ticks;
       while (this.timerACount <= 0) {
         this.timerACount += 1024 - this.timerA;
-        if (this.irqEnableA) this.status |= 1;
+        this.status |= 1;
       }
     }
     if (this.timerBRun) {
       this.timerBCount -= ticks;
       while (this.timerBCount <= 0) {
         this.timerBCount += (256 - this.timerB) * 16;
-        if (this.irqEnableB) this.status |= 2;
+        this.status |= 2;
       }
     }
   }

@@ -157,9 +157,10 @@ export class Ym2608 extends Ym2203 {
       if (!w || w.length < 2) { R.on[i] = 0; continue; }
       const p = R.pos[i];
       const idx = p | 0;
-      if (idx >= w.length - 1) { R.on[i] = 0; continue; }
+      if (idx >= w.length) { R.on[i] = 0; continue; } // fully past the end → stop
       const frac = p - idx;
-      const s = (w[idx] * (1 - frac) + w[idx + 1] * frac) * this._rhythmGain(i);
+      const nxt = idx + 1 < w.length ? w[idx + 1] : w[idx]; // hold last sample at the tail
+      const s = (w[idx] * (1 - frac) + nxt * frac) * this._rhythmGain(i);
       const lr = R.lr[i];
       if (lr & 2) l += s;
       if (lr & 1) r += s;

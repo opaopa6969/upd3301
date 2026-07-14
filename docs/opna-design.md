@@ -136,15 +136,20 @@ at the end.
 
 ### 10.1 Timer-A status is the real detection flag (no stub)
 The SB2 probe reads `0xA9` and wants `0x01` (§9). That `0x01` is now produced by
-the actual Timer-A overflow, gated by the `$27` enable bit exactly like silicon —
+the actual Timer-A overflow, with the **hardware-correct latch semantics** —
 no hard-coded status:
-- `tickTimers()` sets status bit0 on Timer-A overflow **iff** `$27` bit2 (enable)
-  is set; `$27` bit4 clears it. (This was already the model; it is now pinned by
-  tests instead of assumed.)
+- `tickTimers()` sets status bit0 on Timer-A overflow **unconditionally**; the
+  `$27` enable bit (bit2) gates only the `/IRQ` line, not the flag. (Corrected
+  after an adversarial RE review flagged the earlier enable-gated flag as wrong —
+  YM2612 hardware tests show the flag latches regardless of enable, and a driver
+  can poll it for timing without arming the interrupt.) `$27` bit4 clears it; the
+  `irq` getter ANDs each latched flag with its enable bit.
 - Verified end-to-end through the machine: program `$24/$25/$27` via ports
-  `0xA8/0xA9`, tick, and `machine.in(0xA9) === 0x01`. Enable-gating and reset are
-  tested too. See `test-ym2608.mjs` (Timer-A group) and `test-opna-machine.mjs`
-  ("detection: port 0xA9 returns the real Timer-A flag").
+  `0xA8/0xA9`, tick, and `machine.in(0xA9) === 0x01`. The latch-vs-IRQ split and
+  the reset bit are tested too. See `test-ym2608.mjs` (Timer-A group) and
+  `test-opna-machine.mjs` ("detection: port 0xA9 returns the real Timer-A flag").
+  This makes detection strictly more robust: the `0x01` appears whether or not
+  the SB2 title arms the IRQ.
 
 So `sb2:true` now passes detection from the chip's own timer. Confirming a *real
 SB2 title* flips to the enhanced score still needs the disk (§10.4).
@@ -209,7 +214,25 @@ When a capture is taken (needs the disk), log it as one JSON line per write so t
 Lanes to visualise: FM1-6 (`$B0` alg/fb per channel), rhythm (`$00` key + `$08–$0D`
 level/pan), ADPCM-B (`$10–$1B`). Timer/key ($27/$28) mark tempo and note-ons.
 
-### 10.6 Honest status vs the issue's acceptance
+### 10.6 Known approximations (adversarial-review notes)
+An independent RE review (Codex) confirmed the Timer-A fix above and flagged
+these as **honest approximations**, true to the "audible first, exact later"
+scope — not silicon-exact, pending a real SB2 capture:
+- **Rhythm level curve** — `_rhythmGain()` models total+individual as a summed
+  0.75 dB/step attenuator. The direction (bigger register → louder) is right and
+  monotonic; the exact transfer curve should later be a LUT fit to a hardware
+  capture rather than a computed dB law.
+- **Rhythm = decoded PCM, not ADPCM-A** — we resample the 44.1 kHz drum WAVs; a
+  true YM2608 ADPCM-A 4-bit decoder (fixed step table, per-drum end address)
+  belongs behind the same `setRhythmRom()` seam. The WAV path loses the ADPCM
+  quantisation grit.
+- **`$00` key = software one-shot**, not the silicon key latch/edge machine; the
+  bit7 dump semantics need a capture to pin any edge nuance.
+- **Mono FM** — `ch.left/ch.right` are stored (from `$B4-$B6`) but the render
+  path sums to mono; full stereo FM6 + panned rhythm through a per-side board
+  stage is deferred (issue lists stereo/ADPCM-B as optional).
+
+### 10.7 Honest status vs the issue's acceptance
 - ✅ Real Timer-A flag → detection returns 0x01 with no stub (chip + machine tests).
 - ✅ FM6 + rhythm render non-silent, deterministic, board-processed; drums trigger
   individually with correct relative levels and pan.

@@ -238,13 +238,24 @@ test('Timer-A overflow sets status bit0 (== 0x01) when enabled — real detectio
   assert.equal(y.readStatus(), 0x01, 'status reads 0x01 — the value the SB2 probe wants');
 });
 
-test('Timer-A flag is enable-gated (hardware model): no enable → no flag', () => {
+test('Timer-A status LATCHES even when IRQ is disabled; enable gates only /IRQ', () => {
+  // Hardware model (YM2612 tested; kept for OPN): the overflow flag sets on
+  // overflow regardless of the $27 enable bit — the enable bit only pulls /IRQ.
   const y = new Ym2608({ sampleRate: 48000 });
   const w = (a, v) => { y.writeAddr(a); y.writeData(v); };
   w(0x24, 0xff); w(0x25, 0x03);
-  w(0x27, 0x01);                   // load A only, enable bit CLEAR
+  w(0x27, 0x01);                   // run A, enable bit CLEAR
   y.tickTimers(4096);
-  assert.equal(y.readStatus() & 1, 0, 'flag not set without the enable bit');
+  assert.equal(y.readStatus() & 1, 1, 'status flag latches without the enable bit');
+  assert.equal(y.irq, false, '/IRQ stays gated while enable is clear');
+
+  // now arm the enable bit → the already-latched flag pulls /IRQ
+  const y2 = new Ym2608({ sampleRate: 48000 });
+  const w2 = (a, v) => { y2.writeAddr(a); y2.writeData(v); };
+  w2(0x24, 0xff); w2(0x25, 0x03); w2(0x27, 0x05); // run + enable A
+  y2.tickTimers(4096);
+  assert.equal(y2.readStatus() & 1, 1, 'flag set');
+  assert.equal(y2.irq, true, 'enable armed → /IRQ asserts');
 });
 
 test('Timer-A reset ($27 b4) clears the flag', () => {
