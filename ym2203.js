@@ -304,15 +304,16 @@ export class Ym2203 {
   }
 
   // ---- FM -----------------------------------------------------------------
-  // Attenuation units per FM tick for a decay-type phase. Calibrated to real
-  // OPN timing: rate 4 (r=8) takes ~5 s to fall the full 1023-unit range,
-  // rate 30 (r=60) about 10 ms — a ~500× span. The old table was ~50× too
-  // FAST, so legato notes (keyed once, pitch rewritten) decayed to silence
-  // within a second and whole sections went quiet after the intro.
+  // Attenuation units per FM tick for a decay-type phase. The real OPN's rate
+  // curve is STEEP: a low rate (SR=3 → r≈6) barely moves — tens of seconds to
+  // fall the full range — while a high rate (r≈60) empties in a few ms. The
+  // earlier curve was too shallow, so a held bass note with SR=3 decayed to a
+  // whisper in ~3 s ("でん" that should ring out died); steepening it lets the
+  // slow sustains actually hold.
   _egInc(rate, ks) {
     if (rate <= 0) return 0;
     const r = Math.min(63, rate * 2 + (ks ? 2 : 0));
-    return 0.0037 * Math.pow(2, (r - 8) * 0.17);
+    return 0.00053 * Math.pow(2, (r - 6) * 0.23);
   }
 
   _opTick(op) {
@@ -339,6 +340,10 @@ export class Ym2203 {
         if (op.env > MAX_ATT) op.env = MAX_ATT;
         return;
       case ENV_RELEASE:
+        // Release was decaying keyed-off notes to full silence too quickly —
+        // in the quiet passages the whole background dropped out ("寂しくなる")
+        // where the real chip's tail lingers and knits the notes together.
+        // A gentler release keeps that low-level continuity.
         op.env += this._egInc(op.rr, op.ks);
         if (op.env >= MAX_ATT) { op.env = MAX_ATT; op.state = ENV_OFF; }
         return;
@@ -464,10 +469,15 @@ export class Ym2203 {
       // Modelling the board — not the chip — is what removes the bottom-heavy
       // "ドンシャリ" shelf. board=false gives the raw digital sum for A/B.
       if (!this.board) { out[i] = Math.max(-1, Math.min(1, fm * 0.5 + ssg * 0.5)); continue; }
-      const raw = fm * 0.42 + ssg * 0.30;
-      this._hpY = 0.985 * (this._hpY + raw - this._hpX);
+      const raw = fm * 0.9 + ssg * 0.62;
+      this._hpY = 0.996 * (this._hpY + raw - this._hpX);
       this._hpX = raw;
-      out[i] = Math.max(-1, Math.min(1, this._hpY));
+      // Analog output stage: a soft-saturating amp compresses the peaks and
+      // lifts the low-level tail, so quiet passages keep body instead of
+      // dropping out ("寂しくなる"). This models the board + recording chain,
+      // NOT the chip — it is why the raw digital sum has a wider crest factor
+      // (21 dB) than a real capture (~17 dB). board=false leaves it clean.
+      out[i] = Math.tanh(this._hpY * 0.35) * 2.0;
     }
     return out;
   }
