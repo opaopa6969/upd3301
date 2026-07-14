@@ -63,6 +63,15 @@ const DT_TAB = [
 // multiple: 0 means ×0.5
 const MUL = [0.5, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
+// SSG (AY-3-8910) 16-level volume DAC — the MEASURED chip curve, not a clean
+// 2^(-1.5 dB) approximation. The DAC is only ~shallow-log in the mid: a naive
+// 2^((v-15)/2) law under-weights every mid step by ~2× (vol 8 → 0.088 vs the
+// real 0.169), which made the SSG lead too quiet against the FM (the 13 s line
+// especially). This is the D/A curve — the register volume the game writes is
+// untouched.
+const SSG_DAC = [0, 0.0137, 0.0205, 0.0291, 0.0423, 0.0618, 0.0847, 0.1369,
+                 0.1691, 0.2647, 0.3527, 0.4499, 0.5704, 0.6873, 0.8482, 1.0];
+
 // which operators are carriers, per algorithm (bit per op 1..4)
 const CARRIERS = [0b1000, 0b1000, 0b1000, 0b1000, 0b1010, 0b1110, 0b1110, 0b1111];
 
@@ -300,8 +309,9 @@ export class Ym2203 {
       if (!(tone & noise)) continue;
       const vol = s.useEnv[c] ? s.envVol : s.vol[c];
       if (!vol) continue;
-      // the AY's volume ladder is logarithmic, ~3 dB per step
-      sum += Math.pow(2, (vol - 15) / 2) / 4.5;
+      // measured AY DAC ladder (shallow-log in the mid) — see SSG_DAC. /4.5 is
+      // headroom; vol 15 stays 1/4.5 as before, only the mid rises.
+      sum += SSG_DAC[vol & 15] / 4.5;
     }
     return sum;
   }

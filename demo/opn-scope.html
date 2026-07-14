@@ -47,10 +47,10 @@
   <span class="legend">🔊 エンジン:</span>
   <button id="tBoard" class="on">88SR出力段 (board)</button>
   <button id="tIdeal">理想サイン (ideal)</button>
-  <span class="legend">ライブ合成中。上のチェックで<b>その声だけ鳴らす</b>／消せる（レジスタ列は不変、AD/ampだけ）。board=実機の抵抗ミキサ+ACカップリング+ソフト飽和、ideal=量子化なしの純サイン</span>
+  <span class="legend">ライブ合成中。上のチェックで<b>音だけ</b>ミュート／ソロ（表示は残る／レジスタ列は不変、AD/ampだけ）。board=実機の抵抗ミキサ+ACカップリング+ソフト飽和、ideal=量子化なしの純サイン</span>
 </div>
 <div class="row" id="chrow">
-  <span class="legend">表示:</span>
+  <span class="legend">音を消す/ソロ(ライブエンジン時):</span>
 </div>
 <canvas id="roll" width="960" height="360"></canvas>
 <canvas id="keys" width="960" height="70"></canvas>
@@ -94,7 +94,7 @@ function newChip() {
   chip.sineMode = $('tIdeal').classList.contains('on') ? 'ideal' : 'accurate';
   applyMute();
 }
-function applyMute() { if (chip) for (let v = 0; v < 6; v++) chip.chMute[v] = !show[v]; }
+function applyMute() { if (chip) for (let v = 0; v < 6; v++) chip.chMute[v] = !audioOn[v]; }
 function applyFrame(f) { const fr = regs.frames[f]; for (let i = 0; i < fr.length; i += 2) { chip.writeAddr(fr[i]); chip.writeData(fr[i + 1]); } }
 
 async function ensureEngine() {
@@ -131,22 +131,24 @@ function engineSeek(sec) {
 const engineTime = () => playSample / (ctx ? ctx.sampleRate : 48000);
 const engineDur = () => regs ? regs.secs : secs;
 
-// per-voice show/hide + solo. In engine mode the SAME checkbox mutes the audio.
-const show = [true, true, true, true, true, true];
+// per-voice AUDIO mute + solo (engine mode). The DISPLAY always shows every
+// voice — un-checking only silences the sound (chip.chMute), so you can still
+// watch the notes of the voice you muted. Muted voices get a dimmed meter.
+const audioOn = [true, true, true, true, true, true];
 const chrow = $('chrow');
 NAMES.forEach((n, i) => {
   const lab = document.createElement('label');
   lab.style.cssText = 'display:inline-flex;align-items:center;gap:3px;font-size:12px;color:' + COLORS[i];
   const cb = document.createElement('input');
   cb.type = 'checkbox'; cb.checked = true;
-  cb.onchange = () => { show[i] = cb.checked; applyMute(); };
+  cb.onchange = () => { audioOn[i] = cb.checked; applyMute(); };
   const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = COLORS[i]; sw.style.margin = '0 2px 0 6px';
   const solo = document.createElement('button');
-  solo.textContent = 'S'; solo.title = 'ソロ'; solo.style.cssText = 'padding:1px 6px;font-size:11px';
+  solo.textContent = 'S'; solo.title = 'この声だけ鳴らす'; solo.style.cssText = 'padding:1px 6px;font-size:11px';
   solo.onclick = () => {
-    const alone = show[i] && show.filter(Boolean).length === 1;
-    for (let j = 0; j < 6; j++) show[j] = alone ? true : (j === i);
-    chrow.querySelectorAll('input').forEach((c, j) => { c.checked = show[j]; });
+    const alone = audioOn[i] && audioOn.filter(Boolean).length === 1;
+    for (let j = 0; j < 6; j++) audioOn[j] = alone ? true : (j === i);
+    chrow.querySelectorAll('input').forEach((c, j) => { c.checked = audioOn[j]; });
     applyMute();
   };
   lab.append(cb, sw, document.createTextNode(n));
@@ -178,7 +180,6 @@ function drawRollWindow(tSec) {
   for (let f = f0; f <= f1; f++) {
     const row = trace.frames[f]; const x = ((f / fps - t0) / WINDOW) * roll.width;
     for (let v = 0; v < 6; v++) {
-      if (!show[v]) continue;
       const note = row[v * 2] / 10, lvl = row[v * 2 + 1] / 99;
       if (lvl <= 0.01 || note < LO || note > HI) continue;
       const y = yFor(note);
@@ -204,7 +205,6 @@ function drawKeys(frame) {
   }
   if (!frame) return;
   for (let v = 0; v < 6; v++) {
-    if (!show[v]) continue;
     const note = Math.round(frame[v * 2] / 10), lvl = frame[v * 2 + 1] / 99;
     if (lvl <= 0.02 || note < n0 || note >= n1) continue;
     kc.globalAlpha = 0.35 + 0.65 * lvl;
@@ -228,7 +228,7 @@ function tick() {
   drawRollWindow(t);
   const fr = frameAt(t);
   drawKeys(fr);
-  if (fr) for (let v = 0; v < 6; v++) { const lvl = show[v] ? fr[v * 2 + 1] / 99 : 0; meters[v].style.height = (lvl * 100) + '%'; meters[v].style.opacity = show[v] ? 1 : 0.15; }
+  if (fr) for (let v = 0; v < 6; v++) { const lvl = fr[v * 2 + 1] / 99; meters[v].style.height = (lvl * 100) + '%'; meters[v].style.opacity = audioOn[v] ? 1 : 0.2; }
   $('time').textContent = `${fmt(engineMode ? t : au.currentTime)} / ${fmt(nowDur())}`;
   if (isPlaying()) $('seek').value = Math.round((t / nowDur()) * 1000);
   requestAnimationFrame(tick);
