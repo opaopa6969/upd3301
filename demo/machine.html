@@ -39,6 +39,7 @@
   <label style="color:#778;font-size:12px">FONT.ROM (任意): <input type="file" id="ffont" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="n88.rom + n88_0..3.rom + disk.rom (計6ファイル) をまとめて選ぶ">PC-8801 BIOS一式(n88): <input type="file" id="from88" multiple style="font-size:11px"></label>
   <button id="breset">リセット</button>
+  <button id="bpng" title="CRTシミュレーションを通さない生の描画出力(640×200・フルパレット)をPNG保存（バグ切り分け用）">PNG(raw)</button>
   <button id="bfull">⛶ 全画面</button>
   <button id="bice">🔬 ICE</button>
   <button id="bide">🛠 IDE</button>
@@ -282,6 +283,25 @@ $('sb2').onchange = (e) => {
   if (bootMode === 'n88' && has88Set()) boot(); // rebuild with/without OPNA
 };
 $('breset').onclick = () => boot();
+// Raw-frame PNG: the machine's OWN render() (full 512-colour palette), with NO
+// phosphor / tube / interlace / line-double and no CSS scaling — the emulation's
+// ground truth at 640×200. Lets a corrupted scene be diagnosed as emulation vs
+// CRT-sim vs display. Also prints the CRTC geometry to the console.
+$('bpng').onclick = () => {
+  if (!machine) return;
+  const is88 = machine instanceof Pc8801Machine;
+  let f;
+  try { f = is88 ? machine.render({ cgrom }) : machine.sys.render({ cgrom }); } catch (e) { return; }
+  if (!f || !f.rgb) return;
+  const { width: W, height: H, rgb } = f;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const cx = c.getContext('2d'); const im = cx.createImageData(W, H);
+  for (let i = 0; i < W * H; i++) { im.data[i * 4] = rgb[i * 3]; im.data[i * 4 + 1] = rgb[i * 3 + 1]; im.data[i * 4 + 2] = rgb[i * 3 + 2]; im.data[i * 4 + 3] = 255; }
+  cx.putImageData(im, 0, 0);
+  const crtc = is88 ? machine.crtc : machine.sys.crtc;
+  console.log(`[raw PNG] ${W}x${H}  crtc=${crtc.cols}x${crtc.rows} linesPerChar=${crtc.linesPerChar} gvramOn=${machine.gvramOn} line400=${machine.line400} width80=${machine.width80} mono=${machine.mono} pc=${machine.cpu.pc.toString(16)}`);
+  const a = document.createElement('a'); a.download = `upd3301-raw-f${machine.frame}.png`; a.href = c.toDataURL('image/png'); a.click();
+};
 // Switch boot mode. The two families read the same DIP ports (30h/31h) but
 // want opposite defaults: the 8001/N80 world is happy at FF/FF, while N88 V2
 // mode needs DB/79 (bit patterns that say "N88 + V2 + real terminal off") —

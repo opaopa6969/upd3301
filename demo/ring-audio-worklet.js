@@ -17,7 +17,9 @@ class RingPlayer extends AudioWorkletProcessor {
     this.size = 48000;              // 1 s ring at 48 kHz
     this.buf = new Float32Array(this.size);
     this.r = 0; this.w = 0; this.filled = 0;
-    this.target = 2400;             // keep ~50 ms buffered (jank cushion vs latency)
+    this.target = 4800;             // keep ~100 ms buffered — absorbs main-thread
+                                    // render spikes (the sample gen is still on
+                                    // the main thread, requested by this worklet)
     this.pending = false;           // a request is in flight → don't spam
     this.port.onmessage = (e) => {
       const s = e.data && e.data.samples;
