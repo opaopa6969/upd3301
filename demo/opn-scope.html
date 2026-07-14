@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>OPN スコープ — Feena を6声で見る</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#0a0a10; color:#ccd; font-family:ui-monospace,monospace; margin:16px; }
+  h1 { font-size:17px; color:#8fd; margin:0 0 4px; }
+  .note { color:#778; font-size:12px; max-width:820px; }
+  .row { margin:10px 0; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  button { background:#223; color:#cde; border:1px solid #446; border-radius:4px; padding:6px 12px; cursor:pointer; }
+  button.on { background:#265; border-color:#4a8; }
+  canvas { image-rendering:pixelated; background:#000; border:1px solid #223; border-radius:4px; max-width:100%; }
+  #meters { display:flex; gap:6px; margin-top:8px; }
+  .vm { flex:1; }
+  .vm .lab { font-size:11px; text-align:center; color:#9ab; }
+  .vm .bar { height:60px; background:#111; border:1px solid #333; border-radius:3px; position:relative; overflow:hidden; }
+  .vm .fill { position:absolute; bottom:0; left:0; right:0; }
+  #time { font-size:12px; color:#9ab; }
+  #seek { flex:1; min-width:220px; accent-color:#4a8; }
+  .legend { font-size:11px; color:#9ab; }
+  .sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin:0 3px -1px 8px; }
+</style>
+</head>
+<body>
+<h1>OPN スコープ — Feena を6声で見る</h1>
+<p class="note">
+  イース I オープニング「Feena」を、YM2203 の <b>FM 3声 + SSG 3声</b> のノート・強弱で可視化。
+  上=スクロールするピアノロール（横=時間、縦=音程、明るさ=音量）、下=いま鳴っている音のキーボードと各声のレベルメーター。
+  演奏データはゲームそのもの。強弱はチップのエンベロープ出力。気になる箇所は時刻で指してくれれば直せる。
+</p>
+<div class="row">
+  <button id="play">▶ 再生</button>
+  <span id="time">0:00 / 2:40</span>
+  <input type="range" id="seek" min="0" max="1000" value="0">
+</div>
+<div class="row">
+  <span class="legend">音源:</span>
+  <button id="srcMine" class="on">うちの音 (v6)</button>
+  <label class="legend" style="cursor:pointer">📂 教師/別mp3を読む<input type="file" id="srcFile" accept="audio/*" style="display:none"></label>
+  <span class="legend" id="srcName">— 演奏データ(ノート表示)は共通。教師を鳴らせば「原曲を聴きながら、うちのどの音が弱いか」を指せる</span>
+</div>
+<div class="row">
+  <span class="legend">
+    <span class="sw" style="background:#ff5a5a"></span>FM0
+    <span class="sw" style="background:#ffb14a"></span>FM1
+    <span class="sw" style="background:#ffe14a"></span>FM2
+    <span class="sw" style="background:#5ad1ff"></span>SSG0
+    <span class="sw" style="background:#7affb0"></span>SSG1
+    <span class="sw" style="background:#c68aff"></span>SSG2
+  </span>
+</div>
+<canvas id="roll" width="960" height="360"></canvas>
+<canvas id="keys" width="960" height="70"></canvas>
+<div id="meters"></div>
+
+<audio id="au" src="feena-v6.mp3" preload="auto"></audio>
+
+<script type="module">
+const COLORS = ['#ff5a5a','#ffb14a','#ffe14a','#5ad1ff','#7affb0','#c68aff'];
+const NAMES = ['FM0','FM1','FM2','SSG0','SSG1','SSG2'];
+const $ = (id) => document.getElementById(id);
+const au = $('au'), roll = $('roll'), keys = $('keys');
+const rc = roll.getContext('2d'), kc = keys.getContext('2d');
+
+let trace = null, fps = 60, secs = 160;
+fetch('feena-trace.json').then(r => r.json()).then(t => { trace = t; fps = t.fps; secs = t.secs; });
+
+// ---- meters ----------------------------------------------------------------
+const meters = NAMES.map((n, i) => {
+  const w = document.createElement('div'); w.className = 'vm';
+  w.innerHTML = `<div class="bar"><div class="fill" style="background:${COLORS[i]}"></div></div><div class="lab">${n}</div>`;
+  $('meters').appendChild(w);
+  return w.querySelector('.fill');
+});
+
+// piano-roll geometry: MIDI 24..96 (6 octaves) mapped to canvas height
+const LO = 24, HI = 96;
+const yFor = (note) => roll.height - ((note - LO) / (HI - LO)) * roll.height;
+const WINDOW = 8; // seconds visible in the roll
+
+// pre-rasterize the whole roll once we have the trace, then just move a playhead
+let rollDirty = true;
+function drawRollWindow(tSec) {
+  rc.clearRect(0, 0, roll.width, roll.height);
+  // octave gridlines
+  rc.strokeStyle = '#161620'; rc.lineWidth = 1;
+  for (let n = LO; n <= HI; n += 12) { const y = yFor(n); rc.beginPath(); rc.moveTo(0, y); rc.lineTo(roll.width, y); rc.stroke(); }
+  if (!trace) return;
+  const t0 = tSec - WINDOW * 0.5, t1 = tSec + WINDOW * 0.5;
+  const f0 = Math.max(0, Math.floor(t0 * fps)), f1 = Math.min(trace.frames.length - 1, Math.ceil(t1 * fps));
+  for (let f = f0; f <= f1; f++) {
+    const row = trace.frames[f]; const x = ((f / fps - t0) / WINDOW) * roll.width;
+    for (let v = 0; v < 6; v++) {
+      const note = row[v * 2] / 10, lvl = row[v * 2 + 1] / 99;
+      if (lvl <= 0.01 || note < LO || note > HI) continue;
+      const y = yFor(note);
+      rc.globalAlpha = 0.25 + 0.75 * lvl;
+      rc.fillStyle = COLORS[v];
+      const h = 2 + 4 * lvl;
+      rc.fillRect(x, y - h / 2, Math.max(1.5, roll.width / WINDOW / fps + 0.5), h);
+    }
+  }
+  rc.globalAlpha = 1;
+  // playhead
+  rc.strokeStyle = '#fff6'; rc.beginPath(); rc.moveTo(roll.width / 2, 0); rc.lineTo(roll.width / 2, roll.height); rc.stroke();
+}
+
+// ---- keyboard (current frame) ---------------------------------------------
+function drawKeys(frame) {
+  kc.clearRect(0, 0, keys.width, keys.height);
+  const n0 = 36, n1 = 96, span = n1 - n0;
+  const kw = keys.width / span;
+  // white key backdrop
+  for (let n = n0; n < n1; n++) {
+    const isBlack = [1, 3, 6, 8, 10].includes(n % 12);
+    kc.fillStyle = isBlack ? '#141420' : '#1c1c28';
+    kc.fillRect((n - n0) * kw, 0, kw - 1, keys.height);
+  }
+  if (!frame) return;
+  for (let v = 0; v < 6; v++) {
+    const note = Math.round(frame[v * 2] / 10), lvl = frame[v * 2 + 1] / 99;
+    if (lvl <= 0.02 || note < n0 || note >= n1) continue;
+    kc.globalAlpha = 0.35 + 0.65 * lvl;
+    kc.fillStyle = COLORS[v];
+    kc.fillRect((note - n0) * kw, keys.height * (1 - lvl), kw - 1, keys.height * lvl);
+  }
+  kc.globalAlpha = 1;
+}
+
+// ---- transport -------------------------------------------------------------
+function frameAt(tSec) { return trace ? trace.frames[Math.min(trace.frames.length - 1, Math.max(0, Math.floor(tSec * fps)))] : null; }
+function fmt(s) { const m = Math.floor(s / 60); const ss = Math.floor(s % 60); return `${m}:${ss.toString().padStart(2, '0')}`; }
+
+function tick() {
+  const t = au.currentTime;
+  drawRollWindow(t);
+  const fr = frameAt(t);
+  drawKeys(fr);
+  if (fr) for (let v = 0; v < 6; v++) { const lvl = fr[v * 2 + 1] / 99; meters[v].style.height = (lvl * 100) + '%'; }
+  $('time').textContent = `${fmt(t)} / ${fmt(au.duration || secs)}`;
+  if (!au.paused) $('seek').value = Math.round((t / (au.duration || secs)) * 1000);
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+$('play').onclick = () => { if (au.paused) { au.play(); $('play').textContent = '⏸ 停止'; $('play').classList.add('on'); } else { au.pause(); $('play').textContent = '▶ 再生'; $('play').classList.remove('on'); } };
+$('seek').oninput = (e) => { au.currentTime = (e.target.value / 1000) * (au.duration || secs); };
+au.onended = () => { $('play').textContent = '▶ 再生'; $('play').classList.remove('on'); };
+
+// swap the audio under the same visualization (mine vs a loaded teacher mp3).
+// The note-roll is our emulator's trace (arrangement is identical either way);
+// only the STRENGTH differs, so hearing the original while watching our notes
+// makes the envelope gaps obvious.
+$('srcMine').onclick = () => {
+  au.pause(); au.src = 'feena-v6.mp3'; au.currentTime = 0;
+  $('srcName').textContent = 'うちの音 (v6) — 表示と完全一致';
+  $('srcMine').classList.add('on'); $('play').textContent = '▶ 再生'; $('play').classList.remove('on');
+};
+$('srcFile').onchange = (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  au.pause(); au.src = URL.createObjectURL(f); au.currentTime = 0;
+  $('srcName').textContent = '📂 ' + f.name + ' — 頭出しがずれたらシークで合わせて';
+  $('srcMine').classList.remove('on'); $('play').textContent = '▶ 再生'; $('play').classList.remove('on');
+};
+</script>
+</body>
+</html>
