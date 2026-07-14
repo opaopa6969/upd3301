@@ -61,6 +61,7 @@ export class Pc8801Machine {
     // It needs no disk sub-system, so it boots on a bare emulated machine.
     this.n80mode = mode === 'n80';
     this.extMapped = false; // port 71h bit0=0 → ext ROM at 6000-7FFF
+    this._port71 = 0xff; // the raw latch (read back by the call dispatcher)
     this._port32 = 0; // bits 0-1 = EROMSL (which ext bank)
     this.gvramWindow = -1; // -1 = RAM at C000-FFFF; 0..2 = plane B/R/G
     this.gvramOn = false; // port 31h bit3
@@ -149,6 +150,11 @@ export class Pc8801Machine {
     if (port === 0x30) return this.dipsw[0];
     if (port === 0x31) return this.dipsw[1];
     if (port === 0x32) return this._port32; // readable on mkII SR and later
+    // 71h is READ by the cross-bank call dispatcher (3ABE): it stows the
+    // current bank state in its stack frame so the return trampoline can
+    // put it back. Returning a constant here means every OS call restores
+    // the WRONG bank on the way home.
+    if (port === 0x71) return this._port71;
     if (port === 0x40) {
       // d5 = VRTC (high during retrace), d1 = CMT carrier etc.
       const vrtc = this.tInFrame > this.frameT * 0.86;
@@ -201,6 +207,7 @@ export class Pc8801Machine {
         // 6000-7FFF; WHICH of the 4 banks comes from port 32h bits 0-1
         // (EROMSL). Getting this split wrong sends every cross-bank call
         // in the N88 ROM into the wrong bank and the machine into the weeds.
+        this._port71 = v;
         this.extMapped = (v & 1) === 0;
         return;
       case 0xe4: this.intLevels = (v & 8) ? 7 : (v & 7); return; // 8214 threshold
@@ -309,7 +316,7 @@ export class Pc8801Machine {
       crtc: snapObj(this.crtc),
       dmac: snapObj(this.dmac),
       bank: {
-        romEnabled: this.romEnabled, extMapped: this.extMapped, port32: this._port32,
+        romEnabled: this.romEnabled, extMapped: this.extMapped, port32: this._port32, port71: this._port71,
         gvramWindow: this.gvramWindow, gvramOn: this.gvramOn,
         mono: this.mono, line400: this.line400, width80: this.width80,
       },
@@ -356,6 +363,7 @@ export class Pc8801Machine {
     restoreObj(this.dmac, s.dmac);
     const b = s.bank;
     this.romEnabled = b.romEnabled; this.extMapped = b.extMapped; this._port32 = b.port32;
+    this._port71 = b.port71 ?? 0xff;
     this.gvramWindow = b.gvramWindow; this.gvramOn = b.gvramOn;
     this.mono = b.mono; this.line400 = b.line400; this.width80 = b.width80;
     this.intLevels = s.ints.levels; this.intMaskBits = s.ints.mask; this.intPending = s.ints.pending;

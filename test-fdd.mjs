@@ -177,3 +177,61 @@ test('machine88: main and sub ROMs complete the boot handshake', async (t) => {
   // and the negotiation read the sub ROM's feature byte
   assert.ok(answers.includes(0x77), 'sub served its ROM feature byte');
 });
+
+test('machine88: N88-BASIC boots from ROM and computes PRINT 3301', async (t) => {
+  const roms = await loadRoms();
+  if (!roms) return t.skip('no ROMs (bring your own)');
+  const { Pc8801Machine } = await import('./machine88.js');
+  const m = new Pc8801Machine({ main: roms.main, ext: roms.ext, sub: roms.sub, mode: 'n88' });
+  const KEY = { P: [4, 0], R: [4, 2], I: [3, 1], N: [3, 6], T: [4, 4], ' ': [9, 6], 3: [6, 3], 0: [6, 0], 1: [6, 1], ENTER: [1, 7] };
+  const type = (seq) => {
+    for (const k of seq) {
+      const [row, bit] = KEY[k];
+      m.keyDown(row, bit); for (let f = 0; f < 3; f++) m.stepFrame();
+      m.keyUp(row, bit); for (let f = 0; f < 3; f++) m.stepFrame();
+    }
+  };
+  for (let f = 0; f < 400; f++) m.stepFrame();
+  // disk BASIC asks for the file count first; the banner comes after
+  assert.match(m.screenText().join('\n'), /How many files/, 'file-count prompt');
+
+  type(['ENTER']); // accept the default
+  for (let f = 0; f < 120; f++) m.stepFrame();
+  const banner = m.screenText().join('\n');
+  assert.match(banner, /N-88 BASIC/, 'N88 banner');
+  assert.match(banner, /Bytes free/, 'memory sized');
+  type(['P', 'R', 'I', 'N', 'T', ' ', '3', '3', '0', '1', 'ENTER']);
+  for (let f = 0; f < 90; f++) m.stepFrame();
+  assert.ok(m.screenText().some((l) => l.trim() === '3301'), 'BASIC printed 3301');
+});
+
+test('machine88: a mounted disk boots — the FDC reads and loaded code runs', async (t) => {
+  const roms = await loadRoms();
+  if (!roms) return t.skip('no ROMs (bring your own)');
+  const { Pc8801Machine } = await import('./machine88.js');
+  const { buildD88, parseD88 } = await import('./d88.js');
+  // a disk whose boot sector is real code: LD A,55h; LD (9000h),A; HALT
+  const boot = new Uint8Array(256);
+  boot.set([0x3e, 0x55, 0x32, 0x00, 0x90, 0x76], 0);
+  const disk = parseD88(buildD88({
+    name: 'BOOT', tracks: [[
+      { c: 0, h: 0, r: 1, n: 1, data: boot },
+      ...Array.from({ length: 15 }, (_, i) => ({
+        c: 0, h: 0, r: i + 2, n: 1, data: new Uint8Array(256),
+      })),
+    ]],
+  }));
+
+  const m = new Pc8801Machine({ main: roms.main, ext: roms.ext, sub: roms.sub, mode: 'n88' });
+  m.insertDisk(0, disk);
+  const cmds = new Set();
+  const w = m.sub.fdc.write.bind(m.sub.fdc);
+  m.sub.fdc.write = (v) => { if (m.sub.fdc.phase === 'idle') cmds.add(v & 0x1f); w(v); };
+
+  for (let f = 0; f < 200; f++) m.stepFrame();
+  // with a disk in drive 0 the ROM boots from it: SPECIFY/RECAL/SEEK, then
+  // SENSE DEVICE (04) and finally READ DATA (06) — the boot sector arrives
+  assert.ok(cmds.has(0x06), 'the FDC was told to READ DATA');
+  // and the ROM does not fall back into the BASIC banner
+  assert.ok(!m.screenText().join('\n').includes('N-88 BASIC'), 'did not fall back to ROM BASIC');
+});
