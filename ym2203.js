@@ -109,9 +109,13 @@ export class Ym2203 {
     this.reg = new Uint8Array(256);
     this.addr = 0;
 
-    // FM runs at clock/72, SSG at clock/8 — we resample both to sampleRate
+    // FM runs at clock/72, SSG tone/noise generators at clock/16 (the AY
+    // prescaler). A square toggles every `period` ticks → f = clock/(32·period),
+    // e.g. period 2022 → 61.7 Hz. (Was clock/64 here = 4× too low: every SSG
+    // part played two octaves flat, so the bass line sat at ~15 Hz — below pitch
+    // perception — and read as a grainy pulse train instead of a smooth veil.)
     this.fmStep = (clockHz / 72) / sampleRate;
-    this.ssgStep = (clockHz / 8 / 8) / sampleRate; // SSG divides by 8 again
+    this.ssgStep = (clockHz / 16) / sampleRate;
     this.fmAcc = 0; this.ssgAcc = 0;
 
     this.ch = [new FmChannel(), new FmChannel(), new FmChannel()];

@@ -64,10 +64,10 @@
 <canvas id="keys" width="960" height="70"></canvas>
 <div id="meters"></div>
 
-<audio id="au" src="feena-v6.mp3?v=14" preload="auto"></audio>
+<audio id="au" src="feena-v6.mp3?v=15" preload="auto"></audio>
 
 <script type="module">
-import { Ym2203 } from '../ym2203.js?v=14'; // ?v= busts the browser module cache on each chip change
+import { Ym2203 } from '../ym2203.js?v=15'; // ?v= busts the browser module cache on each chip change
 
 const COLORS = ['#ff5a5a','#ffb14a','#ffe14a','#5ad1ff','#7affb0','#c68aff'];
 const NAMES = ['FM0','FM1','FM2','SSG0','SSG1','SSG2'];
@@ -321,7 +321,7 @@ $('srcEngine').onclick = async () => {
 };
 $('srcMine').onclick = () => {
   playing = false; toEngine(false);
-  au.pause(); au.src = 'feena-v6.mp3?v=14'; au.currentTime = 0;
+  au.pause(); au.src = 'feena-v6.mp3?v=15'; au.currentTime = 0;
   $('srcName').textContent = 'うちの音 (v6) — 表示と完全一致（mp3なので個別ミュートは表示のみ）';
   setPlayBtn(false);
 };

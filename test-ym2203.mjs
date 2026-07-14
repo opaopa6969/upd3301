@@ -14,7 +14,7 @@ const hz = (buf, sr = 48000) => {
 test('ym2203 SSG: a square wave at the programmed pitch', () => {
   const y = new Ym2203({ sampleRate: 48000 });
   const w = (a, v) => { y.writeAddr(a); y.writeData(v); };
-  const period = Math.round(3993600 / (128 * 440)); // → ~440 Hz
+  const period = Math.round(3993600 / (32 * 440)); // f = clock/(32·period) → ~440 Hz
   w(0, period & 0xff); w(1, period >> 8);
   w(7, 0b111110); // ch0 tone on, noise off
   w(8, 15);
