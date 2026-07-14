@@ -267,6 +267,97 @@ start:  LD B,8
 <script type="module">
 import { applyI18n, t, lang } from './i18n.js';
 applyI18n();
+
+// ---- guided tour (ESC / ✕ / outside-click exits any time) ------------------
+import { mountTourButton } from './tour.js';
+mountTourButton(document.getElementById('bpause').parentElement, [
+  { el: null,
+    title: { ja: 'ICE — 回路の中に入る', en: 'ICE — get inside the circuit' },
+    body: {
+      ja: '実機時代、ICE（In-Circuit Emulator）は本体より高価な憧れの機材だった。これはその2026年版 — machine.htmlで走ってる実機に<b>外から食い込んで</b>、止める・覗く・書き換える・<b>時間を巻き戻す</b>。ツアーはESC・✕・外側クリックでいつでも抜けられるよ。',
+      en: 'In the hardware era an ICE cost more than the computer it debugged. This is the 2026 edition: it latches onto the live machine from machine.html — pause it, inspect it, rewrite it, and <b>rewind time</b>. ESC, ✕, or an outside click exits any time.' } },
+  { el: '#conn',
+    title: { ja: '接続状態', en: 'Connection' },
+    body: {
+      ja: 'machine.htmlの「🔬 ICE」から開くと、親窓のマシン（window.opener.__machine）を掴む。切断されるとここに出る。単体で開いた場合は案内だけ表示されるよ。',
+      en: 'Opened via "🔬 ICE" on machine.html, this grabs the parent window\'s machine. Disconnection shows here; opened standalone you just get instructions.' } },
+  { el: '#tabmain',
+    title: { ja: 'CPUタブ — メインとサブ', en: 'CPU tabs — main and sub' },
+    body: {
+      ja: 'PC-8801はZ80が<b>2個</b>いる（メイン＋FDDサブ基板）。タブで切り替えると、レジスタ・逆アセン・BPが全部そっちのCPUのものになる。サブ側ではFDCの状態パネルも現れる。',
+      en: 'A PC-8801 carries <b>two</b> Z80s (main + FDD sub-board). Switching tabs repoints registers, disassembly and breakpoints; the sub tab also reveals the FDC state panel.' } },
+  { el: '#clock',
+    title: { ja: 'クロックと実時間', en: 'Clock & real time' },
+    body: {
+      ja: '総Tステート・実機換算時間・フレーム番号を常時表示。「このルーチン、実機なら何秒かかった？」に即答できる。',
+      en: 'Total T-states, real-machine-equivalent time, and frame number, always on. "How long would this take on the real thing?" — answered at a glance.' } },
+  { el: '#regs',
+    title: { ja: 'レジスタ（編集可）', en: 'Registers (editable)' },
+    body: {
+      ja: 'シャドウレジスタも<b>R</b>も本物（RはM1毎に7bitインクリメント、bit7保持 — プロテクト解析で見るやつ）。pause中はクリックで書き換えられる。<b>PCを書けば実行位置ジャンプ</b>。',
+      en: 'Shadow set and a REAL <b>R</b> (7-bit bump per M1, bit 7 preserved — protection code reads it). Click to edit while paused; <b>writing PC = jumping execution</b>.' } },
+  { el: '#dis',
+    title: { ja: '逆アセンブル＋ラベル', en: 'Disassembly + labels' },
+    body: {
+      ja: '▶=PC、●=BP。行クリックで<b>ラベル命名</b>（localStorage保存、JSON入出力可）。ROMの解析済みルーチン（romlabels）は自動で名前とコメントが付いて、ラベル行を選ぶと<b>破壊レジスタ・叩くポート・所要T数</b>のメタまで出る。Zilog/Intel 8080形式の切替も。',
+      en: '▶=PC, ●=BP. Click a line to <b>name it</b> (localStorage, JSON import/export). Analyzed ROM routines auto-annotate with names, comments, and meta — clobbered registers, ports touched, T-states. Zilog/Intel 8080 syntax toggle included.' } },
+  { el: '#bpause',
+    title: { ja: '実行制御', en: 'Execution control' },
+    body: {
+      ja: '停止・続行・ステップ・ステップオーバー・<b>⤴ステップアウト</b>・+1フレーム。ブレークポイントは<b>条件式</b>付き（例: <code>bc==0x100 && mem(hl)!=0</code>）— レジスタとmem()が見えるJS式で書ける。',
+      en: 'Pause, continue, step, step-over, <b>⤴ step-out</b>, +1 frame. Breakpoints take <b>conditions</b> (e.g. <code>bc==0x100 && mem(hl)!=0</code>) — JS expressions over registers and mem().' } },
+  { el: '#stack',
+    title: { ja: 'コールスタック', en: 'Call stack' },
+    body: {
+      ja: 'CALL/RST/RETを影で追跡した<b>いまの呼び出し階層</b>。フレームをクリックするとそのコードへ逆アセンがジャンプ。静的な全体地図（romxrefのcall hierarchy）と対になる「動いてる瞬間しか見えない方」。',
+      en: 'The live call chain from shadow CALL/RST/RET tracking. Click a frame to focus its code. This is the runtime half — the static map (romxref) is its permanent twin.' } },
+  { el: '#trace',
+    title: { ja: '命令トレース → 時間旅行', en: 'Instruction trace → time travel' },
+    body: {
+      ja: '直近4096命令のリング。BPで止まった時に「ここに来る直前、何してた？」が読める。そして<b>行をクリックするとその瞬間まで巻き戻る</b> — 決定論エミュレータだからできる芸当。',
+      en: 'A 4096-instruction ring. When a BP fires, read what led here — then <b>click a line to rewind to that exact moment</b>. Determinism makes it possible.' } },
+  { el: '#vram',
+    title: { ja: 'VRAM/アトリビュートビューア', en: 'VRAM/attribute viewer' },
+    body: {
+      ja: 'μPD3301が見ている世界をそのまま表示 — DMAC ch2の生プログラミング（アドレス・カウント）から、セル文字とアトリビュートペアの<b>効き範囲</b>まで。27色トリック中のDMAを覗くと2画面が交互に見えるよ。',
+      en: 'The world as the μPD3301 sees it — straight from the DMAC ch2 programming, down to attribute pairs and their <b>effective spans</b>. Peek during the 27-color trick and watch two screens alternate.' } },
+  { el: '#tree',
+    title: { ja: 'タイムトラベル分岐ツリー', en: 'Time-travel branch tree' },
+    body: {
+      ja: '30フレーム毎に自動スナップショット。undo/redoは「最寄りノードへ戻して決定論再実行」だから正確に着地する。<b>過去で違う操作をするとブランチが生える</b> — 実行履歴が木になる。D88への書き込みだけは巻き戻らない（正直な注記）。',
+      en: 'Auto-snapshots every 30 frames; undo/redo restores the nearest node and deterministically re-runs. <b>Acting differently in the past grows a branch</b>. Only D88 sector writes stay unrewound (honest footnote).' } },
+  { el: '#prof',
+    title: { ja: 'プロファイラ', en: 'Profiler' },
+    body: {
+      ja: 'ルーチン毎の呼び出し回数・self/total Tステート・実時間換算。「このゲーム、どこで時間食ってる？」が1979年のコードに対して分かる。シンボル名も解決される。',
+      en: 'Per-routine call counts, self/total T-states, real-time equivalents. "Where does this game burn its cycles?" — answered for 1979 code, with symbol names.' } },
+  { el: '#memaddr',
+    title: { ja: 'メモリ（領域名注釈つき）', en: 'Memory (region-annotated)' },
+    body: {
+      ja: 'hexダンプは編集可。アドレスには<b>memmapの領域名</b>（text VRAM、RAMフック、ディスクワーク…）が注釈される。確信度taggedで、approxは薄字 — 推定と実測を見分けられる。',
+      en: 'Editable hex dump, with <b>memmap region names</b> (text VRAM, RAM hooks, disk work…) annotated per address. Confidence-tagged; approx entries render faint.' } },
+  { el: '#bwadd',
+    title: { ja: 'ウォッチポイント＆I/Oブレーク', en: 'Watchpoints & I/O breaks' },
+    body: {
+      ja: '「誰がこのワークを壊すんだ」はウォッチポイント（メモリR/Wブレーク、範囲・条件式可）一発。I/Oポートブレークは<b>ポート名表から選べる</b> — OUT 51h（CRTCコマンド）で止めて27色トリックを現行犯逮捕、とか。',
+      en: '"Who keeps trashing this work byte" — one watchpoint (memory R/W break, ranges and conditions). I/O breaks pick from the named port table: stop on OUT 51h and catch the 27-color trick red-handed.' } },
+  { el: '#bsearch',
+    title: { ja: 'メモリ検索・変化検索', en: 'Memory & change search' },
+    body: {
+      ja: 'バイト列/ASCII検索に加えて、<b>チートエンジン式の変化検索</b>: 📸で撮って「変わった/変わってない/増えた/減った」で絞り込む。残機のアドレスは3回の絞り込みで見つかるｗ ウォッチ式は毎フレーム評価のライブ監視。',
+      en: 'Byte/ASCII search plus <b>cheat-engine-style change search</b>: snapshot, then filter by changed/same/up/down. Your lives counter falls in three passes. Watch expressions evaluate live, every frame.' } },
+  { el: '#asrc',
+    title: { ja: 'アセンブラ（書く方の石器）', en: 'The assembler (writing-side stone tool)' },
+    body: {
+      ja: 'フルZ80マクロアセンブラ。MACRO/REPT・<b>PROC USES</b>（自動push/pop）・<b>STRUC</b>（IXオフセット名）・RELOC対応。書いて「ASM→メモリ」→PCセット→実行、が1画面で回る。下に静的解析（破壊レジスタ・I/O・スタックlint・自己書き換え⚡）も出る。',
+      en: 'A full Z80 macro assembler: MACRO/REPT, <b>PROC USES</b> (auto push/pop), <b>STRUC</b> (named IX offsets), RELOC. Write, ASM→memory, set PC, run — one screen. Static analysis (clobbers, I/O, stack lint, self-mod ⚡) appears below.' } },
+  { el: '#exptext',
+    title: { ja: 'ソース書き出し／リロケート（読む方の石器）', en: 'Source export / relocate (reading-side stone tools)' },
+    body: {
+      ja: '範囲を指定→ラベル反映済みのソースに書き出し（<b>再アセンブルで元バイト列と一致</b>することをテストで保証）。新ORGを指定すれば<b>逆アセンブルベースのリロケーション</b>。ちなみに「石器」の名は作者の「機器」のtypoが的確すぎて正式採用されたものｗ',
+      en: 'Pick a range → labeled source (round-trip guaranteed: reassembling reproduces the bytes). Give a new ORG and you get disassembly-based relocation. The name "stone tools," by the way, is a typo of 機器 (equipment) too perfect to fix.' } },
+], { storageKey: 'tour-ice' });
+
 import { mountIcePage } from './ice.js';
 
 const page = mountIcePage(document, {
