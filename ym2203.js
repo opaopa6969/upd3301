@@ -154,6 +154,11 @@ export class Ym2203 {
     // board's analog roll-off. Coefficient a = 1-exp(-2π fc/sr); ~8 kHz @ 48k.
     this.ssgLpA = 0.649;
     this._ssgLp = 0;
+    // one-pole high-pass on the SSG: thins the tone by pulling down the strong
+    // FUNDAMENTAL so the upper harmonics draw a fine, high line ("細くて高い線")
+    // instead of a fat body. R = exp(-2π fc/sr); default ~20 Hz = off (DC only).
+    this.ssgHpR = 0.9974;
+    this._ssgHpX = 0; this._ssgHpY = 0;
     this.timerA = 0; this.timerACount = 0; this.timerARun = false;
     this.timerB = 0; this.timerBCount = 0; this.timerBRun = false;
     this.status = 0; // b0 timer A overflow, b1 timer B, b7 busy
@@ -506,7 +511,10 @@ export class Ym2203 {
       // only so the FM stays smooth. All three amounts are live knobs.
       const ssgE = ssg + this.ssgEmph * (ssg - this._ssgPrev);
       this._ssgPrev = ssg;
-      this._ssgLp += this.ssgLpA * (ssgE - this._ssgLp);
+      // high-pass (thin, remove fundamental) → low-pass (de-fizz), in series
+      this._ssgHpY = this.ssgHpR * (this._ssgHpY + ssgE - this._ssgHpX);
+      this._ssgHpX = ssgE;
+      this._ssgLp += this.ssgLpA * (this._ssgHpY - this._ssgLp);
       const raw = fm * this.fmGain + this._ssgLp * this.ssgMix;
       this._hpY = 0.996 * (this._hpY + raw - this._hpX);
       this._hpX = raw;
