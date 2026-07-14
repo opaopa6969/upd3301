@@ -256,6 +256,10 @@ export class Ym2203 {
         return;
       case 0xb0:
         if ((a & 0xfc) === 0xb0) { ch.alg = v & 7; ch.fb = (v >> 3) & 7; return; }
+        // $B4-$B6: L/R output enable (b7=L, b6=R) + AMS/PMS. On the mono OPN the
+        // pan bits do nothing (render sums to one bus); the OPNA stereo path
+        // reads ch.left/ch.right. Storing them here is harmless for OPN.
+        if ((a & 0xfc) === 0xb4) { ch.left = (v & 0x80) !== 0; ch.right = (v & 0x40) !== 0; return; }
         return;
       default: return;
     }
@@ -504,6 +508,10 @@ export class Ym2203 {
     }
   }
 
+  // subclass hook for an extra mono bus added into the FM sum per output sample
+  // (OPNA rhythm/ADPCM). Base OPN has none. Kept here so render() stays shared.
+  _aux() { return 0; }
+
   // ---- render -------------------------------------------------------------
   // Fill `out` (Float32Array) with `n` samples at sampleRate. Mono: the
   // 8801's OPN is mono anyway (the L/R bits only matter on OPNA).
@@ -523,6 +531,11 @@ export class Ym2203 {
       } else {
         for (let ci = 0; ci < this.ch.length; ci++) { const s = this._fmChannel(this.ch[ci]); if (!this.chMute[ci]) fm += s; }
       }
+
+      // subclass hook: OPNA folds its rhythm (ADPCM-A) bus into the FM sum here,
+      // once per OUTPUT sample, so the drums pass through the same board output
+      // stage as the FM. The base OPN has no aux bus → 0, and nothing regresses.
+      fm += this._aux();
 
       this.ssgAcc += this.ssgStep;
       while (this.ssgAcc >= 1) { this.ssgAcc -= 1; this._ssgTick(); }

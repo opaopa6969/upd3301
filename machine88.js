@@ -410,6 +410,29 @@ export class Pc8801Machine {
     return this;
   }
 
+  // ---- audio --------------------------------------------------------------
+  // Fill `out` (Float32Array, mono) with the machine's sound at the chips'
+  // fixed sampleRate (48 kHz). The built-in OPN (0x44/0x45) and — when Sound
+  // Board II is fitted — the OPNA (0xA8-0xAB, FM6 + rhythm) are summed. Only
+  // the chip the music driver actually addresses produces signal; the other
+  // sits at reset and adds silence, so summing is safe either way. The chips
+  // only advance their oscillators/envelopes when pulled, so this IS the sole
+  // renderer — call it from the audio callback, same as the demo.
+  //
+  // Rhythm ROM: an OPNA with no rhythm ROM loaded plays FM only. Load the drum
+  // PCM once after construction — `m.opna?.setRhythmRom(loadRhythmRom().samples)`
+  // (tools/load-rhythm-rom.mjs in Node, or the fetch/decodeWav path in a page).
+  renderAudio(out, n = out.length) {
+    this.opn.render(out, n);
+    if (this.opna) {
+      if (!this._audioScratch || this._audioScratch.length < n) this._audioScratch = new Float32Array(n);
+      const s = this._audioScratch.subarray(0, n);
+      this.opna.render(s, n);
+      for (let i = 0; i < n; i++) out[i] += s[i];
+    }
+    return out;
+  }
+
   keyDown(row, bit) { this.keys[row] &= ~(1 << bit); return this; }
   keyUp(row, bit) { this.keys[row] |= 1 << bit; return this; }
 

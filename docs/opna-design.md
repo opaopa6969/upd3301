@@ -127,4 +127,97 @@ An independent review (Codex) plus a live I/O probe in our own emulator turned s
 
 **Consequence for build order (§6):** phase 0 is now *"reach detection"* — present an OPNA-shaped status at the mapped ports and confirm a SB2-aware boot flips to the enhanced score (instrument-load signature jumps). Only then do FM6 / rhythm / ADPCM-B pay off.
 
+## 10. Phase-2 built — real Timer-A, rhythm, machine audio (+ the fm.ipl trail)
+
+This pass turned the phase-0/1 scaffold into audible, tested OPNA: the detection
+flag now comes from a **real timer**, the **drums play**, and the **machine has a
+single audio path**. What still needs a physical SB2 disk is called out honestly
+at the end.
+
+### 10.1 Timer-A status is the real detection flag (no stub)
+The SB2 probe reads `0xA9` and wants `0x01` (§9). That `0x01` is now produced by
+the actual Timer-A overflow, gated by the `$27` enable bit exactly like silicon —
+no hard-coded status:
+- `tickTimers()` sets status bit0 on Timer-A overflow **iff** `$27` bit2 (enable)
+  is set; `$27` bit4 clears it. (This was already the model; it is now pinned by
+  tests instead of assumed.)
+- Verified end-to-end through the machine: program `$24/$25/$27` via ports
+  `0xA8/0xA9`, tick, and `machine.in(0xA9) === 0x01`. Enable-gating and reset are
+  tested too. See `test-ym2608.mjs` (Timer-A group) and `test-opna-machine.mjs`
+  ("detection: port 0xA9 returns the real Timer-A flag").
+
+So `sb2:true` now passes detection from the chip's own timer. Confirming a *real
+SB2 title* flips to the enhanced score still needs the disk (§10.4).
+
+### 10.2 ADPCM-A rhythm — the drums play
+- `assets/opna-rhythm/*.wav` (the six drums, 44.1 kHz/mono/16-bit) are side-loaded
+  as already-decoded PCM via `Ym2608.setRhythmRom(samples, rate)` — the pure chip
+  never touches the filesystem. `wav.js` is a tiny pure PCM-WAV decoder used by
+  both Node (`tools/load-rhythm-rom.mjs`) and the browser (`demo/machine.html`).
+  Bit/instrument order is **BD SD TOP HH TOM RIM** = `$00` bits 0-5.
+- `$00` write = key: bit *n* set with bit7=0 restarts drum *n*; bit7=1 dumps it.
+- Per-drum gain from `$01` (total, 6-bit) + `$08–$0D` (individual, 5-bit) in the
+  chip's 0.75 dB steps; `$08–$0D` bits 7/6 pan L/R. Linear-interpolated resample
+  from the ROM rate to the output rate. Deterministic (pointers snapshot in
+  `getState()`).
+- The rhythm bus folds into `render()` (mono, through the board output stage) via
+  the `_aux()` hook, and `renderRhythm(outL,outR)` renders the drum sub-mix alone
+  (stereo) for A/B and testing. Tests cover: per-drum independent trigger, L/R
+  pan, monotonic individual + total level, determinism, and non-silence through
+  the board. A true ADPCM-A decoder can later replace the PCM behind the same
+  `setRhythmRom()` seam.
+
+### 10.3 One machine audio path
+`Pc8801Machine.renderAudio(out, n)` renders **OPN + (if SB2) OPNA FM6 + rhythm**
+in one call — only the chip the driver addresses makes signal, so the sum is safe
+in OPN-only or SB2 mode. `demo/machine.html` now calls it (and fetch-decodes the
+rhythm ROM into the OPNA when the SB2 box is checked). Browser audio is still
+**visual/audio-unverified from headless**, but the mix path is unit-tested.
+
+### 10.4 The `bload"fm.ipl",r` → "Internal error" trail (static RE)
+The remaining wall (§ issue step 1) is a *runtime* fault that needs the disk to
+reproduce. Static disassembly of the N88 ROM set narrows where to look:
+
+- **"Internal error" = N88-BASIC error code 51 (0x33).** The message table lives
+  in ext bank 2 (`n88_2.rom`, mapped at 0x6000) — "Internal error" at cpu
+  **0x622B**, directly followed by "Bad file number" (52) and "File not found"
+  (53), matching the MS-BASIC 51/52/53 numbering.
+- **The BASIC ERROR entry is main ROM `0x03B3`** (takes the code in `E`): it
+  `OUT (71h)` to restore the main bank, resets interpreter state, and prints.
+- **Error 51 is raised from ext bank 3 at cpu `0x67D3`:** `LD E,51 ; JP 0x03B3`,
+  reached when the routine `CALL 0x675B` (at 0x67D0) fails its check.
+- Notably, the code around that raise site (**0x6756–0x67D8**) drives the OPN
+  sound ports — `OUT (44h)/OUT (45h)` (a register-write helper at 0x67B5), OPN
+  register `$27` (timer control), and `port 0x32` — i.e. this is a **sound-path**
+  routine, consistent with `fm.ipl` being the OPNA sound driver. (The other
+  `1E 33` byte match, main 0x4DB5, is a false positive — it is the low byte of a
+  `LD BC,331Eh` dispatch-table entry, not `LD E,51`.)
+
+**Diagnostic recipe for when an SB2 disk is present** (repo ships no disk image —
+`roms/*` and `*.d88` are git-ignored, so this can't run in CI): boot `sb2:true`
+with the disk, set ICE breakpoints at **0x67D3** (the raise), **0x675B** (the
+predicate) and **0x03B3** (the handler); `bload"fm.ipl",r` and catch which
+breakpoint fires first. If 0x675B/0x67D3 fires, dump the predicate's inputs
+(the RAM sound-state it reads, the OPN status at 0x44) to see what it rejects; if
+neither fires, the fault is elsewhere in bload's header parse or in the `,R`
+jump target's own OPNA access — move the breakpoint to the bload dispatcher.
+
+### 10.5 Rhythm/OPNA capture format (for §7 scope + the reference grab)
+When a capture is taken (needs the disk), log it as one JSON line per write so the
+`opn-scope` engine can replay it as an OPNA scope:
+`{ t, bank: 0|1, reg, val }` where bank 0 = ports 0xA8/0xA9, bank 1 = 0xAA/0xAB.
+Lanes to visualise: FM1-6 (`$B0` alg/fb per channel), rhythm (`$00` key + `$08–$0D`
+level/pan), ADPCM-B (`$10–$1B`). Timer/key ($27/$28) mark tempo and note-ons.
+
+### 10.6 Honest status vs the issue's acceptance
+- ✅ Real Timer-A flag → detection returns 0x01 with no stub (chip + machine tests).
+- ✅ FM6 + rhythm render non-silent, deterministic, board-processed; drums trigger
+  individually with correct relative levels and pan.
+- ✅ `test-ym2608.mjs` extended + new `test-opna-machine.mjs`; full suite green,
+  no regressions.
+- ⛔ **Needs a physical SB2 disk (not in this repo):** booting a real SB2 title to
+  confirm bank0/bank1 fill; fixing/​reproducing the `fm.ipl` "Internal error";
+  capturing a song's OPNA register stream. §10.4 records the exact next step for
+  each so a disk-holding session can finish them without re-deriving.
+
 Related: [design.md](./design.md) (chip/emulator contracts), [datasheet.md](./datasheet.md), [peripherals.md](./peripherals.md).

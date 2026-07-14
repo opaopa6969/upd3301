@@ -72,6 +72,26 @@ import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 import { parseD88All, summarize } from '../d88.js';
 import { putRom, getRom, listRoms, clearRoms } from './romstore.js';
+import { decodeWav } from '../wav.js';
+
+// OPNA rhythm ROM (the six ADPCM-A drums) — fetched + decoded once, then
+// side-loaded into the OPNA so Sound Board II rhythm ($00-$0D) is audible.
+// $00 bit order: BD SD TOP HH TOM RIM.
+const RHYTHM_NAMES = ['bd', 'sd', 'top', 'hh', 'tom', 'rim'];
+let rhythmRom = null; // { samples: Float32Array[6], rate }
+async function loadRhythmRom() {
+  if (rhythmRom) return rhythmRom;
+  try {
+    let rate = 44100;
+    const samples = await Promise.all(RHYTHM_NAMES.map(async (n) => {
+      const r = await fetch(`../assets/opna-rhythm/2608_${n}.wav`);
+      const { data, rate: rr } = decodeWav(new Uint8Array(await r.arrayBuffer()));
+      rate = rr; return data;
+    }));
+    rhythmRom = { samples, rate };
+  } catch (e) { rhythmRom = null; }
+  return rhythmRom;
+}
 
 const canvas = document.getElementById('crt');
 const ctx = canvas.getContext('2d');
@@ -365,6 +385,9 @@ function boot() {
     });
     machine.dipsw = [dipOf('dip1', 0xdb), dipOf('dip2', 0x79)];
     mountDisks(machine);
+    // give the OPNA its drum PCM (async; FM works immediately, drums as soon
+    // as the ROM lands). No-op on a plain (non-SB2) machine.
+    if (machine.opna) loadRhythmRom().then((r) => { if (r && machine?.opna) machine.opna.setRhythmRom(r.samples, r.rate); });
     ensureAudio();
     canvas.focus();
     return;
@@ -389,7 +412,6 @@ function boot() {
 // ScriptProcessor pattern as demo/opn-scope.html. Needs a user gesture to
 // start (browsers autoplay-block), so ensureAudio also runs on canvas click.
 let audioCtx = null, audioNode = null;
-const audioScratch = new Float32Array(8192);
 function ensureAudio() {
   if (audioCtx) { audioCtx.resume?.(); return; }
   try {
@@ -400,12 +422,8 @@ function ensureAudio() {
     const out = e.outputBuffer.getChannelData(0);
     const n = out.length;
     if (!machine || !machine.opn) { out.fill(0); return; }
-    machine.opn.render(out, n);
-    if (machine.opna && n <= audioScratch.length) {
-      const s = audioScratch.subarray(0, n);
-      machine.opna.render(s, n);
-      for (let i = 0; i < n; i++) out[i] += s[i];
-    }
+    // one call renders OPN + (if SB2) OPNA FM6 + rhythm — see machine88.renderAudio
+    machine.renderAudio(out, n);
   };
   audioNode.connect(audioCtx.destination);
   audioCtx.resume?.();

@@ -36,10 +36,37 @@ export class Ym2608 extends Ym2203 {
     this.addr1 = 0;
     this.reg1 = new Uint8Array(256);
 
-    // ADPCM register mirrors (decoders land in later phases). Rhythm = ADPCM-A
-    // ($00-$0D bank1), the delta-PCM channel = ADPCM-B ($10-$1B bank1).
-    this.rhythm = { key: 0, total: 0, level: new Uint8Array(6), lr: new Uint8Array(6) };
+    // ADPCM register mirrors. Rhythm = ADPCM-A ($00-$0D bank1); the delta-PCM
+    // channel = ADPCM-B ($10-$1B bank1, decoder still deferred).
+    //   key/total/level/lr : the register file (as written by the driver)
+    //   pos                : per-drum playback pointer, in SOURCE samples
+    //   on                 : per-drum playing flag (1 while the sample runs)
+    this.rhythm = {
+      key: 0, total: 63, level: new Uint8Array(6), lr: new Uint8Array(6),
+      pos: new Float64Array(6), on: new Uint8Array(6),
+    };
     this.adpcmB = { ctrl: 0, lr: 0, start: 0, end: 0, limit: 0, deltaN: 0, level: 0 };
+
+    // Rhythm ROM: the six drum PCM waveforms (BD, SD, TOP, HH, TOM, RIM), one
+    // Float32Array each in [-1,1], side-loaded like the BIOS ROMs (the real
+    // YM2608 has these in an internal mask ROM as ADPCM-A; we accept already-
+    // decoded PCM so the core stays pure — no file I/O in the chip). Index by
+    // the $00 key bit: 0=BD 1=SD 2=TOP 3=HH 4=TOM 5=RIM. null → drums silent.
+    this.rhythmRom = null;
+    this.rhythmRate = 44100;              // source sample rate of the ROM WAVs
+    this.rhythmStep = this.rhythmRate / this.sampleRate; // ptr advance / out-sample
+    this.rhythmGain = 0.8;                // rhythm bus level (live knob)
+  }
+
+  // Side-load the drum PCM. `samples` is an array of 6 Float32Array (or numeric
+  // arrays) in [-1,1]; `rate` is their sample rate (default 44.1 kHz, the WAVs
+  // in assets/opna-rhythm/). Deterministic: same ROM + same key writes → same
+  // samples. Order MUST be [BD, SD, TOP, HH, TOM, RIM] to match the $00 bits.
+  setRhythmRom(samples, rate = 44100) {
+    this.rhythmRom = samples ? samples.map((s) => (s instanceof Float32Array ? s : Float32Array.from(s))) : null;
+    this.rhythmRate = rate;
+    this.rhythmStep = this.rhythmRate / this.sampleRate;
+    return this;
   }
 
   // ---- bank 1 (ports 0xAA / 0xAB) -----------------------------------------
@@ -56,8 +83,19 @@ export class Ym2608 extends Ym2203 {
       this._writeFm(3 + c, a, v);
       return;
     }
-    // ADPCM-A rhythm ($00-$0D) — mirror now, decode later.
-    if (a === 0x00) { this.rhythm.key = v; return; }
+    // ADPCM-A rhythm ($00-$0D). $00 = the RTL control: bits0-5 select drums,
+    // bit7 chooses the action — 0 = key-on (restart that drum's pointer),
+    // 1 = dump (stop it). Same key writes → same triggers (deterministic).
+    if (a === 0x00) {
+      this.rhythm.key = v;
+      const dump = (v & 0x80) !== 0;
+      for (let i = 0; i < 6; i++) {
+        if (!(v & (1 << i))) continue;
+        if (dump) { this.rhythm.on[i] = 0; }
+        else { this.rhythm.pos[i] = 0; this.rhythm.on[i] = 1; }
+      }
+      return;
+    }
     if (a === 0x01) { this.rhythm.total = v & 0x3f; return; }
     if (a >= 0x08 && a <= 0x0d) { const i = a - 0x08; this.rhythm.lr[i] = v >> 6; this.rhythm.level[i] = v & 0x1f; return; }
     // ADPCM-B ($10-$1B) — mirror now, decode later.
@@ -92,13 +130,77 @@ export class Ym2608 extends Ym2203 {
     ch.keyOn = v >> 4;
   }
 
+  // ---- ADPCM-A rhythm synthesis -------------------------------------------
+  // Per-drum gain from the two attenuation registers, in the chip's 0.75 dB
+  // steps: total level ($01, 6-bit) attenuates the whole rhythm bus, individual
+  // level ($08-$0D, 5-bit) attenuates one drum. Max (total=63, level=31) = 0 dB;
+  // each step down is −0.75 dB. So a louder register value → a louder drum, and
+  // the six drums keep their programmed relative balance.
+  _rhythmGain(i) {
+    const attSteps = (63 - this.rhythm.total) + (31 - this.rhythm.level[i]);
+    return Math.pow(10, -(attSteps * 0.75) / 20);
+  }
+
+  // Advance every playing drum by one OUTPUT sample and return [L, R]. The pan
+  // bits ($08-$0D b7=L b6=R, stored as lr: b1=L b0=R) route each drum; a drum
+  // with neither bit set is silent (hardware-correct). Linear interpolation
+  // resamples the ROM rate (44.1 kHz) to the output rate. Pointer past the end
+  // clears the playing flag (one-shot). Deterministic.
+  _rhythmTick() {
+    const rom = this.rhythmRom;
+    if (!rom) return [0, 0];
+    let l = 0, r = 0;
+    const R = this.rhythm;
+    for (let i = 0; i < 6; i++) {
+      if (!R.on[i]) continue;
+      const w = rom[i];
+      if (!w || w.length < 2) { R.on[i] = 0; continue; }
+      const p = R.pos[i];
+      const idx = p | 0;
+      if (idx >= w.length - 1) { R.on[i] = 0; continue; }
+      const frac = p - idx;
+      const s = (w[idx] * (1 - frac) + w[idx + 1] * frac) * this._rhythmGain(i);
+      const lr = R.lr[i];
+      if (lr & 2) l += s;
+      if (lr & 1) r += s;
+      R.pos[i] = p + this.rhythmStep;
+    }
+    return [l * this.rhythmGain, r * this.rhythmGain];
+  }
+
+  // OPN render() hook: fold the rhythm bus (mono = L+R) into the FM sum so the
+  // drums pass through the board output stage with the FM. This is what makes
+  // machine88.renderAudio() / the demo carry the drums with no extra wiring.
+  _aux() {
+    if (!this.rhythmRom) return 0;
+    const [l, r] = this._rhythmTick();
+    return l + r;
+  }
+
+  // Render ONLY the rhythm bus, in stereo — the ADPCM-A drum sub-mix, without
+  // FM/SSG. Used to A/B the drums and to test pan/level in isolation. Does NOT
+  // run the FM/SSG cores, so it must not be interleaved with render() on the
+  // same instance (both advance the drum pointers).
+  renderRhythm(outL, outR, n = outL.length) {
+    for (let i = 0; i < n; i++) {
+      const [l, r] = this._rhythmTick(); // gain already applied inside
+      outL[i] = l;
+      outR[i] = r;
+    }
+    return outL;
+  }
+
   getState() {
     const s = super.getState();
     s.schemaVersion = SCHEMA_VERSION;
     s.opna = {
       addr1: this.addr1,
       reg1: Array.from(this.reg1),
-      rhythm: { key: this.rhythm.key, total: this.rhythm.total, level: Array.from(this.rhythm.level), lr: Array.from(this.rhythm.lr) },
+      rhythm: {
+        key: this.rhythm.key, total: this.rhythm.total,
+        level: Array.from(this.rhythm.level), lr: Array.from(this.rhythm.lr),
+        pos: Array.from(this.rhythm.pos), on: Array.from(this.rhythm.on),
+      },
       adpcmB: { ...this.adpcmB },
     };
     return s;
@@ -109,7 +211,13 @@ export class Ym2608 extends Ym2203 {
     if (s.opna) {
       this.addr1 = s.opna.addr1 | 0;
       this.reg1 = Uint8Array.from(s.opna.reg1 || []);
-      if (s.opna.rhythm) { this.rhythm.key = s.opna.rhythm.key; this.rhythm.total = s.opna.rhythm.total; this.rhythm.level = Uint8Array.from(s.opna.rhythm.level); this.rhythm.lr = Uint8Array.from(s.opna.rhythm.lr); }
+      if (s.opna.rhythm) {
+        const r = s.opna.rhythm;
+        this.rhythm.key = r.key; this.rhythm.total = r.total;
+        this.rhythm.level = Uint8Array.from(r.level); this.rhythm.lr = Uint8Array.from(r.lr);
+        if (r.pos) this.rhythm.pos = Float64Array.from(r.pos);
+        if (r.on) this.rhythm.on = Uint8Array.from(r.on);
+      }
       if (s.opna.adpcmB) this.adpcmB = { ...s.opna.adpcmB };
     }
   }
