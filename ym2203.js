@@ -139,6 +139,19 @@ export class Ym2203 {
     this.chMute = [false, false, false, false, false, false];
     this.board = true;
     this._hpX = 0; this._hpY = 0; // output AC-coupling high-pass state
+    // anti-aliased (2×) soft-saturation: a real analog amp saturates the
+    // CONTINUOUS waveform, so its distortion products roll off; applying tanh
+    // once per digital sample instead folds those products back as inharmonic
+    // "じじじ" grain on sharp/low material. Interpolating a half-sample and
+    // saturating twice models the analog smoothing. Live knob: satDrive.
+    this.satOS = true;
+    this._hpPrevY = 0;
+    this.satDrive = 0.35;
+    // output AC-coupling cutoff (the coupling-cap "analog characteristic"). At
+    // 0.996 (~30 Hz) a low SSG bass square droops across its long flat top and
+    // breaks into disconnected grains ("粒/じじじ"); a smaller cutoff (0.9992
+    // ≈ 6 Hz) holds the level so the bass line connects, like the real board.
+    this.hpCoef = 0.9992;
     // --- live-tunable output-stage knobs (pure AD/amp, NOT register values) --
     // All read per-sample so the demo can turn them like mixer knobs.
     this.fmGain = 0.9;   // FM bus level into the board mixer
@@ -525,14 +538,29 @@ export class Ym2203 {
       x += this.ssgBright * (x - this._ssgShelf);
       this._ssgLp += this.ssgLpA * (x - this._ssgLp);
       const raw = fm * this.fmGain + this._ssgLp * this.ssgMix;
-      this._hpY = 0.996 * (this._hpY + raw - this._hpX);
+      this._hpY = this.hpCoef * (this._hpY + raw - this._hpX);
       this._hpX = raw;
       // Analog output stage: a soft-saturating amp compresses the peaks and
       // lifts the low-level tail, so quiet passages keep body instead of
       // dropping out ("寂しくなる"). This models the board + recording chain,
       // NOT the chip — it is why the raw digital sum has a wider crest factor
       // (21 dB) than a real capture (~17 dB). board=false leaves it clean.
-      out[i] = Math.tanh(this._hpY * 0.35) * 2.0;
+      const d = this.satDrive;
+      let o;
+      if (this.satOS) {
+        // saturate at the half-sample (linear-interpolated) and the sample,
+        // then average — 2× oversampled nonlinearity, ~halving the aliased grain
+        const mid = 0.5 * (this._hpPrevY + this._hpY);
+        o = Math.tanh(mid * d) + Math.tanh(this._hpY * d);
+      } else {
+        o = Math.tanh(this._hpY * d) * 2.0;
+      }
+      this._hpPrevY = this._hpY;
+      // master soft-limiter: |o|<0.9 passes untouched (the FM body is unchanged),
+      // and the bright SSG transient peaks soft-knee into the ±1 rail instead of
+      // hard-clipping — the amp hitting its rail, not a digital clip.
+      const a = o < 0 ? -o : o;
+      out[i] = a > 0.9 ? (o < 0 ? -1 : 1) * (0.9 + 0.1 * Math.tanh((a - 0.9) / 0.3)) : o;
     }
     return out;
   }
