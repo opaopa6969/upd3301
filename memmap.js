@@ -60,6 +60,42 @@ export const MAPS = Object.freeze({
   ]),
 });
 
+
+// Named work variables — individual bytes whose MEANING we pinned down in
+// this repo's boot investigations (all verified). The generated cross
+// reference (romxref.js, via tools/gen-romxref.mjs) tells you WHO reads
+// and writes them; this table tells you WHAT they are.
+export const WORK_VARS = Object.freeze({
+  pc8801: Object.freeze({
+    0xe6c0: { name: 'shadow_port30', ja: 'port 30h(書込専用)のシャドウ', en: 'shadow of write-only port 30h' },
+    0xe6c1: { name: 'shadow_port40', ja: 'port 40h出力のシャドウ', en: 'shadow of port 40h output' },
+    0xe6c2: { name: 'shadow_port31', ja: 'port 31h(書込専用)のシャドウ', en: 'shadow of write-only port 31h' },
+    0xe7e8: { name: 'basic_area_ptr', ja: 'BASICエリアポインタ', en: 'BASIC area pointer' },
+    0xec7d: { name: 'drive_total', ja: '総ドライブ数(drivetab_buildが設定)', en: 'total drive count (set by drivetab_build)' },
+    0xec85: { name: 'drive_current', ja: 'カレントドライブ', en: 'current drive' },
+    0xecb4: { name: 'boot_retry_ctr', ja: 'ディスクブートのリトライカウンタ(最大4)', en: 'disk boot retry counter (max 4)' },
+    0xef10: { name: 'sub_hs_bailmode', ja: 'ハンドシェイクタイムアウト時の脱出先選択', en: 'handshake-timeout bail-out selector' },
+    0xef14: { name: 'sub_hs_timeout_d', ja: 'ハンドシェイクタイムアウトのD初期値(BC×D)', en: 'handshake timeout D reload (BC×D spins)' },
+    0xef4a: { name: 'sub_rw_unit', ja: 'サブR/Wコマンドのユニット番号', en: 'unit number for sub R/W commands' },
+    0xef5d: { name: 'sub_rw_iface', ja: 'インターフェース種別(EF64から転記、2=密結合)', en: 'interface type (copied from EF64; 2 = packed)' },
+    0xef5f: { name: 'sub_rw_track', ja: 'サブR/Wコマンドのトラック', en: 'track for sub R/W commands' },
+    0xef60: { name: 'drives_int_a', ja: '内蔵I/F Aのドライブ数(EF35表から)', en: 'internal i/f A drive count (from EF35 table)' },
+    0xef61: { name: 'drives_int_b', ja: '内蔵I/F Bのドライブ数(EF2D表から)', en: 'internal i/f B drive count (from EF2D table)' },
+    0xef62: { name: 'drives_sub', ja: 'サブシステムのドライブ数(cmd 07の答えから)', en: 'sub-system drive count (from the cmd 07 answer)' },
+    0xef63: { name: 'sub_features', ja: 'サブ機能フラグ(cmd 0Bの答えのCPL&F0)', en: 'sub feature flags (CPL&F0 of the cmd 0B answer)' },
+    0xef64: { name: 'drive_iface_tab', ja: 'ドライブ→インターフェース対応表(EF64-)', en: 'drive → interface table (EF64-)' },
+    0xef7f: { name: 'dipsw_cpl', ja: 'DIP SW反転シャドウ(~30h | ~31h<<8)', en: 'inverted DIP shadow (~30h | ~31h<<8)' },
+  }),
+  pc80s31: Object.freeze({
+    0x7f09: { name: 'motors_spun', ja: 'モーター安定済みフラグ(FFで02B4の1.7秒待ちをスキップ)', en: 'motors-spun flag (FF skips the 1.7s settle at 02B4)' },
+    0x7f0c: { name: 'fdc_last_cmd', ja: '最後にFDCへ送ったコマンド', en: 'last command sent to the FDC' },
+    0x7f14: { name: 'result_status', ja: 'cmd 06で返す結果ステータス(init直後=80h)', en: 'result status served by cmd 06 (80h right after init)' },
+    0x7f15: { name: 'drive_map', ja: 'cmd 07で返すドライブマップ(RRAで詰めたプローブ結果)', en: 'drive map served by cmd 07 (probe carries packed via RRA)' },
+    0x7f1c: { name: 'mode_flags', ja: 'cmd 17のドライブ別モードフラグ(7F1C-1F)', en: 'per-drive mode flags from cmd 17 (7F1C-1F)' },
+    0x7f25: { name: 'remote_entry', ja: 'cmd 1Bリモート実行のエントリ(JP先が書かれる)', en: 'cmd 1B remote-exec entry (a JP lands here)' },
+  }),
+});
+
 // look up the region an address falls in (null = unmapped/unknown)
 export function regionAt(machine, addr) {
   const map = MAPS[machine];

@@ -19,6 +19,8 @@ silicon revision, not real NEC hardware.*
 
 # μPD3301 — PROGRAMMABLE CRT CONTROLLER
 
+> Volume 2 — peripheral chips (8255 / 765 / 8214 / 8251 / clocks): [peripherals.md](./peripherals.md)
+
 ## FEATURES
 
 - Character display controller for raster-scan CRT, 2–80 characters × 1–64

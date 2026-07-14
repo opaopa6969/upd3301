@@ -87,6 +87,8 @@ M88 are chip-level too; what's unique here is the physics below):
 Chip-level reference (datasheet-style, mermaid block diagrams):
 [docs/datasheet.md](./docs/datasheet.md).
 
+Vol.2 — the peripheral chips (8255 / μPD765 / μPD8214 / 8251 / clock tree): [docs/peripherals.md](./docs/peripherals.md).
+
 ## Use
 
 ```js

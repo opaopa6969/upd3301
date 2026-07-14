@@ -81,6 +81,8 @@ ICE設計 — デバッガ・時間旅行・アセンブラ・リバース用「
 チップレベルの技術資料（データシート風、mermaidブロック図つき）:
 [docs/datasheet.ja.md](./docs/datasheet.ja.md)。
 
+第2巻 — 周辺チップ編（8255 / μPD765 / μPD8214 / 8251 / クロック体系）: [docs/peripherals.ja.md](./docs/peripherals.ja.md)。
+
 ## 使い方
 
 ```js
