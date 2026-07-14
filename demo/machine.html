@@ -36,10 +36,12 @@
   <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
+  <select id="savedisk" title="このブラウザに保存済みのディスクから選ぶ" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px"><option value="">💾 保存済みディスク…</option></select>
   <label style="color:#778;font-size:12px">FONT.ROM (任意): <input type="file" id="ffont" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="n88.rom + n88_0..3.rom + disk.rom (計6ファイル) をまとめて選ぶ">PC-8801 BIOS一式(n88): <input type="file" id="from88" multiple style="font-size:11px"></label>
   <button id="breset">リセット</button>
   <button id="bpng" title="CRTシミュレーションを通さない生の描画出力(640×200・フルパレット)をPNG保存（バグ切り分け用）">PNG(raw)</button>
+  <button id="brec" title="画面＋音声をWebM動画に録画（もう一度押すと停止して保存）">● 録画</button>
   <button id="bfull">⛶ 全画面</button>
   <button id="bice">🔬 ICE</button>
   <button id="bide">🛠 IDE</button>
@@ -336,7 +338,9 @@ $('fdisk').onchange = async (e) => {
   try {
     const diskBytes = new Uint8Array(await f.arrayBuffer());
     disks = parseD88All(diskBytes);
-    await putRom('disk', f.name, diskBytes); refreshStore(); // remember for next visit
+    await putRom('disk', f.name, diskBytes);            // 'disk' = last-used (auto-boot)
+    await putRom('disk:' + f.name, f.name, diskBytes);  // named slot for the library
+    refreshStore(); refreshDiskList();
     mountDisks(machine);
     const s = summarize(disks[0]);
     const extra = disks.length > 1 ? `  (+${disks.length - 1} more)` : '';
@@ -362,6 +366,34 @@ function mountDisks(m) {
     m.disks = disks;
   }
 }
+// Saved-disk library: every uploaded .d88 is kept in IndexedDB under a
+// `disk:<name>` slot, so you can re-pick it later without the file dialog. The
+// dropdown lists them; picking one mounts it (and marks it last-used).
+async function refreshDiskList() {
+  const sel = $('savedisk'); if (!sel) return;
+  let items = []; try { items = await listRoms(); } catch {}
+  const dl = items.filter((i) => i.role.startsWith('disk:'))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const kb = (n) => (n / 1024 < 1024 ? (n / 1024 | 0) + 'KB' : (n / 1048576).toFixed(1) + 'MB');
+  sel.innerHTML = '<option value="">💾 保存済みディスク…</option>' +
+    dl.map((i) => `<option value="${i.role}">${i.name} (${kb(i.size)})</option>`).join('');
+}
+async function loadSavedDisk(role) {
+  const rec = await getRom(role);
+  if (!rec) return;
+  try {
+    disks = parseD88All(rec.bytes);
+    await putRom('disk', rec.name, rec.bytes); // becomes the last-used / auto-boot disk
+    mountDisks(machine);
+    const s = summarize(disks[0]);
+    const extra = disks.length > 1 ? `  (+${disks.length - 1})` : '';
+    $('dipnote').textContent = `${rec.name}: ${s.name || '(no label)'} ${s.media} ${s.tracks}trk` + extra +
+      '  — ' + (bootMode === 'n88' && has88Set()
+        ? t('マウント済み（リセットでこのディスクから起動）')
+        : t('起動にはN88モード＋PC-8801 BIOS一式が必要'));
+  } catch (err) { $('dipnote').textContent = 'saved disk: ' + err.message; }
+}
+$('savedisk').onchange = (e) => { if (e.target.value) loadSavedDisk(e.target.value); };
 // ---- persisted ROMs (this browser's IndexedDB) ----------------------------
 // "upload once": the boot ROM / font / disk you pick are kept locally so a
 // return visit auto-boots without re-picking. Bytes stay in your browser.
@@ -420,6 +452,45 @@ $('bfull').onclick = () => {
 };
 $('bice').onclick = () => window.open('ice.html', 'upd3301-ice', 'width=1200,height=900');
 $('bide').onclick = () => window.open('ide.html', 'upd3301-ide-win', 'width=1400,height=950');
+
+// ---- video capture: record the live screen (+ sound) to a WebM ------------
+// canvas.captureStream taps the CRT canvas as it's drawn each frame; the audio
+// graph is tapped via a MediaStreamDestination so the recording carries the
+// OPN(A) exactly as you hear it. Toggle: first click records, second saves.
+let mediaRec = null, recChunks = [], audioDest = null;
+$('brec').onclick = () => {
+  if (mediaRec && mediaRec.state === 'recording') { mediaRec.stop(); return; }
+  if (!machine) { $('dipnote').textContent = t('録画: 先にマシンを起動してね'); return; }
+  if (typeof MediaRecorder === 'undefined' || !canvas.captureStream) {
+    $('dipnote').textContent = t('録画: このブラウザは未対応'); return;
+  }
+  try {
+    const stream = canvas.captureStream(30); // 30fps video from the CRT canvas
+    ensureAudio(); // make sure the audio graph exists so we can tap it
+    if (audioCtx && audioNode) {
+      if (!audioDest) { audioDest = audioCtx.createMediaStreamDestination(); audioNode.connect(audioDest); }
+      audioDest.stream.getAudioTracks().forEach((tr) => stream.addTrack(tr));
+    }
+    recChunks = [];
+    const mime = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+      .find((m) => MediaRecorder.isTypeSupported(m)) || 'video/webm';
+    mediaRec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+    mediaRec.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
+    mediaRec.onstop = () => {
+      const blob = new Blob(recChunks, { type: 'video/webm' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `upd3301-${machine.frame}f.webm`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 15000);
+      $('brec').textContent = '● 録画'; $('brec').classList.remove('on');
+      $('dipnote').textContent = t('録画を保存した');
+    };
+    mediaRec.start();
+    $('brec').textContent = '■ 停止'; $('brec').classList.add('on');
+    $('dipnote').textContent = t('録画中… もう一度押すと停止して保存');
+  } catch (e) { $('dipnote').textContent = '録画: ' + e.message; }
+};
 
 let bootMode = 'n80';
 const dipOf = (id, dflt) => {
@@ -516,6 +587,7 @@ async function ensureAudio() {
 }
 canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); });
 autoLoad();
+refreshDiskList();
 
 // PC-8001 keyboard matrix
 const KEY = {
