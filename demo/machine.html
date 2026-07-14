@@ -37,6 +37,7 @@
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">FONT.ROM (任意): <input type="file" id="ffont" style="font-size:11px"></label>
+  <label style="color:#778;font-size:12px" title="n88.rom + n88_0..3.rom + disk.rom (計6ファイル) をまとめて選ぶ">PC-8801 BIOS一式(n88): <input type="file" id="from88" multiple style="font-size:11px"></label>
   <button id="breset">リセット</button>
   <button id="bfull">⛶ 全画面</button>
   <button id="bice">🔬 ICE</button>
@@ -45,7 +46,8 @@
 <div class="row" style="font-size:12px" id="romstore"></div>
 <div class="row"><span class="lbl">起動モード:</span>
   <button id="mn80" class="on">N-BASIC (N80)</button>
-  <button id="mn88">N88-BASIC (WIP)</button>
+  <button id="mn88">N88-BASIC</button>
+  <label style="color:#778;font-size:12px" title="サウンドボードII (OPNA/YM2608) を有効にする">SB2 <input type="checkbox" id="sb2" style="vertical-align:middle"></label>
   <label style="color:#778;font-size:12px">DIPSW1 <input id="dip1" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:34px;text-align:center"></label>
   <label style="color:#778;font-size:12px">DIPSW2 <input id="dip2" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:34px;text-align:center"></label>
   <span id="dipnote" style="color:#667;font-size:11px"></span>
@@ -78,6 +80,16 @@ const { cgrom } = buildFont();
 addPlaceholderUpperHalf(cgrom);
 
 let machine = null, romBytes = null;
+// PC-8801 (n88 mode) needs a whole BIOS SET, not one image: n88.rom (32KB main)
+// + n88_0..3.rom (4×8KB extension banks, concatenated at 2000h stride into a
+// 32KB `ext`) + disk.rom (2KB FDD sub-CPU ROM). n80.rom is optional (its own
+// N-mode). rom88 holds those assembled images; sb2 gates the Sound Board II.
+const rom88 = { main: null, ext: null, sub: null, n80: null };
+let sb2 = false;
+// IndexedDB roles for the 8801 set — romstore.js is role-keyed and role-agnostic,
+// so these live alongside the 8001's 'rom'/'font'/'disk' with no schema change.
+const R88 = { main: 'n88main', ext: ['n88ext0', 'n88ext1', 'n88ext2', 'n88ext3'], sub: 'n88sub', n80: 'n88n80' };
+const has88Set = () => !!(rom88.main && rom88.ext && rom88.sub);
 Object.defineProperty(window, '__machine', { get: () => machine }); // live handle for the ICE window (demo/ice.html)
 
 // auto-load: if a ROM sits in the served dir, boot without asking. On the
@@ -159,18 +171,83 @@ $('ffont').onchange = async (e) => {
   applyFontRom(cgrom, b); // 2KB sets take the whole map; 6KB 88 sets use the head
   await putRom('font', f.name, b); refreshStore();
 };
+// ---- PC-8801 BIOS set (multi-file / folder) --------------------------------
+// The user picks the whole set at once (6 files). We sort them by filename into
+// their roles, assemble the 32KB `ext` from the four 8KB banks at 2000h stride,
+// persist each blob under its R88 role, and boot n88. Filenames are matched
+// loosely (case-insensitive, path-stripped) so a folder pick works too.
+function classify88(name) {
+  const b = name.replace(/^.*[/\\]/, '').toLowerCase();
+  if (/^n88_([0-3])\.rom$/.test(b)) return { role: 'ext', bank: +b.match(/^n88_([0-3])\.rom$/)[1] };
+  if (/^n88\.rom$/.test(b)) return { role: 'main' };
+  if (/^disk\.rom$/.test(b)) return { role: 'sub' };
+  if (/^n80\.rom$/.test(b)) return { role: 'n80' };
+  return null;
+}
+async function assemble88(files) {
+  const banks = [null, null, null, null];
+  let gotMain = false, gotSub = false, gotN80 = false, unknown = 0;
+  for (const f of files) {
+    const c = classify88(f.name);
+    if (!c) { unknown++; continue; }
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    if (c.role === 'main') { rom88.main = bytes; await putRom(R88.main, f.name, bytes); gotMain = true; }
+    else if (c.role === 'sub') { rom88.sub = bytes; await putRom(R88.sub, f.name, bytes); gotSub = true; }
+    else if (c.role === 'n80') { rom88.n80 = bytes; await putRom(R88.n80, f.name, bytes); gotN80 = true; }
+    else if (c.role === 'ext') { banks[c.bank] = bytes; await putRom(R88.ext[c.bank], f.name, bytes); }
+  }
+  if (banks.some((b) => b)) {
+    const ext = new Uint8Array(0x8000);
+    banks.forEach((b, i) => { if (b) ext.set(b.subarray(0, 0x2000), i * 0x2000); });
+    rom88.ext = ext;
+  }
+  return { gotMain, gotSub, gotN80, banks: banks.filter(Boolean).length, unknown };
+}
+$('from88').onchange = async (e) => {
+  const files = [...e.target.files];
+  if (!files.length) return;
+  try {
+    const r = await assemble88(files);
+    refreshStore();
+    const missing = [];
+    if (!rom88.main) missing.push('n88.rom');
+    if (r.banks < 4) missing.push(`n88_N.rom (${r.banks}/4)`);
+    if (!rom88.sub) missing.push('disk.rom');
+    if (missing.length) {
+      guts.textContent = 'PC-8801 BIOS: 足りない → ' + missing.join(', ');
+      return;
+    }
+    guts.textContent = `PC-8801 BIOS一式ロード完了 (main+ext×4+sub${rom88.n80 ? '+n80' : ''}) — N88起動`;
+    switchMode('n88');
+  } catch (err) { guts.textContent = 'PC-8801 BIOS: ' + err.message; }
+};
+$('sb2').onchange = (e) => {
+  sb2 = e.target.checked;
+  if (bootMode === 'n88' && has88Set()) boot(); // rebuild with/without OPNA
+};
 $('breset').onclick = () => boot();
-$('mn80').onclick = () => {
-  bootMode = 'n80';
-  $('mn80').classList.add('on'); $('mn88').classList.remove('on');
-  $('dipnote').textContent = '';
+// Switch boot mode. The two families read the same DIP ports (30h/31h) but
+// want opposite defaults: the 8001/N80 world is happy at FF/FF, while N88 V2
+// mode needs DB/79 (bit patterns that say "N88 + V2 + real terminal off") —
+// leaving FF/FF there sends the 88 boot ROM off into terminal-setup instead of
+// booting the disk. So the mode buttons also reset the DIP fields to sane
+// defaults (the user can still override before reset).
+function switchMode(mode) {
+  bootMode = mode;
+  const is88 = mode === 'n88';
+  $('mn88').classList.toggle('on', is88);
+  $('mn80').classList.toggle('on', !is88);
+  $('dip1').value = is88 ? 'DB' : 'FF';
+  $('dip2').value = is88 ? '79' : 'FF';
+  if (is88 && !has88Set()) {
+    $('dipnote').textContent = t('PC-8801 BIOS一式(n88.rom+n88_0..3.rom+disk.rom)を選ぶとN88で起動する');
+  } else {
+    $('dipnote').textContent = '';
+  }
   boot();
-};
-$('mn88').onclick = () => {
-  bootMode = 'n88';
-  $('mn88').classList.add('on'); $('mn80').classList.remove('on');
-  $('dipnote').textContent = t('N88起動はFDDサブCPU待ちで停止する（issue #4）');
-};
+}
+$('mn80').onclick = () => switchMode('n80');
+$('mn88').onclick = () => switchMode('n88');
 for (const id of ['dip1', 'dip2']) $(id).onchange = () => boot();
 
 // Mount a .d88. The image is parsed here (sector IDs, densities, the bad
@@ -184,7 +261,7 @@ $('fdisk').onchange = async (e) => {
     const diskBytes = new Uint8Array(await f.arrayBuffer());
     disks = parseD88All(diskBytes);
     await putRom('disk', f.name, diskBytes); refreshStore(); // remember for next visit
-    if (machine) machine.disks = disks;
+    mountDisks(machine);
     const s = summarize(disks[0]);
     const extra = disks.length > 1 ? `  (+${disks.length - 1} more)` : '';
     $('dipnote').textContent =
@@ -192,22 +269,60 @@ $('fdisk').onchange = async (e) => {
       ` ${s.tracks}trk ${s.sectors}sec ${(s.bytes / 1024) | 0}KB` +
       (s.writeProtect ? ' [WP]' : '') +
       (s.oddities.length ? '  ⚠ ' + s.oddities.join(', ') : '') + extra +
-      '  — ' + t('起動にはFDDサブCPUが必要（issue #4）');
+      '  — ' + (bootMode === 'n88' && has88Set()
+        ? t('N88モードのFDDサブCPUにマウント済み（リセットでこのディスクから起動）')
+        : t('起動にはFDDサブCPUが必要（N88モード＋PC-8801 BIOS一式）'));
   } catch (err) {
     $('dipnote').textContent = 'D88: ' + err.message;
   }
 };
+// Hand mounted disks to whichever machine is live: the 8801 has a real FDD
+// sub-CPU (insertDisk drives its μPD765), the 8001 only records them.
+function mountDisks(m) {
+  if (!m) return;
+  if (m instanceof Pc8801Machine) {
+    disks.forEach((d, i) => { if (i < 2) m.insertDisk(i, d); });
+  } else {
+    m.disks = disks;
+  }
+}
 // ---- persisted ROMs (this browser's IndexedDB) ----------------------------
 // "upload once": the boot ROM / font / disk you pick are kept locally so a
 // return visit auto-boots without re-picking. Bytes stay in your browser.
+async function restore88Set() {
+  const main = await getRom(R88.main);
+  if (main) rom88.main = main.bytes;
+  const sub = await getRom(R88.sub);
+  if (sub) rom88.sub = sub.bytes;
+  const n80 = await getRom(R88.n80);
+  if (n80) rom88.n80 = n80.bytes;
+  const banks = await Promise.all(R88.ext.map((r) => getRom(r)));
+  if (banks.some((b) => b)) {
+    const ext = new Uint8Array(0x8000);
+    banks.forEach((b, i) => { if (b) ext.set(b.bytes.subarray(0, 0x2000), i * 0x2000); });
+    rom88.ext = ext;
+  }
+  return has88Set();
+}
 async function restoreFromStore() {
   try {
     const font = await getRom('font');
     if (font) applyFontRom(cgrom, font.bytes);
     const disk = await getRom('disk');
     if (disk) { try { disks = parseD88All(disk.bytes); } catch {} }
+    const have88 = await restore88Set();
     const rom = await getRom('rom');
-    if (rom) { romBytes = rom.bytes; guts.textContent = '保存済みROMから起動: ' + rom.name; boot(); if (machine && disks.length) machine.disks = disks; }
+    if (rom) romBytes = rom.bytes;
+    if (have88) {
+      // a saved PC-8801 set wins the auto-boot (it's the richer machine); the
+      // single N80 rom, if any, is still there behind the N80 mode button.
+      guts.textContent = t('保存済みPC-8801 BIOSからN88起動');
+      switchMode('n88');
+    } else if (romBytes) {
+      guts.textContent = '保存済みROMから起動: ' + rom.name;
+      boot();
+      mountDisks(machine);
+    }
   } catch {}
   refreshStore();
 }
@@ -236,6 +351,24 @@ const dipOf = (id, dflt) => {
   return Number.isFinite(v) ? (v & 0xff) : dflt;
 };
 function boot() {
+  if (bootMode === 'n88') {
+    if (!has88Set()) {
+      guts.textContent = t('PC-8801 BIOS一式(n88.rom + n88_0..3.rom + disk.rom)を選んでね');
+      return;
+    }
+    // The 8801: N88 main + 4 ext banks + the FDD sub-CPU's disk.rom, optional
+    // n80.rom for its N-mode. The class reads DIP 30h/31h internally, so we
+    // just hand it the switch bytes (DB/79 = N88 V2). sb2 grows an OPNA.
+    machine = new Pc8801Machine({
+      main: rom88.main, ext: rom88.ext, sub: rom88.sub, n80: rom88.n80,
+      mode: 'n88', sb2,
+    });
+    machine.dipsw = [dipOf('dip1', 0xdb), dipOf('dip2', 0x79)];
+    mountDisks(machine);
+    ensureAudio();
+    canvas.focus();
+    return;
+  }
   if (!romBytes) return;
   machine = new Pc8001Machine({ rom: romBytes });
   // DIP switches are read through port 30h/31h on the 88 (and the mkII);
@@ -246,6 +379,38 @@ function boot() {
     ? machine.dipsw[p - 0x30] : origIn(p));
   canvas.focus();
 }
+
+// ---- audio: the OPN(A) rendered live through a ScriptProcessor -------------
+// The music driver writes YM2203/YM2608 registers from inside the frame (its
+// tempo is the chip's own timer IRQ, serviced in stepFrame). The chip only
+// advances its oscillators/envelopes when render() pulls samples, so the audio
+// callback is the sole renderer — at the context's 48kHz to match the chip's
+// fixed sampleRate. Minimal: mono, opn + (if SB2) opna summed. Same
+// ScriptProcessor pattern as demo/opn-scope.html. Needs a user gesture to
+// start (browsers autoplay-block), so ensureAudio also runs on canvas click.
+let audioCtx = null, audioNode = null;
+const audioScratch = new Float32Array(8192);
+function ensureAudio() {
+  if (audioCtx) { audioCtx.resume?.(); return; }
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+  } catch { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+  audioNode = audioCtx.createScriptProcessor(2048, 0, 1);
+  audioNode.onaudioprocess = (e) => {
+    const out = e.outputBuffer.getChannelData(0);
+    const n = out.length;
+    if (!machine || !machine.opn) { out.fill(0); return; }
+    machine.opn.render(out, n);
+    if (machine.opna && n <= audioScratch.length) {
+      const s = audioScratch.subarray(0, n);
+      machine.opna.render(s, n);
+      for (let i = 0; i < n; i++) out[i] += s[i];
+    }
+  };
+  audioNode.connect(audioCtx.destination);
+  audioCtx.resume?.();
+}
+canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); });
 autoLoad();
 
 // PC-8001 keyboard matrix
@@ -296,7 +461,13 @@ function loop(now) {
   const t0 = performance.now();
   if (machine) {
     machine.update(dt);
-    const frame = machine.sys.render({ cgrom });
+    // Both machines emit a GRB-indexed frame (0..7 per dot) that the shared
+    // phosphor pipeline below consumes verbatim. The 8001 exposes it via its
+    // text system (machine.sys), the 8801 via render({indexed:true}) which
+    // composites its graphics planes under the text into the same index space.
+    const is88 = machine instanceof Pc8801Machine;
+    const crtc = is88 ? machine.crtc : machine.sys.crtc;
+    const frame = is88 ? machine.render({ cgrom, indexed: true }) : machine.sys.render({ cgrom });
     if (!frame.width || !frame.height) { requestAnimationFrame(loop); return; }
     const W = frame.width, H = frame.height;
     fitTo(W, H);
@@ -322,8 +493,8 @@ function loop(now) {
     }
     ctx.putImageData(img, 0, 0);
     workMs = workMs * 0.9 + (performance.now() - t0) * 0.1;
-    guts.textContent = `${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
-      + `  ${machine.sys.crtc.cols}x${machine.sys.crtc.rows} (${phosW}x${phosH}px)  hsync=${machine.sys.crtc.hsyncHz()}Hz`;
+    guts.textContent = `${is88 ? 'PC-8801/N88' : 'PC-8001/N80'}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
+      + `  ${crtc.cols}x${crtc.rows} (${phosW}x${phosH}px)  hsync=${crtc.hsyncHz()}Hz`;
   }
   requestAnimationFrame(loop);
 }
@@ -428,8 +599,8 @@ mountTourButton(document.querySelector('h1'), [
   { el: '#mn80',
     title: { ja: 'N80 / N88 起動モード', en: 'N80 / N88 boot modes' },
     body: {
-      ja: '<b>N-BASIC (N80)</b>がPC-8001互換の起動。<b>N88-BASIC</b>はPC-8801の上位モードだけど、起動シーケンスがFDDサブCPU（もう1個のZ80！）の返事を待って止まるので今はWIP（issue #4）。',
-      en: '<b>N-BASIC (N80)</b> is the PC-8001-compatible boot. <b>N88-BASIC</b> is the 8801\'s native mode, but its boot stalls waiting for the FDD sub-CPU (a second Z80!) — WIP, issue #4.' } },
+      ja: '<b>N-BASIC (N80)</b>がPC-8001互換の起動（単一ROM）。<b>N88-BASIC</b>はPC-8801の上位モード — こちらは「PC-8801 BIOS一式」ボタンで n88.rom＋n88_0..3.rom＋disk.rom を選ぶと、FDDサブCPU（もう1個のZ80！）まで含めて起動する。<b>SB2</b>チェックでサウンドボードII(OPNA)が生える。',
+      en: '<b>N-BASIC (N80)</b> is the PC-8001-compatible boot (a single ROM). <b>N88-BASIC</b> is the 8801\'s native mode — pick the whole BIOS set (n88.rom + n88_0..3.rom + disk.rom) via the "PC-8801 BIOS" button and it boots, FDD sub-CPU (a second Z80!) and all. The <b>SB2</b> box grows a Sound Board II (OPNA).' } },
   { el: '#dip1',
     title: { ja: 'DIPSW', en: 'DIP switches' },
     body: {

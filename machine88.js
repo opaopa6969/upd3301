@@ -509,13 +509,40 @@ export class Pc8801Machine {
   // Composite: graphics planes (palette-indexed) under the text layer.
   // Returns { width, height, rgb: Uint8Array(w*h*3) } with 0-255 per channel
   // (the 512 cube's 3-bit levels scaled to 8 bits).
-  render({ cgrom, out = null } = {}) {
+  //
+  // With `indexed: true` it instead returns { width, height, pixels } where
+  // `pixels` is a GRB-indexed Uint8Array(w*h): the raw 0..7 palette index per
+  // dot (bit0=B, bit1=R, bit2=G) — the SAME format the μPD3301 text renderer
+  // and the CrtPhosphor beam-pass consume. That lets the shared demo CRT
+  // pipeline (crt-panel → phosphor → tube) drive the 8801 exactly as it drives
+  // the 8001. Caveat: the analog 512-colour palette collapses to its 8
+  // primaries through the phosphor's GRB guns. The rgb path is untouched, so
+  // offline colour capture (the Ys arrangement grabs) keeps full palette depth.
+  render({ cgrom, out = null, indexed = false } = {}) {
     const text = renderScreen(this.crtc.getScreen(), {
       cgrom, colorMode: !this.mono, width80: this.width80,
     });
     const W = 640, H = 200;
-    const rgb = out && out.length === W * H * 3 ? out : new Uint8Array(W * H * 3);
     const [B, R, G] = this.gvram;
+    if (indexed) {
+      const pixels = out && out.length === W * H ? out : new Uint8Array(W * H);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const i = y * W + x;
+          let idx = 0;
+          if (this.gvramOn) {
+            const byte = (y * 80) + (x >> 3);
+            const mask = 0x80 >> (x & 7);
+            idx = ((G[byte] & mask) ? 4 : 0) | ((R[byte] & mask) ? 2 : 0) | ((B[byte] & mask) ? 1 : 0);
+          }
+          const t = i < text.pixels.length ? text.pixels[i] : 0;
+          if (t) idx = t;
+          pixels[i] = idx & 7;
+        }
+      }
+      return { width: W, height: H, pixels, schemaVersion: SCHEMA_VERSION };
+    }
+    const rgb = out && out.length === W * H * 3 ? out : new Uint8Array(W * H * 3);
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const i = y * W + x;
