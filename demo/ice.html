@@ -232,6 +232,7 @@ start:  LD B,8
       <div class="row">
         <label style="color:#778;font-size:12px">ORG <input id="aorg" value="9000" size="6"></label>
         <button id="basm">ASM→メモリ</button>
+        <button id="basmhelp">❓ 構文</button>
         <button id="bsetpc">PCセット</button>
         <button id="brun">▶ 実行</button>
       </div>
@@ -269,7 +270,88 @@ import { applyI18n, t, lang } from './i18n.js';
 applyI18n();
 
 // ---- guided tour (ESC / ✕ / outside-click exits any time) ------------------
-import { mountTourButton } from './tour.js';
+import { mountTourButton, showModal } from './tour.js';
+// ---- assembler syntax help --------------------------------------------------
+const ASM_HELP_JA = `
+<h3>基本</h3>
+<pre>label:  LD A,10        ; コロンラベル（EQU/MACRO/PROC/STRUC形は不要）
+.loop:  DJNZ .loop      ; ローカルラベル（直前のグローバルラベル配下）
+        JR label</pre>
+<h3>数値と式</h3>
+<pre>10  0x1F  1Fh  0FFh  1010b  0b1010  'A'  $   ← $=現在アドレス
++ - * / % &amp; | ^ &lt;&lt; &gt;&gt; ~ ( )               ; 前方参照OK（2パス）</pre>
+<h3>疑似命令</h3>
+<pre>ORG 9000h            ; 配置先
+name EQU 42          ; 定数
+DB 1,2,'text'        ; バイト列（DEFB/DEFM同義、文字列可）
+DW addr,1234h        ; ワード / DS 16[,fill] 領域確保 / END</pre>
+<h3>マクロ</h3>
+<pre>MACRO out2 port,val  ; （name MACRO … の形式も可）
+        LD A,val
+        OUT (port),A
+        ENDM
+        out2 51h,0    ; 展開。マクロ内.localは呼び出し毎に独立
+REPT 8
+        NOP
+        ENDM</pre>
+<h3>PROC USES — 使用レジスタannotationの自動push/pop</h3>
+<pre>foo PROC USES bc,de
+        LD B,8
+        RET           ; ← POP DE/POP BC/RETに自動展開
+foo ENDP              ; 条件付きRET(RET NZ等)はエラー（意味が変わるため）</pre>
+<h3>STRUC — IXオフセットの名前化</h3>
+<pre>player STRUC
+x   DB 0
+hp  DW 0
+player ENDS           ; player.x=0, player.hp=1, player=サイズ3
+        LD A,(IX+player.x)</pre>
+<h3>RELOC — リロケータブル支援</h3>
+<pre>RELOC
+start:  CALL start    ; 領域内ラベルへの絶対参照を自動記録
+ENDRELOC
+FIXUPTABLE            ; DW 件数, DW オフセット… を埋め込み
+; JRで書ける距離のJPには警告（JRはタダでリロケータブル）</pre>
+<p>アセンブル成功時は下に静的解析（破壊レジスタ・I/O・スタックlint・
+Tステート・⚡自己書き換え検出）が出る。</p>`;
+
+const ASM_HELP_EN = `
+<h3>Basics</h3>
+<pre>label:  LD A,10        ; colon labels (not needed for EQU/MACRO/PROC/STRUC)
+.loop:  DJNZ .loop      ; local label, scoped to the previous global
+        JR label</pre>
+<h3>Numbers &amp; expressions</h3>
+<pre>10  0x1F  1Fh  0FFh  1010b  0b1010  'A'  $   ($ = here)
++ - * / % &amp; | ^ &lt;&lt; &gt;&gt; ~ ( )               ; forward refs OK (two-pass)</pre>
+<h3>Pseudo-ops</h3>
+<pre>ORG 9000h / name EQU 42 / DB 1,'text' (DEFB/DEFM) / DW / DS n[,fill] / END</pre>
+<h3>Macros</h3>
+<pre>MACRO out2 port,val   (or: name MACRO …)
+        LD A,val
+        OUT (port),A
+        ENDM
+        out2 51h,0     ; .locals stay private per expansion
+REPT 8 … ENDM</pre>
+<h3>PROC USES — auto push/pop from a register annotation</h3>
+<pre>foo PROC USES bc,de
+        RET            ; becomes POP DE / POP BC / RET
+foo ENDP               ; conditional RET inside = error, on purpose</pre>
+<h3>STRUC — named IX offsets</h3>
+<pre>player STRUC / x DB 0 / hp DW 0 / player ENDS
+        LD A,(IX+player.x)</pre>
+<h3>RELOC</h3>
+<pre>RELOC … ENDRELOC       ; records absolute refs to region-born labels
+FIXUPTABLE             ; emits DW count, DW offsets… for a self-reloc loader
+; a JP that fits a JR gets a warning (JR relocates for free)</pre>
+<p>On success the static analysis appears below (clobbers, I/O, stack lint,
+T-states, ⚡ self-modifying writes).</p>`;
+
+document.getElementById('basmhelp').onclick = () => {
+  showModal({
+    title: lang === 'ja' ? 'マクロアセンブラ 構文ヘルプ' : 'Macro assembler syntax help',
+    html: lang === 'ja' ? ASM_HELP_JA : ASM_HELP_EN,
+  });
+};
+
 mountTourButton(document.querySelector('h1'), [
   { el: null,
     title: { ja: 'ICE — 回路の中に入る', en: 'ICE — get inside the circuit' },
