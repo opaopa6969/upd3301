@@ -551,56 +551,36 @@ function boot() {
 // The music driver writes YM2203/YM2608 registers from inside the frame (its
 // tempo is the chip's own timer IRQ, serviced in stepFrame). The chip only
 // advances its oscillators/envelopes when render() pulls samples — so audio
-// rendering IS the pull. We prefer an AudioWorklet (the ScriptProcessorNode is
-// deprecated AND its callback runs on the MAIN thread, so heavy frames stutter
-// the sound); the worklet pulls from its own thread and asks us for samples via
-// messages, and the machine renders them (machine.renderAudio: OPN + optional
-// OPNA FM6 + rhythm) at 48 kHz. A ScriptProcessor fallback keeps older browsers
-// (and any worklet-load failure) working exactly as before. Needs a user
-// gesture to start (autoplay-block), so ensureAudio also runs on canvas click.
-let audioCtx = null, audioNode = null, audioStarting = false;
+// rendering IS the pull, at 48 kHz (machine.renderAudio: OPN + optional OPNA
+// FM6 + rhythm). Needs a user gesture to start (autoplay-block), so ensureAudio
+// also runs on canvas click.
+// NOTE on the audio thread: an AudioWorklet was tried, pulling samples from the
+// audio thread via messages. It regressed the MUSIC — the worklet renders big
+// look-ahead batches, so the chip's registers (updated once per emulation frame
+// on the main thread) stay frozen across each batch and the tempo comes out
+// chunky. The ScriptProcessor callback fires at the audio-clock cadence and
+// interleaves with the per-frame register updates, so it tracks the music far
+// better. It IS deprecated (console warning), but a warning beats constant
+// stutter; the real fix is to run the whole chip inside the worklet with
+// timestamped register writes (a larger change, tracked for later).
+let audioCtx = null, audioNode = null;
 function renderAudioInto(buf, n) {
   if (!machine || !machine.opn) { buf.fill(0); return buf; }
   machine.renderAudio(buf, n);
   return buf;
 }
-function attachScriptProcessor() { // fallback path (deprecated but universal)
+function ensureAudio() {
+  if (audioCtx) { audioCtx.resume?.(); return; }
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+  } catch { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
   audioNode = audioCtx.createScriptProcessor(2048, 0, 1);
   audioNode.onaudioprocess = (e) => {
     const out = e.outputBuffer.getChannelData(0);
     renderAudioInto(out, out.length);
   };
   audioNode.connect(audioCtx.destination);
-}
-async function ensureAudio() {
-  if (audioCtx) { audioCtx.resume?.(); return; }
-  if (audioStarting) return;
-  audioStarting = true;
-  try {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
-  } catch { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-  let ok = false;
-  try {
-    if (audioCtx.audioWorklet) {
-      await audioCtx.audioWorklet.addModule('ring-audio-worklet.js');
-      audioNode = new AudioWorkletNode(audioCtx, 'ring-player', {
-        numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [1],
-      });
-      audioNode.port.onmessage = (e) => { // worklet asks for N samples → render + return
-        const need = (e.data && e.data.need) | 0;
-        if (!need) return;
-        const n = Math.min(need, 8192);
-        const buf = new Float32Array(n);
-        renderAudioInto(buf, n);
-        audioNode.port.postMessage({ samples: buf }, [buf.buffer]);
-      };
-      audioNode.connect(audioCtx.destination);
-      ok = true;
-    }
-  } catch (e) { ok = false; } // worklet unavailable / 404 / blocked → fall back
-  if (!ok) attachScriptProcessor();
   audioCtx.resume?.();
-  audioStarting = false;
 }
 canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); });
 autoLoad();
