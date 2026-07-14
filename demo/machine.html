@@ -72,16 +72,19 @@ import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 import { parseD88All, summarize } from '../d88.js';
 import { putRom, getRom, listRoms, clearRoms } from './romstore.js';
-import { decodeWav } from '../wav.js';
 
 // OPNA rhythm ROM (the six ADPCM-A drums) — fetched + decoded once, then
 // side-loaded into the OPNA so Sound Board II rhythm ($00-$0D) is audible.
-// $00 bit order: BD SD TOP HH TOM RIM.
+// $00 bit order: BD SD TOP HH TOM RIM. The wav decoder is DYNAMICALLY imported
+// inside a try/catch so a missing/stale wav.js can never take down the page —
+// worst case the machine just runs without drums (drums are a nicety, boot is
+// not). A static top-level import would have killed the whole module on 404.
 const RHYTHM_NAMES = ['bd', 'sd', 'top', 'hh', 'tom', 'rim'];
 let rhythmRom = null; // { samples: Float32Array[6], rate }
 async function loadRhythmRom() {
   if (rhythmRom) return rhythmRom;
   try {
+    const { decodeWav } = await import('../wav.js');
     let rate = 44100;
     const samples = await Promise.all(RHYTHM_NAMES.map(async (n) => {
       const r = await fetch(`../assets/opna-rhythm/2608_${n}.wav`);
