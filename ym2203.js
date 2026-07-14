@@ -268,32 +268,38 @@ export class Ym2203 {
   }
 
   // ---- FM -----------------------------------------------------------------
-  _envRate(op, rate) {
-    if (rate === 0) return 0;
-    const r = Math.min(63, rate * 2 + (op.ks ? 2 : 0));
-    // rate → attenuation units per FM tick (log-ish; musical, not sample-exact)
-    return Math.pow(2, (r - 32) / 8) * 0.35;
+  // Attenuation units per FM tick for a decay-type phase. Calibrated to real
+  // OPN timing: rate 4 (r=8) takes ~5 s to fall the full 1023-unit range,
+  // rate 30 (r=60) about 10 ms — a ~500× span. The old table was ~50× too
+  // FAST, so legato notes (keyed once, pitch rewritten) decayed to silence
+  // within a second and whole sections went quiet after the intro.
+  _egInc(rate, ks) {
+    if (rate <= 0) return 0;
+    const r = Math.min(63, rate * 2 + (ks ? 2 : 0));
+    return 0.0037 * Math.pow(2, (r - 8) * 0.17);
   }
 
   _opTick(op) {
     switch (op.state) {
       case ENV_ATTACK: {
-        const rate = this._envRate(op, op.ar);
-        if (op.ar >= 31) op.env = 0;
-        else op.env -= rate * 6;
+        // attack sweeps DOWN in attenuation, and much faster than a decay
+        if (op.ar >= 31) { op.env = 0; op.state = ENV_DECAY; return; }
+        op.env -= this._egInc(op.ar, op.ks) * 12;
         if (op.env <= 0) { op.env = 0; op.state = ENV_DECAY; }
         return;
       }
       case ENV_DECAY:
-        op.env += this._envRate(op, op.dr);
+        op.env += this._egInc(op.dr, op.ks);
         if (op.env >= op.sl) { op.env = op.sl; op.state = ENV_SUSTAIN; }
         return;
       case ENV_SUSTAIN:
-        op.env += this._envRate(op, op.sr);
-        if (op.env >= MAX_ATT) { op.env = MAX_ATT; op.state = ENV_OFF; }
+        // second decay. If SR=0 this holds forever (the pad case); a keyed-on
+        // note never latches to OFF — it just sits at whatever attenuation.
+        op.env += this._egInc(op.sr, op.ks);
+        if (op.env > MAX_ATT) op.env = MAX_ATT;
         return;
       case ENV_RELEASE:
-        op.env += this._envRate(op, op.rr) * 2;
+        op.env += this._egInc(op.rr, op.ks);
         if (op.env >= MAX_ATT) { op.env = MAX_ATT; op.state = ENV_OFF; }
         return;
       default:
@@ -333,7 +339,7 @@ export class Ym2203 {
     // near 1.5 — thin, few harmonics, and layered pads sink out of the mix.
     // The real OPN swings the phase several cycles; MOD = 1024 restores the
     // richness the ear was missing.
-    const MOD = 1024;
+    const MOD = 4096; // full-scale modulator ≈ ±8 cycles of phase swing
     const s = (op, mod) => {
       const idx = (op.phase + mod) & 1023;
       return SIN_TAB[idx | 0] * this._gain(op.env + op.tl * 8);
