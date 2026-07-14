@@ -37,12 +37,11 @@
   <input type="range" id="seek" min="0" max="1000" value="0">
 </div>
 <div class="row">
+  <span class="legend">曲:</span>
+  <select id="game" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px 8px"></select>
   <span class="legend">飛ぶ:</span>
-  <button class="jump" data-t="5">① Feena 0:05</button>
-  <button class="jump" data-t="37">② 静かな部 0:37</button>
-  <button class="jump" data-t="90">③ 別の曲 1:30</button>
-  <button class="jump" data-t="125">④ 続き 2:05</button>
-  <span class="legend">Ys I オープニングデモの通し（約3分20秒）。③あたりで曲調が変わる</span>
+  <span id="jumps" style="display:flex;gap:8px;flex-wrap:wrap"></span>
+  <span class="legend" id="gameNote"></span>
 </div>
 <div class="row">
   <span class="legend">音源:</span>
@@ -72,10 +71,10 @@
 <canvas id="keys" width="960" height="70"></canvas>
 <div id="meters"></div>
 
-<audio id="au" src="feena-v6.mp3?v=16" preload="auto"></audio>
+<audio id="au" src="feena-v6.mp3?v=17" preload="auto"></audio>
 
 <script type="module">
-import { Ym2203 } from '../ym2203.js?v=16'; // ?v= busts the browser module cache on each chip change
+import { Ym2203 } from '../ym2203.js?v=17'; // ?v= busts the browser module cache on each chip change
 
 const COLORS = ['#ff5a5a','#ffb14a','#ffe14a','#5ad1ff','#7affb0','#c68aff'];
 const NAMES = ['FM0','FM1','FM2','SSG0','SSG1','SSG2'];
@@ -83,12 +82,41 @@ const $ = (id) => document.getElementById(id);
 const au = $('au'), roll = $('roll'), keys = $('keys');
 const rc = roll.getContext('2d'), kc = keys.getContext('2d');
 
-let trace = null, fps = 60, secs = 160;
-fetch('feena-trace.json').then(r => r.json()).then(t => { trace = t; fps = t.fps; secs = t.secs; });
+const VER = 17; // cache-bust version for assets
+// Each game = a captured register-write log (live engine) + note trace (display)
+// + a pre-rendered mp3. The player driver's data is untouched; only the chip
+// rendering differs live.
+const GAMES = [
+  { id: 'feena', name: 'Ys I — オープニング', regs: 'feena-regs.json', trace: 'feena-trace.json', mp3: 'feena-v6.mp3',
+    note: 'Ys I オープニングデモの通し（約3分20秒）。③で曲調が変わる',
+    jumps: [[5, '① Feena 0:05'], [37, '② 静かな部 0:37'], [90, '③ 別の曲 1:30'], [125, '④ 続き 2:05']] },
+  { id: 'ys2', name: 'Ys II — オープニング', regs: 'ys2-regs.json', trace: 'ys2-trace.json', mp3: 'ys2-v1.mp3',
+    note: 'Ys II オープニングデモ（OPN版・FM3声）。ブート後10秒頃から演奏',
+    jumps: [[10, '① 頭 0:10'], [36, '② 0:36'], [90, '③ 1:30']] },
+];
+let trace = null, fps = 60, secs = 200, regs = null, curGame = GAMES[0];
 
-// register-write log for the live engine: per-frame [addr,data, addr,data, ...]
-let regs = null;
-fetch('feena-regs.json').then(r => r.json()).then(j => { regs = j; });
+function buildJumps() {
+  $('jumps').innerHTML = '';
+  curGame.jumps.forEach(([t, lab]) => { const b = document.createElement('button'); b.textContent = lab; b.onclick = () => seekTo(t); $('jumps').append(b); });
+  $('gameNote').textContent = curGame.note;
+}
+function mineSrc() { return curGame.mp3 + '?v=' + VER; }
+async function loadGame(g, autoplay) {
+  curGame = g;
+  playing = false; setPlayBtn(false);
+  trace = null; regs = null;
+  const [t, r] = await Promise.all([
+    fetch(g.trace + '?v=' + VER).then(x => x.json()),
+    fetch(g.regs + '?v=' + VER).then(x => x.json()),
+  ]);
+  trace = t; fps = t.fps; secs = t.secs; regs = r;
+  buildJumps();
+  playSample = 0; frameIdx = 0;
+  if (engineMode) { if (ctx) engineSeek(0); }
+  else { au.src = mineSrc(); au.currentTime = 0; }
+  $('seek').value = 0;
+}
 
 // ============================================================================
 // live engine: run ym2203.js in the browser and replay the captured register
@@ -125,8 +153,14 @@ const KNOBS = [
   { key: 'hpFcHz',  label: '低音つながり(AC結合)', min: 2, max: 40,    step: 1,    def: 6,    fmt: v => v + 'Hz↓細' },
   { key: 'fmGain',  label: 'FM音量',            min: 0.4, max: 1.4,   step: 0.05, def: 0.9,  fmt: v => v.toFixed(2) + '×' },
 ];
+// knob values persist as this emulator's output-stage settings (localStorage),
+// so a tuning you like survives reloads. The chip's own property defaults are
+// the canonical baseline; these just override them per-listener.
+const KNOB_STORE = 'opn-scope.knobs.v1';
 const knobVal = {};
 KNOBS.forEach(k => knobVal[k.key] = k.def);
+try { const saved = JSON.parse(localStorage.getItem(KNOB_STORE) || '{}'); KNOBS.forEach(k => { if (typeof saved[k.key] === 'number') knobVal[k.key] = saved[k.key]; }); } catch {}
+function saveKnobs() { try { localStorage.setItem(KNOB_STORE, JSON.stringify(knobVal)); } catch {} }
 function knobToChip(key) {
   if (!chip) return;
   const sr = ctx ? ctx.sampleRate : 48000;
@@ -141,17 +175,17 @@ const knobEls = {};
 KNOBS.forEach(k => {
   const wrap = document.createElement('label');
   wrap.style.cssText = 'display:flex;flex-direction:column;font-size:11px;color:#9ab;min-width:130px';
-  const val = document.createElement('span'); val.style.color = '#cde'; val.textContent = k.fmt(k.def);
+  const val = document.createElement('span'); val.style.color = '#cde'; val.textContent = k.fmt(knobVal[k.key]);
   const sl = document.createElement('input');
-  sl.type = 'range'; sl.min = k.min; sl.max = k.max; sl.step = k.step; sl.value = k.def; sl.style.accentColor = '#4a8';
-  sl.oninput = () => { knobVal[k.key] = +sl.value; val.textContent = k.fmt(+sl.value); knobToChip(k.key); dumpKnobs(); };
+  sl.type = 'range'; sl.min = k.min; sl.max = k.max; sl.step = k.step; sl.value = knobVal[k.key]; sl.style.accentColor = '#4a8';
+  sl.oninput = () => { knobVal[k.key] = +sl.value; val.textContent = k.fmt(+sl.value); knobToChip(k.key); dumpKnobs(); saveKnobs(); };
   knobEls[k.key] = { sl, val };
   wrap.append(document.createTextNode(k.label), sl, val);
   $('knobs').append(wrap);
 });
 $('knobReset').onclick = () => {
   KNOBS.forEach(k => { knobVal[k.key] = k.def; knobEls[k.key].sl.value = k.def; knobEls[k.key].val.textContent = k.fmt(k.def); });
-  applyKnobs(); dumpKnobs();
+  applyKnobs(); dumpKnobs(); saveKnobs();
 };
 function applyFrame(f) { const fr = regs.frames[f]; for (let i = 0; i < fr.length; i += 2) { chip.writeAddr(fr[i]); chip.writeData(fr[i + 1]); } }
 
@@ -323,7 +357,7 @@ function toEngine(on) {
   $('engRow').style.display = on ? 'flex' : 'none';
   $('knobRow').style.display = on ? 'block' : 'none';
   $('srcEngine').classList.toggle('on', on);
-  $('srcMine').classList.toggle('on', !on && au.src.includes('feena-v6'));
+  $('srcMine').classList.toggle('on', !on && au.src.includes(curGame.mp3));
 }
 $('srcEngine').onclick = async () => {
   au.pause();
@@ -335,10 +369,15 @@ $('srcEngine').onclick = async () => {
 };
 $('srcMine').onclick = () => {
   playing = false; toEngine(false);
-  au.pause(); au.src = 'feena-v6.mp3?v=16'; au.currentTime = 0;
-  $('srcName').textContent = 'うちの音 (v6) — 表示と完全一致（mp3なので個別ミュートは表示のみ）';
+  au.pause(); au.src = mineSrc(); au.currentTime = 0;
+  $('srcName').textContent = 'うちの音 — 表示と完全一致（mp3なので個別ミュートは表示のみ）';
   setPlayBtn(false);
 };
+// ---- game selector ---------------------------------------------------------
+GAMES.forEach(g => { const o = document.createElement('option'); o.value = g.id; o.textContent = g.name; $('game').append(o); });
+$('game').onchange = () => { const g = GAMES.find(x => x.id === $('game').value); loadGame(g); $('srcName').textContent = g.name + ' を読み込み'; };
+buildJumps();
+loadGame(GAMES[0]);
 $('srcFile').onchange = (e) => {
   const f = e.target.files[0]; if (!f) return;
   playing = false; toEngine(false);
