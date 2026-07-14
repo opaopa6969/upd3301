@@ -139,10 +139,21 @@ export class Ym2203 {
     this.chMute = [false, false, false, false, false, false];
     this.board = true;
     this._hpX = 0; this._hpY = 0; // output AC-coupling high-pass state
-    // SSG edge-emphasis: sharpen the square's transitions so the AY lead reads
-    // "hard and forward" instead of being glued under the smooth FM. 0 = off.
-    this.ssgEmph = 0.7;
+    // --- live-tunable output-stage knobs (pure AD/amp, NOT register values) --
+    // All read per-sample so the demo can turn them like mixer knobs.
+    this.fmGain = 0.9;   // FM bus level into the board mixer
+    this.ssgGain = 1.25; // SSG DAC level (was the 1/0.8 divisor)
+    this.ssgMix = 0.62;  // SSG bus level into the board mixer
+    // edge-emphasis: sharpen the square's transitions so the AY lead reads
+    // "hard and forward". Too much turns LOW notes into "じじじ" (the first
+    // difference amplifies the point-sampled square's aliasing), so keep small.
+    this.ssgEmph = 0.25;
     this._ssgPrev = 0;
+    // one-pole low-pass on the SSG: sheds the aliasing hash of the raw square
+    // so low notes stay soft and the lead reads transparent, like the real
+    // board's analog roll-off. Coefficient a = 1-exp(-2π fc/sr); ~8 kHz @ 48k.
+    this.ssgLpA = 0.649;
+    this._ssgLp = 0;
     this.timerA = 0; this.timerACount = 0; this.timerARun = false;
     this.timerB = 0; this.timerBCount = 0; this.timerBRun = false;
     this.status = 0; // b0 timer A overflow, b1 timer B, b7 busy
@@ -316,8 +327,8 @@ export class Ym2203 {
       // measured AY DAC ladder (shallow-log in the mid) — see SSG_DAC. The
       // divisor is just the SSG/FM balance knob: on a real PC-88 the three SSG
       // analog outs sit LOUD next to the FM, so the SSG lead (13 s on) reads as
-      // a clear top line. 0.8 lifts it to ~0.5 of the FM RMS in that passage.
-      sum += SSG_DAC[vol & 15] / 0.8;
+      // a clear top line. ssgGain is the live level knob (default 1.25).
+      sum += SSG_DAC[vol & 15] * this.ssgGain;
     }
     return sum;
   }
@@ -490,13 +501,13 @@ export class Ym2203 {
       // Modelling the board — not the chip — is what removes the bottom-heavy
       // "ドンシャリ" shelf. board=false gives the raw digital sum for A/B.
       if (!this.board) { out[i] = Math.max(-1, Math.min(1, fm * 0.5 + ssg * 0.5)); continue; }
-      // edge-emphasis on the SSG only (first-difference high-boost): overshoots
-      // the square's transitions so the lead bites through — "硬くて前に出る" —
-      // rather than the tanh gluing it flat under the FM. Emphasis before the
-      // mix so the FM stays smooth.
+      // SSG shaping (edge emphasis for "hardness", then a gentle low-pass to
+      // shed the aliasing "じじじ" and keep it transparent), applied to the SSG
+      // only so the FM stays smooth. All three amounts are live knobs.
       const ssgE = ssg + this.ssgEmph * (ssg - this._ssgPrev);
       this._ssgPrev = ssg;
-      const raw = fm * 0.9 + ssgE * 0.62;
+      this._ssgLp += this.ssgLpA * (ssgE - this._ssgLp);
+      const raw = fm * this.fmGain + this._ssgLp * this.ssgMix;
       this._hpY = 0.996 * (this._hpY + raw - this._hpX);
       this._hpX = raw;
       // Analog output stage: a soft-saturating amp compresses the peaks and

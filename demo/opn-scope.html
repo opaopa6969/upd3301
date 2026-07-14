@@ -49,6 +49,14 @@
   <button id="tIdeal">理想サイン (ideal)</button>
   <span class="legend">ライブ合成中。上のチェックで<b>音だけ</b>ミュート／ソロ（表示は残る／レジスタ列は不変、AD/ampだけ）。board=実機の抵抗ミキサ+ACカップリング+ソフト飽和、ideal=量子化なしの純サイン</span>
 </div>
+<div id="knobRow" style="display:none">
+  <div class="row" style="align-items:flex-start">
+    <span class="legend">🎛️ ツマミ:</span>
+    <div id="knobs" style="display:flex;gap:18px;flex-wrap:wrap"></div>
+  </div>
+  <div class="row"><button id="knobReset" style="font-size:11px;padding:3px 10px">リセット</button>
+    <span class="legend" id="knobDump">回すと即反映。いい値が見つかったらこの行を僕に伝えて</span></div>
+</div>
 <div class="row" id="chrow">
   <span class="legend">音を消す/ソロ(ライブエンジン時):</span>
 </div>
@@ -56,10 +64,10 @@
 <canvas id="keys" width="960" height="70"></canvas>
 <div id="meters"></div>
 
-<audio id="au" src="feena-v6.mp3?v=9" preload="auto"></audio>
+<audio id="au" src="feena-v6.mp3?v=10" preload="auto"></audio>
 
 <script type="module">
-import { Ym2203 } from '../ym2203.js?v=9'; // ?v= busts the browser module cache on each chip change
+import { Ym2203 } from '../ym2203.js?v=10'; // ?v= busts the browser module cache on each chip change
 
 const COLORS = ['#ff5a5a','#ffb14a','#ffe14a','#5ad1ff','#7affb0','#c68aff'];
 const NAMES = ['FM0','FM1','FM2','SSG0','SSG1','SSG2'];
@@ -93,8 +101,45 @@ function newChip() {
   chip.board = $('tBoard').classList.contains('on');
   chip.sineMode = $('tIdeal').classList.contains('on') ? 'ideal' : 'accurate';
   applyMute();
+  applyKnobs();
 }
 function applyMute() { if (chip) for (let v = 0; v < 6; v++) chip.chMute[v] = !audioOn[v]; }
+
+// ---- live mixer knobs (pure AD/amp; live-engine only) ----------------------
+// Each knob writes a chip property per turn; the chip reads them per-sample, so
+// dragging a slider changes the sound instantly. The SSG low-pass is given in
+// Hz and converted to the chip's one-pole coefficient at the running rate.
+const KNOBS = [
+  { key: 'ssgGain', label: 'SSG音量',        min: 0.4, max: 3.0,   step: 0.05, def: 1.25, fmt: v => v.toFixed(2) + '×' },
+  { key: 'ssgEmph', label: 'SSG硬さ(エッジ)', min: 0,   max: 1.0,   step: 0.05, def: 0.25, fmt: v => v.toFixed(2) },
+  { key: 'ssgLpHz', label: 'SSG透明感(LP)',   min: 3000, max: 20000, step: 500,  def: 8000, fmt: v => (v / 1000).toFixed(1) + 'kHz' },
+  { key: 'fmGain',  label: 'FM音量',          min: 0.4, max: 1.4,   step: 0.05, def: 0.9,  fmt: v => v.toFixed(2) + '×' },
+];
+const knobVal = {};
+KNOBS.forEach(k => knobVal[k.key] = k.def);
+function knobToChip(key) {
+  if (!chip) return;
+  if (key === 'ssgLpHz') chip.ssgLpA = 1 - Math.exp(-2 * Math.PI * knobVal.ssgLpHz / (ctx ? ctx.sampleRate : 48000));
+  else chip[key] = knobVal[key];
+}
+function applyKnobs() { KNOBS.forEach(k => knobToChip(k.key)); }
+function dumpKnobs() { $('knobDump').textContent = 'いまの値: ' + KNOBS.map(k => `${k.label}=${k.fmt(knobVal[k.key])}`).join(' / ') + ' ← この行を僕に伝えて'; }
+const knobEls = {};
+KNOBS.forEach(k => {
+  const wrap = document.createElement('label');
+  wrap.style.cssText = 'display:flex;flex-direction:column;font-size:11px;color:#9ab;min-width:130px';
+  const val = document.createElement('span'); val.style.color = '#cde'; val.textContent = k.fmt(k.def);
+  const sl = document.createElement('input');
+  sl.type = 'range'; sl.min = k.min; sl.max = k.max; sl.step = k.step; sl.value = k.def; sl.style.accentColor = '#4a8';
+  sl.oninput = () => { knobVal[k.key] = +sl.value; val.textContent = k.fmt(+sl.value); knobToChip(k.key); dumpKnobs(); };
+  knobEls[k.key] = { sl, val };
+  wrap.append(document.createTextNode(k.label), sl, val);
+  $('knobs').append(wrap);
+});
+$('knobReset').onclick = () => {
+  KNOBS.forEach(k => { knobVal[k.key] = k.def; knobEls[k.key].sl.value = k.def; knobEls[k.key].val.textContent = k.fmt(k.def); });
+  applyKnobs(); dumpKnobs();
+};
 function applyFrame(f) { const fr = regs.frames[f]; for (let i = 0; i < fr.length; i += 2) { chip.writeAddr(fr[i]); chip.writeData(fr[i + 1]); } }
 
 async function ensureEngine() {
@@ -257,6 +302,7 @@ au.onended = () => setPlayBtn(false);
 function toEngine(on) {
   engineMode = on;
   $('engRow').style.display = on ? 'flex' : 'none';
+  $('knobRow').style.display = on ? 'block' : 'none';
   $('srcEngine').classList.toggle('on', on);
   $('srcMine').classList.toggle('on', !on && au.src.includes('feena-v6'));
 }
@@ -270,7 +316,7 @@ $('srcEngine').onclick = async () => {
 };
 $('srcMine').onclick = () => {
   playing = false; toEngine(false);
-  au.pause(); au.src = 'feena-v6.mp3?v=9'; au.currentTime = 0;
+  au.pause(); au.src = 'feena-v6.mp3?v=10'; au.currentTime = 0;
   $('srcName').textContent = 'うちの音 (v6) — 表示と完全一致（mp3なので個別ミュートは表示のみ）';
   setPlayBtn(false);
 };
