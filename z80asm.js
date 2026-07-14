@@ -575,33 +575,211 @@ function encodeInstr(mn, argstr, X) {
   return []; // unreachable — every branch returns or throws
 }
 
-// ---- macro / REPT expansion -----------------------------------------------
-function captureBlock(items, i, errors) {
+// ---- macro / REPT / IRP / conditional expansion (the MACRO-80 layer) --------
+// Everything here happens ONCE, before the two assembly passes — so IF and
+// friends are automatically pass-consistent, and a forward-referenced label
+// inside an IF is an honest error instead of a phase bug.
+
+const BLOCK_OPENERS = new Set(['REPT', 'MACRO', 'IRP', 'IRPC']);
+const COND_OPENERS = new Set(['IF', 'IFE', 'IF1', 'IF2', 'IFDEF', 'IFNDEF', 'IFB', 'IFNB', 'IFIDN', 'IFDIF']);
+
+// every name the assembler itself understands — used for the M80 shadowing
+// rule: a macro may shadow a builtin, and INSIDE that macro the name resolves
+// back to the builtin (that's what makes a RET-shadow epilogue terminate)
+const BUILTIN_MNEMONICS = new Set([
+  'LD', 'PUSH', 'POP', 'EX', 'EXX', 'ADD', 'ADC', 'SUB', 'SBC', 'AND', 'XOR', 'OR', 'CP',
+  'INC', 'DEC', 'RLC', 'RRC', 'RL', 'RR', 'SLA', 'SRA', 'SLL', 'SLI', 'SRL',
+  'BIT', 'RES', 'SET', 'JP', 'JR', 'DJNZ', 'CALL', 'RET', 'RST', 'IN', 'OUT', 'IM',
+  ...Object.keys(SIMPLE),
+  'ORG', 'EQU', 'DB', 'DEFB', 'DEFM', 'DW', 'DEFW', 'DS', 'DEFS', 'END',
+  'RELOC', 'ENDRELOC', 'FIXUPTABLE', 'PROC', 'ENDP', 'STRUC', 'ENDS',
+]);
+
+// split a macro-argument list: <…> guards a whole argument (commas inside
+// stay put — that's how a list travels into IRP), () nests, strings skip.
+// A '<' only opens a guard at the START of an argument, so `m 1<<2,x`
+// still reads as a shift expression.
+function splitArgs(s) {
+  const out = [];
+  let depth = 0, angle = 0, start = 0, atStart = true;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if ((c === '"' || c === "'") && !primeAt(s, i)) { i = scanString(s, i) - 1; atStart = false; continue; }
+    if (angle > 0) {
+      if (c === '<') angle++;
+      else if (c === '>') angle--;
+      continue;
+    }
+    if (c === '<' && atStart) { angle = 1; atStart = false; continue; }
+    if (c === '(') depth++;
+    else if (c === ')') depth--;
+    else if (c === ',' && depth <= 0) { out.push(s.slice(start, i)); start = i + 1; atStart = true; continue; }
+    if (!/\s/.test(c)) atStart = false;
+  }
+  out.push(s.slice(start));
+  return out.map((x) => x.trim());
+}
+
+// peel ONE layer of <> when it wraps the whole argument
+function stripAngle(s) {
+  const x = String(s).trim();
+  if (x[0] !== '<') return x;
+  let a = 0;
+  for (let i = 0; i < x.length; i++) {
+    const c = x[i];
+    if ((c === '"' || c === "'") && !primeAt(x, i)) { i = scanString(x, i) - 1; continue; }
+    if (c === '<') a++;
+    else if (c === '>') { a--; if (a === 0) return i === x.length - 1 ? x.slice(1, -1) : x; }
+  }
+  return x;
+}
+
+// substitute macro parameters / LOCAL names / IRP variables into a body line,
+// with M80 &-pasting: an '&' DIRECTLY adjacent to a substituted token is
+// consumed (label&n → label1). An '&' with whitespace around it stays a
+// bitwise AND — the pasting rule never reaches into expressions.
+function substBody(line, map, suffix) {
+  let out = '', i = 0;
+  while (i < line.length) {
+    const c = line[i];
+    if ((c === '"' || c === "'") && !primeAt(line, i)) {
+      // strings are opaque EXCEPT for the M80 idiom '&param' — the only way
+      // a parameter reaches inside quotes
+      const e = scanString(line, i);
+      let str = line.slice(i, e);
+      if (str.includes('&')) {
+        str = str.replace(/&([.A-Za-z_@?][A-Za-z0-9_~.?]*)/g, (whole, name) =>
+          map.get(name.toUpperCase()) ?? whole);
+      }
+      out += str;
+      i = e;
+      continue;
+    }
+    const m = IDENT_RE.exec(line.slice(i));
+    if (m) {
+      const tok = m[0];
+      const rep = map.get(tok.toUpperCase());
+      if (rep !== undefined) {
+        if (out.endsWith('&')) out = out.slice(0, -1); // paste on the left
+        out += rep;
+        i += tok.length;
+        if (line[i] === '&') i++; // paste on the right
+        continue;
+      }
+      out += tok[0] === '.' ? tok + suffix : tok; // auto-scoped locals (our +α)
+      i += tok.length;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+function captureBlock(items, i, errors, what = 'REPT') {
   let depth = 1;
   const body = [];
   for (let j = i + 1; j < items.length; j++) {
     const q = cachedParse(items[j]);
     const qm = q.mnemonic ? q.mnemonic.toUpperCase() : null;
-    if (qm === 'REPT' || qm === 'MACRO') depth++;
+    if (qm && BLOCK_OPENERS.has(qm)) depth++;
     else if (qm === 'ENDM') { depth--; if (depth === 0) return [body, j + 1]; }
     body.push(items[j]);
   }
-  errors.push({ line: items[i].line, message: 'REPT without ENDM' });
+  errors.push({ line: items[i].line, message: `${what} without ENDM` });
   return [body, items.length];
 }
 
+// IF … [ELSE …] ENDIF, nesting-aware; returns both branches
+function captureIf(items, i, errors) {
+  let depth = 1;
+  const thenB = [], elseB = [];
+  let target = thenB;
+  for (let j = i + 1; j < items.length; j++) {
+    const q = cachedParse(items[j]);
+    const qm = q.mnemonic ? q.mnemonic.toUpperCase() : null;
+    if (qm && COND_OPENERS.has(qm)) depth++;
+    else if (qm === 'ENDIF') { depth--; if (depth === 0) return [thenB, elseB, j + 1]; }
+    else if (qm === 'ELSE' && depth === 1 && !q.args.trim()) { target = elseB; continue; }
+    target.push(items[j]);
+  }
+  errors.push({ line: items[i].line, message: 'IF without ENDIF' });
+  return [thenB, elseB, items.length];
+}
+
+function evalCond(mn, argstr, st) {
+  const ev = (e) => evalExpr(e, { addr: 0, scope: '', pass: 2, symbols: st.equs });
+  switch (mn) {
+    case 'IF': return ev(argstr) !== 0;
+    case 'IFE': return ev(argstr) === 0;
+    case 'IF1': case 'IF2':
+      // M80 ran the SOURCE twice; we expand once and assemble the result
+      // twice, so pass-specific source is structurally impossible. Honesty
+      // beats a silent half-truth.
+      throw new AsmError(`${mn} cannot exist here: this assembler expands once, then assembles twice`);
+    case 'IFDEF': case 'IFNDEF': {
+      const name = argstr.trim().toUpperCase();
+      if (!IDENT_RE.test(name) || IDENT_RE.exec(name)[0] !== name) {
+        throw new AsmError(`${mn} needs a symbol name`);
+      }
+      const def = st.equs.has(name) || st.macros.has(name);
+      return mn === 'IFDEF' ? def : !def;
+    }
+    case 'IFB': case 'IFNB': {
+      const blank = stripAngle(argstr).trim() === '';
+      return mn === 'IFB' ? blank : !blank;
+    }
+    case 'IFIDN': case 'IFDIF': {
+      const parts = splitArgs(argstr);
+      if (parts.length !== 2) throw new AsmError(`${mn} needs two <>-guarded arguments`);
+      const same = stripAngle(parts[0]).toUpperCase() === stripAngle(parts[1]).toUpperCase();
+      return mn === 'IFIDN' ? same : !same;
+    }
+    default: return false;
+  }
+}
+
+// returns 'exitm' when an EXITM wants to unwind the innermost macro/REPT/IRP
 function expandStream(items, st, out, depth, errors) {
-  if (depth > 32) {
+  if (depth > 64) {
     errors.push({ line: items[0]?.line ?? 0, message: 'macro recursion too deep' });
-    return;
+    return undefined;
   }
   let i = 0;
   while (i < items.length) {
     const it = items[i];
     const p = cachedParse(it);
     const mn = p.mnemonic ? p.mnemonic.toUpperCase() : null;
+
+    if (mn && COND_OPENERS.has(mn)) {
+      const [thenB, elseB, next] = captureIf(items, i, errors);
+      let cond = false;
+      try { cond = evalCond(mn, p.args, st); }
+      catch (e) { errors.push({ line: it.line, message: `${mn}: ${e.message}` }); }
+      if (p.label) out.push({ text: p.label + ':', line: it.line, file: it.file, from: it.from });
+      const r = expandStream(cond ? thenB : elseB, st, out, depth + 1, errors);
+      if (r === 'exitm') return 'exitm'; // EXITM inside IF unwinds the macro
+      i = next;
+      continue;
+    }
+    if (mn === 'ELSE' || mn === 'ENDIF') {
+      errors.push({ line: it.line, message: `${mn} without IF` });
+      i++;
+      continue;
+    }
+    if (mn === 'EXITM') {
+      if (st.inMacro > 0) return 'exitm';
+      errors.push({ line: it.line, message: 'EXITM outside a macro/REPT/IRP' });
+      i++;
+      continue;
+    }
+    if (mn === 'PURGE') { // un-shadow: the builtin mnemonic comes back
+      for (const nm of splitArgs(p.args)) if (nm) st.macros.delete(nm.toUpperCase());
+      i++;
+      continue;
+    }
     if (mn === 'REPT') {
-      const [body, next] = captureBlock(items, i, errors);
+      const [body, next] = captureBlock(items, i, errors, 'REPT');
       let count = 0;
       try {
         count = evalExpr(p.args, { addr: 0, scope: '', pass: 2, symbols: st.equs });
@@ -610,46 +788,102 @@ function expandStream(items, st, out, depth, errors) {
         errors.push({ line: it.line, message: 'REPT: ' + e.message });
         count = 0;
       }
-      if (p.label) out.push({ text: p.label + ':', line: it.line, from: it.from });
+      if (p.label) out.push({ text: p.label + ':', line: it.line, file: it.file, from: it.from });
       st.unique++;
       const id = st.unique;
+      st.inMacro++;
       for (let k = 0; k < count; k++) {
         const suffixed = body.map((b) => ({
-          text: transformTokens(b.text, (tok) => (tok[0] === '.' ? `${tok}~r${id}_${k}` : tok)),
-          line: b.line, from: it.line,
+          text: substBody(b.text, EMPTY_MAP, `~r${id}_${k}`),
+          line: b.line, file: b.file, from: it.line,
         }));
-        expandStream(suffixed, st, out, depth + 1, errors);
+        if (expandStream(suffixed, st, out, depth + 1, errors) === 'exitm') break;
       }
+      st.inMacro--;
       i = next;
       continue;
     }
-    if (mn && st.macros.has(mn)) {
-      const mac = st.macros.get(mn);
-      if (p.label) out.push({ text: p.label + ':', line: it.line, from: it.from });
-      const args = splitTop(p.args, true);
-      const map = new Map();
-      mac.params.forEach((prm, k) => map.set(prm.toUpperCase(), args[k] ?? ''));
+    if (mn === 'IRP' || mn === 'IRPC') {
+      const [body, next] = captureBlock(items, i, errors, mn);
+      const parts = splitArgs(p.args);
+      const varName = (parts[0] ?? '').trim();
+      if (!varName) {
+        errors.push({ line: it.line, message: `${mn} needs a variable name` });
+        i = next;
+        continue;
+      }
+      const listArg = parts.slice(1).join(',');
+      const values = mn === 'IRP'
+        ? splitArgs(stripAngle(listArg)) // <a,b,c> → one binding per element
+        : [...stripAngle(listArg)]; // IRPC: one binding per character
+      if (p.label) out.push({ text: p.label + ':', line: it.line, file: it.file, from: it.from });
       st.unique++;
       const id = st.unique;
-      const bodyItems = mac.body.map((b) => ({
-        text: transformTokens(b.text, (tok) => {
-          const up = tok.toUpperCase();
-          if (map.has(up)) return map.get(up);
-          return tok[0] === '.' ? `${tok}~m${id}` : tok; // per-expansion local scope
-        }),
-        line: b.line, from: it.line,
+      st.inMacro++;
+      for (let k = 0; k < values.length; k++) {
+        const map = new Map([[varName.toUpperCase(), values[k]]]);
+        const bodyItems = body.map((b) => ({
+          text: substBody(b.text, map, `~i${id}_${k}`),
+          line: b.line, file: b.file, from: it.line,
+        }));
+        if (expandStream(bodyItems, st, out, depth + 1, errors) === 'exitm') break;
+      }
+      st.inMacro--;
+      i = next;
+      continue;
+    }
+    // macro call — with the M80 shadowing rule: while a builtin-shadowing
+    // macro is expanding, its own name resolves back to the builtin
+    if (mn && st.macros.has(mn) && !(st.active.has(mn) && BUILTIN_MNEMONICS.has(mn))) {
+      const mac = st.macros.get(mn);
+      if (p.label) out.push({ text: p.label + ':', line: it.line, file: it.file, from: it.from });
+      const args = splitArgs(p.args).map((a) => {
+        if (a[0] === '%') { // %expr: pass the VALUE, not the text (M80)
+          try {
+            return String(evalExpr(a.slice(1), { addr: 0, scope: '', pass: 2, symbols: st.equs }));
+          } catch (e) {
+            errors.push({ line: it.line, message: `%: ${e.message}` });
+            return '0';
+          }
+        }
+        return stripAngle(a); // <a,b> travels as one argument, unwrapped once
+      });
+      st.unique++;
+      const id = st.unique;
+      const map = new Map();
+      mac.params.forEach((prm, k) => map.set(prm.toUpperCase(), args[k] ?? ''));
+      // LOCAL declarations mint a fresh ??n name per expansion (M80), on top
+      // of our automatic .label scoping
+      const bodySrc = [];
+      for (const b of mac.body) {
+        const bp = cachedParse(b);
+        if (!bp.label && bp.mnemonic && bp.mnemonic.toUpperCase() === 'LOCAL') {
+          for (const nm of splitArgs(bp.args)) {
+            if (nm) map.set(nm.toUpperCase(), `??${id}_${map.size}`);
+          }
+          continue;
+        }
+        bodySrc.push(b);
+      }
+      const bodyItems = bodySrc.map((b) => ({
+        text: substBody(b.text, map, `~m${id}`),
+        line: b.line, file: b.file, from: it.line,
       }));
-      expandStream(bodyItems, st, out, depth + 1, errors);
+      st.active.add(mn);
+      st.inMacro++;
+      expandStream(bodyItems, st, out, depth + 1, errors); // EXITM lands here
+      st.inMacro--;
+      st.active.delete(mn);
       i++;
       continue;
     }
     if (mn === 'ENDM') {
-      errors.push({ line: it.line, message: 'ENDM without MACRO/REPT' });
+      errors.push({ line: it.line, message: 'ENDM without MACRO/REPT/IRP' });
       i++;
       continue;
     }
     if ((mn === 'EQU' || mn === '=') && p.label) {
-      // best-effort record so a later REPT count can use it
+      // best-effort record so IF / REPT counts can use it
       try {
         st.equs.set(p.label.toUpperCase(), evalExpr(p.args, { addr: 0, scope: '', pass: 2, symbols: st.equs }));
       } catch { /* real EQU handling happens in the passes */ }
@@ -657,7 +891,10 @@ function expandStream(items, st, out, depth, errors) {
     out.push(it);
     i++;
   }
+  return undefined;
 }
+
+const EMPTY_MAP = new Map();
 
 // ---- PROC/USES: auto push/pop symmetry (the feature everyone reimplemented
 // in their bedroom in 1985 — prologue PUSHes, every plain RET grows POPs) ---
@@ -680,8 +917,8 @@ function procTransform(stmts, errors) {
       const bad = uses.filter((r) => !USES_OK.includes(r));
       for (const r of bad) errors.push({ line: s.line, message: `USES: cannot push '${r}'` });
       uses = uses.filter((r) => USES_OK.includes(r));
-      out.push({ text: p.label + ':', line: s.line, from: s.from });
-      for (const r of uses) out.push({ text: 'PUSH ' + r, line: s.line, from: s.from });
+      out.push({ text: p.label + ':', line: s.line, file: s.file, from: s.from });
+      for (const r of uses) out.push({ text: 'PUSH ' + r, line: s.line, file: s.file, from: s.from });
       cur = { uses, line: s.line };
       continue;
     }
@@ -697,9 +934,9 @@ function procTransform(stmts, errors) {
         out.push(s);
         continue;
       }
-      if (p.label) out.push({ text: p.label + ':', line: s.line, from: s.from });
-      for (const r of [...cur.uses].reverse()) out.push({ text: 'POP ' + r, line: s.line, from: s.from });
-      out.push({ text: 'RET', line: s.line, from: s.from });
+      if (p.label) out.push({ text: p.label + ':', line: s.line, file: s.file, from: s.from });
+      for (const r of [...cur.uses].reverse()) out.push({ text: 'POP ' + r, line: s.line, file: s.file, from: s.from });
+      out.push({ text: 'RET', line: s.line, file: s.file, from: s.from });
       continue;
     }
     out.push(s);
@@ -711,21 +948,57 @@ function procTransform(stmts, errors) {
 // ---- the assembler ----------------------------------------------------------
 const fullName = (label, scope) => (label[0] === '.' ? scope + label : label).toUpperCase();
 
-export function assemble(source, { org = 0 } = {}) {
+// INCLUDE resolution — textual splice with provenance. Every produced line
+// remembers its {file, line}, so errors and the listing can say where a
+// statement REALLY lives. The stack argument catches circular includes.
+function loadLines(source, file, include, stack, errors) {
+  const out = [];
+  const lines = String(source).split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const p = parseStmt(lines[i]);
+    if (p.mnemonic && p.mnemonic.toUpperCase() === 'INCLUDE') {
+      const m = /^["']([\s\S]*)["']$/.exec(p.args.trim());
+      const path = m ? m[1] : p.args.trim();
+      if (!include) {
+        errors.push({ line: i + 1, file, message: 'INCLUDE needs a resolver: assemble(src, { include: (path) => source })' });
+        continue;
+      }
+      if (stack.includes(path)) {
+        errors.push({ line: i + 1, file, message: `circular INCLUDE: ${[...stack, path].join(' → ')}` });
+        continue;
+      }
+      let sub = null;
+      try { sub = include(path); } catch { sub = null; }
+      if (sub == null) {
+        errors.push({ line: i + 1, file, message: `INCLUDE not found: "${path}"` });
+        continue;
+      }
+      if (p.label) out.push({ text: p.label + ':', line: i + 1, file });
+      out.push(...loadLines(sub, path, include, [...stack, path], errors));
+      continue;
+    }
+    out.push({ text: lines[i], line: i + 1, file });
+  }
+  return out;
+}
+
+export function assemble(source, { org = 0, include = null } = {}) {
   const errors = [];
   const warnings = [];
 
-  // phase 0a: pull MACRO definitions out of the raw line stream
-  const rawLines = String(source).split(/\r?\n/);
+  // phase 0: INCLUDE splice (with file:line provenance), then pull MACRO
+  // definitions out of the line stream
+  const lineItems = loadLines(source, null, include, [], errors);
   const macros = new Map();
   const items = [];
-  for (let i = 0; i < rawLines.length; i++) {
-    const p = parseStmt(rawLines[i]);
+  for (let i = 0; i < lineItems.length; i++) {
+    const li = lineItems[i];
+    const p = parseStmt(li.text);
     if (p.mnemonic && p.mnemonic.toUpperCase() === 'MACRO') {
       let name = p.label, paramStr = p.args;
       if (!name) { // `MACRO name p1,p2` form
         const m = /^([.A-Za-z_@?][A-Za-z0-9_~.?]*)\s*([\s\S]*)$/.exec(p.args);
-        if (!m) { errors.push({ line: i + 1, message: 'MACRO needs a name' }); continue; }
+        if (!m) { errors.push({ line: li.line, file: li.file, message: 'MACRO needs a name' }); continue; }
         name = m[1];
         paramStr = m[2];
       }
@@ -733,24 +1006,24 @@ export function assemble(source, { org = 0 } = {}) {
       let depth = 1;
       const body = [];
       let j = i + 1;
-      for (; j < rawLines.length; j++) {
-        const q = parseStmt(rawLines[j]);
+      for (; j < lineItems.length; j++) {
+        const q = parseStmt(lineItems[j].text);
         const qm = q.mnemonic ? q.mnemonic.toUpperCase() : null;
-        if (qm === 'MACRO' || qm === 'REPT') depth++;
+        if (qm && BLOCK_OPENERS.has(qm)) depth++;
         else if (qm === 'ENDM') { depth--; if (depth === 0) break; }
-        body.push({ text: rawLines[j], line: j + 1 });
+        body.push({ text: lineItems[j].text, line: lineItems[j].line, file: lineItems[j].file });
       }
-      if (depth !== 0) errors.push({ line: i + 1, message: 'MACRO without ENDM' });
+      if (depth !== 0) errors.push({ line: li.line, file: li.file, message: 'MACRO without ENDM' });
       macros.set(name.toUpperCase(), { params, body });
       i = j;
       continue;
     }
-    items.push({ text: rawLines[i], line: i + 1, from: 0 });
+    items.push({ text: li.text, line: li.line, file: li.file, from: 0 });
   }
 
   // phase 0b: expand macros/REPT, then PROC/USES
   const expanded = [];
-  expandStream(items, { macros, equs: new Map(), unique: 0 }, expanded, 0, errors);
+  expandStream(items, { macros, equs: new Map(), unique: 0, active: new Set(), inMacro: 0 }, expanded, 0, errors);
   const stmts = procTransform(expanded, errors);
 
   // phase 0c: which labels are born inside RELOC regions? (syntactic — so
@@ -775,6 +1048,7 @@ export function assemble(source, { org = 0 } = {}) {
   const image = new Uint8Array(0x10000);
   let minA = Infinity, maxA = -1;
   const listing = [];
+  const defs = {}; // NAME → {file, line}: where each symbol was born (IDE nav)
   const fixups = [];
   let phaseFlagged = false;
 
@@ -791,9 +1065,9 @@ export function assemble(source, { org = 0 } = {}) {
       const p = cachedParse(s);
       const mn = p.mnemonic ? p.mnemonic.toUpperCase() : null;
       const lineErr = (m) =>
-        errors.push({ line: s.line, message: m + (s.from ? ` (expanded from line ${s.from})` : '') });
+        errors.push({ line: s.line, file: s.file ?? null, message: m + (s.from ? ` (expanded from line ${s.from})` : '') });
       const list = (bytes = []) => {
-        if (pass === 2) listing.push({ line: s.line, addr, bytes: Array.from(bytes), source: s.text });
+        if (pass === 2) listing.push({ line: s.line, file: s.file ?? null, addr, bytes: Array.from(bytes), source: s.text });
       };
       const stmtAddr = addr;
       const ctx = { pass, addr: stmtAddr, scope, symbols, usedSyms: null };
@@ -876,6 +1150,7 @@ export function assemble(source, { org = 0 } = {}) {
             let v = 0;
             try { v = evalExpr(p.args, ctx); } catch (e) { if (pass === 2) throw e; }
             symbols.set(key, v);
+            if (pass === 1) defs[key] = { file: s.file ?? null, line: s.line };
           }
           list();
           continue;
@@ -886,7 +1161,10 @@ export function assemble(source, { org = 0 } = {}) {
           // statement's size on pass 1 and turn one mistake into phase noise
           const key = fullName(p.label, scope);
           if (pass === 1 && symbols.has(key)) { s._dup = true; lineErr(`duplicate label '${p.label}'`); }
-          if (!s._dup) symbols.set(key, addr);
+          if (!s._dup) {
+            symbols.set(key, addr);
+            if (pass === 1) defs[key] = { file: s.file ?? null, line: s.line };
+          }
           if (!p.label.startsWith('.')) { scope = p.label.toUpperCase(); ctx.scope = scope; }
         }
         if (!mn) { list(); continue; }
@@ -897,7 +1175,7 @@ export function assemble(source, { org = 0 } = {}) {
             catch (e) { throw p1err('ORG: ' + e.message); }
           }
           if (s._org !== undefined) addr = s._org;
-          if (pass === 2) listing.push({ line: s.line, addr, bytes: [], source: s.text });
+          if (pass === 2) listing.push({ line: s.line, file: s.file ?? null, addr, bytes: [], source: s.text });
           continue;
         }
         if (mn === 'END') { list(); ended = true; continue; }
@@ -978,7 +1256,7 @@ export function assemble(source, { org = 0 } = {}) {
             if (a > maxA) maxA = a;
             a = (a + 1) & 0xffff;
           }
-          listing.push({ line: s.line, addr, bytes: Array.from(bytes), source: s.text });
+          listing.push({ line: s.line, file: s.file ?? null, addr, bytes: Array.from(bytes), source: s.text });
         }
         addr = (addr + bytes.length) & 0xffff;
       } catch (e) {
@@ -1003,5 +1281,6 @@ export function assemble(source, { org = 0 } = {}) {
     errors,
     warnings,
     fixups,
+    defs,
   };
 }

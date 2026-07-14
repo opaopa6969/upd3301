@@ -339,3 +339,191 @@ COUNT   EQU 10
 `);
   assert.equal(mem[0x8000] | (mem[0x8001] << 8), 89);
 });
+
+// ---- MACRO-80 parity (author request: "enough expressiveness to build USES
+// in userland") -----------------------------------------------------------------
+test('z80asm/m80: IRP iterates a <>-guarded list (pushall)', () => {
+  assert.deepEqual(bytesOf(`
+pushall MACRO regs
+        IRP r,<regs>
+        PUSH r
+        ENDM
+        ENDM
+        pushall <bc,de,hl>
+`), [0xc5, 0xd5, 0xe5]);
+});
+
+test('z80asm/m80: IRPC iterates characters, &param reaches into strings', () => {
+  assert.deepEqual(bytesOf(`
+        IRPC c,AB
+        DB '&c'
+        ENDM
+`), [0x41, 0x42]);
+});
+
+test('z80asm/m80: nested IF/ELSE/ENDIF and IFE', () => {
+  assert.deepEqual(bytesOf(`
+MODE    EQU 2
+        IF MODE
+          IFE MODE-2
+            DB 1
+          ELSE
+            DB 2
+          ENDIF
+        ELSE
+          DB 3
+        ENDIF
+`), [1]);
+});
+
+test('z80asm/m80: IFDEF sees EQUs and macros, IFNDEF the absence', () => {
+  assert.deepEqual(bytesOf(`
+X EQU 5
+m MACRO
+  ENDM
+        IFDEF X
+        DB 10
+        ENDIF
+        IFDEF m
+        DB 11
+        ENDIF
+        IFNDEF nothere
+        DB 12
+        ENDIF
+`), [10, 11, 12]);
+});
+
+test('z80asm/m80: IFB makes a variadic-style macro (acceptance)', () => {
+  assert.deepEqual(bytesOf(`
+emit    MACRO a,b
+        IFB <b>
+        DB a
+        ELSE
+        DB a,b
+        ENDIF
+        ENDM
+        emit 1
+        emit 2,3
+`), [1, 2, 3]);
+});
+
+test('z80asm/m80: IFIDN / IFDIF compare argument text', () => {
+  assert.deepEqual(bytesOf(`
+sel     MACRO x
+        IFIDN <x>,<hl>
+        DB 0AAh
+        ELSE
+        DB 0BBh
+        ENDIF
+        ENDM
+        sel hl
+        sel de
+`), [0xaa, 0xbb]);
+});
+
+test('z80asm/m80: EXITM bails out of the expansion from inside an IF (acceptance)', () => {
+  assert.deepEqual(bytesOf(`
+gen     MACRO n
+        DB 1
+        IF n
+        EXITM
+        ENDIF
+        DB 2
+        ENDM
+        gen 1
+        gen 0
+`), [1, 1, 2]);
+});
+
+test('z80asm/m80: &-pasting mints label&1, label&2 — and JR reaches them (acceptance)', () => {
+  const r = assemble(`
+mk      MACRO n
+label&n: DB n
+        ENDM
+        ORG 100h
+        mk 1
+        mk 2
+        JR label1
+`, { org: 0x100 });
+  assert.equal(r.errors.length, 0, JSON.stringify(r.errors));
+  assert.equal(r.symbols.LABEL1, 0x100);
+  assert.equal(r.symbols.LABEL2, 0x101);
+  assert.deepEqual([...r.bytes], [1, 2, 0x18, 0xfc]); // JR back to label1
+});
+
+test('z80asm/m80: LOCAL declarations get a fresh name per expansion (acceptance)', () => {
+  assert.deepEqual(bytesOf(`
+wait2   MACRO
+        LOCAL lp
+        LD B,2
+lp:     DJNZ lp
+        ENDM
+        wait2
+        wait2
+`), [0x06, 0x02, 0x10, 0xfe, 0x06, 0x02, 0x10, 0xfe]);
+});
+
+test('z80asm/m80: %expr passes the evaluated VALUE, not the text (acceptance)', () => {
+  assert.deepEqual(bytesOf(`
+val     MACRO v
+        DB v, v*2
+        ENDM
+N       EQU 4
+        val %(N*2+1)
+`), [9, 18]); // text-passing would make v*2 = (N*2+1)*2 = 18 too… prove it differently
+});
+
+test('z80asm/m80: %expr vs text-passing differ where precedence bites', () => {
+  // text: 1+2*2 = 5 / value: (1+2)=3 → 3*2 = 6
+  const text = bytesOf('m MACRO v\n DB v*2\n ENDM\n m 1+2');
+  const value = bytesOf('m MACRO v\n DB v*2\n ENDM\n m %(1+2)');
+  assert.deepEqual(text, [5]);
+  assert.deepEqual(value, [6]);
+});
+
+test('z80asm/m80: mnemonic shadowing, builtin resolution inside the shadow, PURGE', () => {
+  assert.deepEqual(bytesOf(`
+RET     MACRO
+        POP BC
+        RET             ; inside the shadow this is the BUILTIN (M80 rule)
+        ENDM
+        PUSH BC
+        RET             ; expands the macro
+        PURGE RET
+        RET             ; the builtin is back
+`), [0xc5, 0xc1, 0xc9, 0xc9]);
+});
+
+test('z80asm/m80: userland USES via RET-shadow equals PROC USES byte-for-byte (acceptance)', () => {
+  const viaProc = assemble(`
+f PROC USES BC,DE
+        LD BC,0
+        RET
+f ENDP
+`);
+  const viaShadow = assemble(`
+PROLOG  MACRO
+        PUSH BC
+        PUSH DE
+        ENDM
+RET     MACRO
+        POP DE
+        POP BC
+        RET
+        ENDM
+f:      PROLOG
+        LD BC,0
+        RET
+        PURGE RET
+`);
+  assert.equal(viaProc.errors.length, 0);
+  assert.equal(viaShadow.errors.length, 0);
+  assert.deepEqual([...viaShadow.bytes], [...viaProc.bytes]);
+});
+
+test('z80asm/m80: IF1/IF2 and forward refs in IF fail honestly', () => {
+  const r1 = assemble('IF1\nDB 1\nENDIF');
+  assert.match(r1.errors[0].message, /expands once/);
+  const r2 = assemble('IF future\nDB 1\nENDIF\nfuture EQU 1');
+  assert.match(r2.errors[0].message, /undefined symbol/);
+});
