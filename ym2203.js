@@ -23,7 +23,33 @@ export const SCHEMA_VERSION = 1;
 
 // ---- tables (built once, deterministic) ------------------------------------
 
-// 10-bit sine → attenuation, in the log domain like the real chip
+// The REAL OPN signal path — not a clean float sine. A quarter-wave LOG-SIN
+// table gives attenuation (in 1/256-of-an-octave units), the envelope and TL
+// add MORE attenuation in the same domain, and a 256-entry EXP table converts
+// the total back to a ~13-bit linear sample. That quantisation and the
+// mantissa/shift structure ARE the Yamaha FM character; interpolating a float
+// sine erases exactly the grit that makes it sound like silicon. (Corrected
+// after an expert ear pointed out the interpolation was "de-chipping" it.)
+const LOG_SIN = new Uint16Array(256); // quarter wave, attenuation units
+for (let i = 0; i < 256; i++) {
+  const s = Math.sin((i + 0.5) * Math.PI / 512);
+  LOG_SIN[i] = Math.round(-Math.log2(s) * 256) & 0xffff;
+}
+const EXP = new Uint16Array(256); // mantissa of 2^(-x); leading 1 added at use
+for (let i = 0; i < 256; i++) {
+  EXP[i] = Math.round((Math.pow(2, (255 - i) / 256) - 1) * 1024);
+}
+// attenuation (13-bit-ish) → signed linear ~[-8192, 8192]. The (mantissa +
+// implicit leading 1) << 2 puts a full-scale operator near 8192, i.e. a true
+// 13-bit output — so that when it modulates the next operator (mod >> 1) the
+// phase swings the several cycles the real chip does. Losing this bit is what
+// left the mids thin.
+function attenToLinear(att) {
+  if (att >= 0x1fff) return 0;
+  return ((EXP[att & 0xff] + 1024) << 2) >> (att >> 8);
+}
+
+// the "ideal" float sine — kept for A/B debugging (Ym2203 sineMode='ideal')
 const SIN_TAB = new Float32Array(1024);
 for (let i = 0; i < 1024; i++) SIN_TAB[i] = Math.sin((i + 0.5) * Math.PI * 2 / 1024);
 
@@ -92,6 +118,15 @@ export class Ym2203 {
     };
 
     // timers (counted in FM sample ticks: clock/72)
+    // signal-path options (for A/B diagnosis against real hardware):
+    //   sineMode 'accurate' = LOG-SIN/EXP quantised path (default, chip-like)
+    //            'ideal'    = clean float sine (modern soft-synth)
+    //   mute.fm / mute.ssg  = solo a source for separate recording
+    //   board = model the PC-8801mkIISR output stage (FM/SSG gains + AC-
+    //           coupling high-pass); false = raw digital sum, no filter
+    this.sineMode = 'accurate';
+    this.mute = { fm: false, ssg: false };
+    this.board = true;
     this._hpX = 0; this._hpY = 0; // output AC-coupling high-pass state
     this.timerA = 0; this.timerACount = 0; this.timerARun = false;
     this.timerB = 0; this.timerBCount = 0; this.timerBRun = false;
@@ -338,42 +373,44 @@ export class Ym2203 {
       if (op.phase < 0) op.phase += 1024;
     }
 
-    // modulation graph per algorithm (op indices 0..3 = OP1..OP4).
-    // MOD is the phase swing a full-scale modulator (±1) imparts, in sine-
-    // table units (1024 = one cycle). At 256 the modulation index tops out
-    // near 1.5 — thin, few harmonics, and layered pads sink out of the mix.
-    // The real OPN swings the phase several cycles; MOD = 1024 restores the
-    // richness the ear was missing.
-    const MOD = 4096; // full-scale modulator ≈ ±8 cycles of phase swing
-    // Linearly interpolate the sine table instead of truncating the phase.
-    // Truncation quantized every operator to 1024 steps, spraying aliasing
-    // harmonics up high — the "digital / hard-edged" character the ear
-    // flagged. Interpolation smooths that back toward analog silicon.
-    const s = (op, mod) => {
-      const ph = op.phase + mod;
-      const i0 = ph & 1023;
-      const frac = ph - Math.floor(ph);
-      const v = SIN_TAB[i0] + (SIN_TAB[(i0 + 1) & 1023] - SIN_TAB[i0]) * frac;
-      return v * this._gain(op.env + op.tl * 8);
-    };
+    // Operator output through the authentic LOG-SIN → EXP path. The phase
+    // (10-bit) plus the modulator's linear output (>>1, the chip's wiring)
+    // indexes the log-sin table; envelope+TL add attenuation in the same log
+    // domain; EXP converts to a signed ~13-bit sample. Modulation therefore
+    // lives in the LINEAR domain, not a float phase offset — this is the
+    // structure whose quantisation gives Yamaha FM its character.
+    const A = ch.alg;
+    const ideal = this.sineMode === 'ideal';
+    const s = ideal
+      ? (op, mod) => { // float-sine A/B mode (clean, "modern soft-synth")
+          const ph = op.phase + mod / 8; const i0 = ph & 1023;
+          return SIN_TAB[i0 | 0] * this._gain(op.env + op.tl * 8) * 8192;
+        }
+      : (op, mod) => {
+          const ph = ((op.phase | 0) + (mod >> 1)) & 0x3ff;
+          let idx = ph & 0xff;
+          if (ph & 0x100) idx ^= 0xff; // mirror in the 2nd/4th quarter
+          const att = LOG_SIN[idx] + ((op.env + op.tl * 8) << 2);
+          const lin = attenToLinear(att);
+          return (ph & 0x200) ? -lin : lin; // sign from the sine's lower half
+        };
 
-    const fb = ch.fb ? (ops[0].out + ops[0].prev) * (1 << ch.fb) / 32 : 0;
-    const o1 = s(ops[0], fb * MOD);
+    const fb = ch.fb ? (ops[0].out + ops[0].prev) >> (10 - ch.fb) : 0;
+    const o1 = s(ops[0], fb);
     ops[0].prev = ops[0].out; ops[0].out = o1;
 
-    const A = ch.alg;
     let o2, o3, o4;
-    if (A === 0) { o2 = s(ops[1], o1 * MOD); o3 = s(ops[2], o2 * MOD); o4 = s(ops[3], o3 * MOD); out = o4; }
-    else if (A === 1) { o2 = s(ops[1], 0); o3 = s(ops[2], (o1 + o2) * MOD); o4 = s(ops[3], o3 * MOD); out = o4; }
-    else if (A === 2) { o2 = s(ops[1], 0); o3 = s(ops[2], o2 * MOD); o4 = s(ops[3], (o1 + o3) * MOD); out = o4; }
-    else if (A === 3) { o2 = s(ops[1], o1 * MOD); o3 = s(ops[2], 0); o4 = s(ops[3], (o2 + o3) * MOD); out = o4; }
-    else if (A === 4) { o2 = s(ops[1], o1 * MOD); o3 = s(ops[2], 0); o4 = s(ops[3], o3 * MOD); out = o2 + o4; }
-    else if (A === 5) { o2 = s(ops[1], o1 * MOD); o3 = s(ops[2], o1 * MOD); o4 = s(ops[3], o1 * MOD); out = o2 + o3 + o4; }
-    else if (A === 6) { o2 = s(ops[1], o1 * MOD); o3 = s(ops[2], 0); o4 = s(ops[3], 0); out = o2 + o3 + o4; }
+    if (A === 0) { o2 = s(ops[1], o1); o3 = s(ops[2], o2); o4 = s(ops[3], o3); out = o4; }
+    else if (A === 1) { o2 = s(ops[1], 0); o3 = s(ops[2], o1 + o2); o4 = s(ops[3], o3); out = o4; }
+    else if (A === 2) { o2 = s(ops[1], 0); o3 = s(ops[2], o2); o4 = s(ops[3], o1 + o3); out = o4; }
+    else if (A === 3) { o2 = s(ops[1], o1); o3 = s(ops[2], 0); o4 = s(ops[3], o2 + o3); out = o4; }
+    else if (A === 4) { o2 = s(ops[1], o1); o3 = s(ops[2], 0); o4 = s(ops[3], o3); out = o2 + o4; }
+    else if (A === 5) { o2 = s(ops[1], o1); o3 = s(ops[2], o1); o4 = s(ops[3], o1); out = o2 + o3 + o4; }
+    else if (A === 6) { o2 = s(ops[1], o1); o3 = s(ops[2], 0); o4 = s(ops[3], 0); out = o2 + o3 + o4; }
     else { o2 = s(ops[1], 0); o3 = s(ops[2], 0); o4 = s(ops[3], 0); out = o1 + o2 + o3 + o4; }
 
     for (const op of ops) this._opTick(op);
-    return out / 3;
+    return out / 8192; // 13-bit linear per carrier → ~[-1, 1]
   }
 
   // Advance ONLY the timers by `ticks` FM ticks (clock/72). The machine
@@ -418,12 +455,16 @@ export class Ym2203 {
 
       this.ssgAcc += this.ssgStep;
       while (this.ssgAcc >= 1) { this.ssgAcc -= 1; this._ssgTick(); }
+      const ssg = this.mute.ssg ? 0 : this._ssgOut();
+      if (this.mute.fm) fm = 0;
 
-      // AC coupling: real PC-88 audio went through a coupling capacitor that
-      // rolled off the deep bass (~120 Hz). Modelling it with a one-pole
-      // high-pass removes the sub-bass shelf that was crowding out the mids
-      // and made the mix sound bottom-heavy / "ドンシャリ".
-      const raw = fm * 0.6 + this._ssgOut() * 0.42;
+      // PC-8801mkIISR output stage (separate from the chip core): the FM
+      // digital output and the three SSG analog outputs meet at a resistor
+      // mixer, then a coupling capacitor rolls off the deep bass (~120 Hz).
+      // Modelling the board — not the chip — is what removes the bottom-heavy
+      // "ドンシャリ" shelf. board=false gives the raw digital sum for A/B.
+      if (!this.board) { out[i] = Math.max(-1, Math.min(1, fm * 0.5 + ssg * 0.5)); continue; }
+      const raw = fm * 0.42 + ssg * 0.30;
       this._hpY = 0.985 * (this._hpY + raw - this._hpX);
       this._hpX = raw;
       out[i] = Math.max(-1, Math.min(1, this._hpY));
