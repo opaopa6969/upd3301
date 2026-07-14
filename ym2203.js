@@ -92,6 +92,7 @@ export class Ym2203 {
     };
 
     // timers (counted in FM sample ticks: clock/72)
+    this._hpX = 0; this._hpY = 0; // output AC-coupling high-pass state
     this.timerA = 0; this.timerACount = 0; this.timerARun = false;
     this.timerB = 0; this.timerBCount = 0; this.timerBRun = false;
     this.status = 0; // b0 timer A overflow, b1 timer B, b7 busy
@@ -262,7 +263,7 @@ export class Ym2203 {
       const vol = s.useEnv[c] ? s.envVol : s.vol[c];
       if (!vol) continue;
       // the AY's volume ladder is logarithmic, ~3 dB per step
-      sum += Math.pow(2, (vol - 15) / 2) / 3;
+      sum += Math.pow(2, (vol - 15) / 2) / 4.5;
     }
     return sum;
   }
@@ -282,9 +283,13 @@ export class Ym2203 {
   _opTick(op) {
     switch (op.state) {
       case ENV_ATTACK: {
-        // attack sweeps DOWN in attenuation, and much faster than a decay
+        // Real OPN attack is EXPONENTIAL: the step shrinks as the level
+        // approaches full, so the transient rounds off instead of snapping
+        // on. A linear attack is what made the lead sound hard and modern —
+        // the softened curve is closer to the original's gentle onset.
         if (op.ar >= 31) { op.env = 0; op.state = ENV_DECAY; return; }
-        op.env -= this._egInc(op.ar, op.ks) * 12;
+        const rate = this._egInc(op.ar, op.ks) * 12;
+        op.env -= rate * (op.env / MAX_ATT + 0.02);
         if (op.env <= 0) { op.env = 0; op.state = ENV_DECAY; }
         return;
       }
@@ -340,9 +345,16 @@ export class Ym2203 {
     // The real OPN swings the phase several cycles; MOD = 1024 restores the
     // richness the ear was missing.
     const MOD = 4096; // full-scale modulator ≈ ±8 cycles of phase swing
+    // Linearly interpolate the sine table instead of truncating the phase.
+    // Truncation quantized every operator to 1024 steps, spraying aliasing
+    // harmonics up high — the "digital / hard-edged" character the ear
+    // flagged. Interpolation smooths that back toward analog silicon.
     const s = (op, mod) => {
-      const idx = (op.phase + mod) & 1023;
-      return SIN_TAB[idx | 0] * this._gain(op.env + op.tl * 8);
+      const ph = op.phase + mod;
+      const i0 = ph & 1023;
+      const frac = ph - Math.floor(ph);
+      const v = SIN_TAB[i0] + (SIN_TAB[(i0 + 1) & 1023] - SIN_TAB[i0]) * frac;
+      return v * this._gain(op.env + op.tl * 8);
     };
 
     const fb = ch.fb ? (ops[0].out + ops[0].prev) * (1 << ch.fb) / 32 : 0;
@@ -407,7 +419,14 @@ export class Ym2203 {
       this.ssgAcc += this.ssgStep;
       while (this.ssgAcc >= 1) { this.ssgAcc -= 1; this._ssgTick(); }
 
-      out[i] = Math.max(-1, Math.min(1, fm * 0.6 + this._ssgOut() * 0.5));
+      // AC coupling: real PC-88 audio went through a coupling capacitor that
+      // rolled off the deep bass (~120 Hz). Modelling it with a one-pole
+      // high-pass removes the sub-bass shelf that was crowding out the mids
+      // and made the mix sound bottom-heavy / "ドンシャリ".
+      const raw = fm * 0.6 + this._ssgOut() * 0.42;
+      this._hpY = 0.985 * (this._hpY + raw - this._hpX);
+      this._hpX = raw;
+      out[i] = Math.max(-1, Math.min(1, this._hpY));
     }
     return out;
   }
