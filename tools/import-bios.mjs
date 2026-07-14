@@ -53,8 +53,15 @@ const BOOTS = new Set(['8001mkII/N80_2.ROM', '8801MC/n80.rom', '8801mkIIFR/n80.r
 
 // manifest: pick a bootable default (PC-8001mkII N-BASIC works today)
 const pick = (m, f) => (machines.find((x) => x.name === m)?.files.includes(f) ? `${m}/${f}` : null);
+// A dir with the WHOLE split N88 set (main + 4 ext banks + disk sub-CPU ROM)
+// can boot game disks. The demo auto-boots N88 from the first such dir it finds
+// (manifest top-level "n88": "<dir>"), no file-picker needed on localhost.
+const hasSplitN88 = (m) => ['n88.rom', 'n88_0.rom', 'n88_1.rom', 'n88_2.rom', 'n88_3.rom', 'disk.rom']
+  .every((f) => m.files.includes(f));
+const n88dir = machines.find(hasSplitN88)?.name ?? null;
 const manifest = {
   default: pick('8001mkII', 'N80_2.ROM') ?? pick('basic-set', 'N80.ROM'),
+  n88: n88dir, // dir with the split N88 BIOS set → demo auto-boots N88 (disk-capable)
   font: pick('basic-set', 'font.rom'),
   machines: machines.map((m) => ({
     name: m.name,

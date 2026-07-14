@@ -140,12 +140,43 @@ async function loadMachine(entry) {
     boot();
   } catch (e) { guts.textContent = String(e.message); }
 }
+// Dev convenience: pull a WHOLE split N88 BIOS set (n88.rom + n88_0..3.rom +
+// disk.rom, optional n80.rom) straight from a served roms/<dir>/ so a localhost
+// with the ROMs in place boots the 8801 in N88 mode — disk-capable — with no
+// file-picker dance. The public (ROM-less) deploy has no manifest, so this
+// never runs there. Persists into IndexedDB too, so later offline visits boot.
+async function autoLoad88(dir) {
+  try {
+    const main = await fetchRom(`${dir}/n88.rom`);
+    const sub = await fetchRom(`${dir}/disk.rom`);
+    const ext = new Uint8Array(0x8000);
+    for (let i = 0; i < 4; i++) ext.set((await fetchRom(`${dir}/n88_${i}.rom`)).subarray(0, 0x2000), i * 0x2000);
+    rom88.main = main; rom88.sub = sub; rom88.ext = ext;
+    try { rom88.n80 = await fetchRom(`${dir}/n80.rom`); } catch { /* n80 optional */ }
+    try { // remember for offline / next visit (same roles as the file picker)
+      await putRom(R88.main, 'n88.rom', main);
+      await putRom(R88.sub, 'disk.rom', sub);
+      for (let i = 0; i < 4; i++) await putRom(R88.ext[i], `n88_${i}.rom`, ext.subarray(i * 0x2000, (i + 1) * 0x2000));
+      if (rom88.n80) await putRom(R88.n80, 'n80.rom', rom88.n80);
+    } catch { /* IndexedDB optional */ }
+    return has88Set();
+  } catch { return false; }
+}
 async function autoLoad() {
   try {
     const r = await fetch('../roms/manifest.json');
     if (!r.ok) return restoreFromStore(); // no served ROMs → try this browser's saved ones
     manifest = await r.json();
   } catch { return restoreFromStore(); }
+  // a served split N88 set (manifest "n88": "<dir>") wins the auto-boot: it is
+  // the only mode that can boot game disks. The N80 list is still built below.
+  let booted88 = false;
+  if (manifest.n88 && await autoLoad88(manifest.n88)) {
+    guts.textContent = t('保存済みPC-8801 BIOSからN88起動');
+    refreshStore();
+    switchMode('n88');
+    booted88 = true;
+  }
   const sel = $('mach');
   // only machines whose N-BASIC image is verified to boot (the rest have
   // ROM layouts we haven't cracked — see issue #4)
@@ -161,7 +192,9 @@ async function autoLoad() {
   if (def) {
     sel.value = def.name;
     if (manifest.font && !def.font) { try { applyFontRom(cgrom, await fetchRom(manifest.font)); } catch {} }
-    loadMachine(def);
+    // don't clobber an N88 auto-boot with the N80 default — the dropdown still
+    // lets the user switch to an N80 machine on demand.
+    if (!booted88) loadMachine(def);
   }
 }
 // The CRT's control surface is a component now (demo/crt-panel.js) — the
