@@ -71,10 +71,10 @@
 <canvas id="keys" width="960" height="70"></canvas>
 <div id="meters"></div>
 
-<audio id="au" src="feena-v6.mp3?v=18" preload="auto"></audio>
+<audio id="au" src="feena-v6.mp3?v=19" preload="auto"></audio>
 
 <script type="module">
-import { Ym2203 } from '../ym2203.js?v=18'; // ?v= busts the browser module cache on each chip change
+import { Ym2203 } from '../ym2203.js?v=19'; // ?v= busts the browser module cache on each chip change
 
 const COLORS = ['#ff5a5a','#ffb14a','#ffe14a','#5ad1ff','#7affb0','#c68aff'];
 const NAMES = ['FM0','FM1','FM2','SSG0','SSG1','SSG2'];
@@ -82,7 +82,7 @@ const $ = (id) => document.getElementById(id);
 const au = $('au'), roll = $('roll'), keys = $('keys');
 const rc = roll.getContext('2d'), kc = keys.getContext('2d');
 
-const VER = 18; // cache-bust version for assets
+const VER = 19; // cache-bust version for assets
 // Each game = a captured register-write log (live engine) + note trace (display)
 // + a pre-rendered mp3. The player driver's data is untouched; only the chip
 // rendering differs live.
@@ -91,8 +91,11 @@ const GAMES = [
     note: 'Ys I オープニングデモ（約6分・OPN版FM3声）。③で曲調が変わる',
     jumps: [[5, '① Feena 0:05'], [37, '② 静かな 0:37'], [90, '③ 別曲 1:30'], [125, '④ 2:05'], [200, '⑤ 3:20'], [280, '⑥ 4:40']] },
   { id: 'ys2', name: 'Ys II — オープニング', regs: 'ys2-regs.json', trace: 'ys2-trace.json', mp3: 'ys2-v1.mp3',
-    note: 'Ys II オープニングデモ（約5分・OPN版FM3声）。ブート後10秒頃から演奏',
+    note: 'Ys II オープニングデモ（約5分・OPN版FM3声・末尾フェード）。ブート後10秒頃から演奏',
     jumps: [[10, '① 頭 0:10'], [36, '② 0:36'], [90, '③ 1:30'], [160, '④ 2:40'], [240, '⑤ 4:00']] },
+  { id: 'sor', name: 'ソーサリアン — MUSIC (全曲)', regs: 'sor-regs.json', trace: 'sor-trace.json', mp3: 'sor-v1.mp3',
+    note: 'ソーサリアンMUSICディスクの自動演奏（約6分・OPN版・末尾フェード）。曲は内部ループするので区切りはジャンプ点で',
+    jumps: [[3, '① 曲1 0:03'], [67, '② 曲2 1:07'], [190, '③ 3:10'], [300, '④ 5:00']] },
 ];
 let trace = null, fps = 60, secs = 200, regs = null, curGame = GAMES[0];
 
