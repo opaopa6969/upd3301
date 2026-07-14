@@ -96,7 +96,11 @@ export class Pc8801Machine {
     this.intMaskBits = 0;
     this.intPending = 0; // bit per source number
 
-    this._opnCyc = 0; // OPN-timer cycle accumulator
+    this._opnCyc = 0; // OPN-timer cycle accumulator (in real master clocks)
+    this._opnIrqPrev = false; // rising-edge detect for the SOUND IRQ
+    // the OPN runs at full clock; the CPU budget is dmaSteal-reduced. Scale
+    // CPU cycles → real clocks so the sound-chip timer keeps real time.
+    this._opnClkPerCpu = (clockHz / frameHz) / (Math.round(clockHz / frameHz * (1 - dmaSteal)));
     this._pioLast = -1;
     this._pioPoll = 0;
     this.keys = new Uint8Array(16).fill(0xff);
@@ -343,15 +347,21 @@ export class Pc8801Machine {
       while (this.tInFrame < target) {
         const cyc = this.cpu.step();
         this.tInFrame += cyc;
-        // OPN timers run on the same clock; one FM tick = 72 master clocks.
-        // Advancing them here (not in render) lets the SOUND IRQ fire at the
-        // music tempo mid-frame, which is what makes the melody voices sound.
-        this._opnCyc += cyc;
+        // OPN timers run on the chip's OWN clock at full speed — the ~30% DMA
+        // bus-steal slows the CPU, not the sound chip. Advancing the timer by
+        // raw CPU cycles ran it at 0.7× and dragged the tempo; scale back up
+        // to real clock. And deliver the SOUND IRQ on the RISING edge only —
+        // holding intPending high while the flag stood set re-fired the
+        // handler many times per period, speeding the music the other way.
+        // (Two errors that half-cancelled; the ear/FFT still caught ~1.2×.)
+        this._opnCyc += cyc * this._opnClkPerCpu;
         if (this._opnCyc >= 72) {
           const t = (this._opnCyc / 72) | 0;
           this._opnCyc -= t * 72;
           this.opn.tickTimers(t);
-          if (this.opn.irq) this.intPending |= 1 << 4; // SOUND, source 4 (level 5)
+          const irqNow = this.opn.irq;
+          if (irqNow && !this._opnIrqPrev) this.intPending |= 1 << 4; // SOUND, src 4
+          this._opnIrqPrev = irqNow;
         }
         if (this.tInFrame >= nextTimer) {
           if (this.intMaskBits & 1) this.intPending |= 1 << 2; // RTC, source 2
