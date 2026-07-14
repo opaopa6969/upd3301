@@ -96,6 +96,7 @@ export class Pc8801Machine {
     this.intMaskBits = 0;
     this.intPending = 0; // bit per source number
 
+    this._opnCyc = 0; // OPN-timer cycle accumulator
     this._pioLast = -1;
     this._pioPoll = 0;
     this.keys = new Uint8Array(16).fill(0xff);
@@ -340,7 +341,18 @@ export class Pc8801Machine {
       const target = Math.min(this.frameT, this.tInFrame + SLICE);
       const before = this.tInFrame;
       while (this.tInFrame < target) {
-        this.tInFrame += this.cpu.step();
+        const cyc = this.cpu.step();
+        this.tInFrame += cyc;
+        // OPN timers run on the same clock; one FM tick = 72 master clocks.
+        // Advancing them here (not in render) lets the SOUND IRQ fire at the
+        // music tempo mid-frame, which is what makes the melody voices sound.
+        this._opnCyc += cyc;
+        if (this._opnCyc >= 72) {
+          const t = (this._opnCyc / 72) | 0;
+          this._opnCyc -= t * 72;
+          this.opn.tickTimers(t);
+          if (this.opn.irq) this.intPending |= 1 << 4; // SOUND, source 4 (level 5)
+        }
         if (this.tInFrame >= nextTimer) {
           if (this.intMaskBits & 1) this.intPending |= 1 << 2; // RTC, source 2
           nextTimer += timerPeriod;
@@ -357,7 +369,6 @@ export class Pc8801Machine {
     this.tInFrame -= this.frameT;
     this.crtc.stepFrame();
     if (this.intMaskBits & 2) this.intPending |= 1 << 1; // VSYNC, source 1
-    if (this.opn.irq) this.intPending |= 1 << 4; // OPN timers, source 4 (level 5)
     this.frame++;
     return this;
   }

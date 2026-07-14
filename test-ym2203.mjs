@@ -84,7 +84,7 @@ test('ym2203: timer A raises the status flag and the IRQ line', () => {
   const w = (a, v) => { y.writeAddr(a); y.writeData(v); };
   w(0x24, 0); w(0x25, 0); // timer A = 0 → fastest
   w(0x27, 0x01 | 0x04); // load + enable + IRQ enable A
-  y.render(new Float32Array(4800));
+  y.tickTimers(2048); // timers advance in the emulation loop, not render()
   assert.ok(y.irq, 'timer A pulled IRQ');
   assert.ok(y.status & 1, 'status flag A set');
 });

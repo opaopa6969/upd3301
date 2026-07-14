@@ -352,7 +352,12 @@ export class Ym2203 {
     return out / 4;
   }
 
-  _timers(ticks) {
+  // Advance ONLY the timers by `ticks` FM ticks (clock/72). The machine
+  // drives this from the CPU loop so the SOUND IRQ fires mid-frame at the
+  // music tempo — NOT once per video frame. (Doing it in render() instead
+  // caps every music driver at 60 Hz: half-tempo, melody notes dropped,
+  // just the slow bass surviving. Ask the ear that caught it.)
+  tickTimers(ticks) {
     if (this.timerARun) {
       this.timerACount -= ticks;
       while (this.timerACount <= 0) {
@@ -379,7 +384,6 @@ export class Ym2203 {
       while (this.fmAcc >= 1) { this.fmAcc -= 1; fmTicks++; }
       let fm = 0;
       if (fmTicks > 0) {
-        this._timers(fmTicks);
         for (let t = 0; t < fmTicks; t++) {
           fm = 0;
           for (const ch of this.ch) fm += this._fmChannel(ch);
