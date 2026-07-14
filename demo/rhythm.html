@@ -34,7 +34,7 @@
 </head>
 <body>
 <h1>PC-8031 DRUM MACHINE — ディスクユニットで刻め</h1>
-<p class="note">▶ <a href="./index.html" style="color:#8fd">CRT物理デモ</a> · <a href="./terminal.html" style="color:#8fd">ターミナル</a> · <a href="./video.html" style="color:#8fd">動画セミグラ</a></p>
+<p class="note" id="navrow"></p>
 <div class="row">
   <button id="bplay">▶ PLAY</button>
   <label>BPM <input type="range" id="kbpm" min="60" max="200" step="1" value="112"> <span id="bpmv">112</span></label>
@@ -223,6 +223,8 @@ document.getElementById('bclear').onclick = () => loadPattern(['', '', '', '']);
 const bpmv = document.getElementById('bpmv');
 document.getElementById('kbpm').oninput = (e) => { bpm = +e.target.value; bpmv.textContent = bpm; };
 applyI18n();
+import { mountNav } from './nav.js';
+mountNav('rhythm.html');
 
 document.addEventListener('keydown', (e) => {
   const i = TRACKS.findIndex((t) => t.key === e.key.toLowerCase());

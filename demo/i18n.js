@@ -197,6 +197,7 @@ const DICT = {
   '⚠ 間接フローあり — 解析は不完全': '⚠ indirect flow — analysis incomplete',
   // tour / help chrome (tour.js)
   '次へ': 'Next',
+  'PC-8001/8801実機': 'PC-8001/8801 machine',
   '▶ サンプル': '▶ Sample',
   'フリッカー': 'Flicker',
   '前へ': 'Back',

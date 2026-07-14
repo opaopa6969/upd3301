@@ -33,7 +33,7 @@
 </head>
 <body>
 <h1>μPD3301 CRTC + μPD8257 DMAC — PC-8001 text pipeline emulator</h1>
-<p class="note">▶ <a href="./terminal.html" style="color:#8fd">ターミナルデモ</a> · <a href="./video.html" style="color:#8fd">動画セミグラデモ</a> · <a href="./rhythm.html" style="color:#8fd">PC-8031ドラムマシン</a> · <a href="./crt-player.html" style="color:#8fd">CRT動画プレイヤー</a> · <a href="./machine.html" style="color:#8fd">PC-8001実機</a> · <a href="https://github.com/opaopa6969/upd3301" style="color:#8fd">repo</a></p>
+<p class="note" id="navrow"></p>
 <div id="stage"><canvas id="crt" width="640" height="400"></canvas></div>
 <div class="row"><span class="lbl">表示:</span>
   <button id="bfull">⛶ 全画面</button>
@@ -98,6 +98,8 @@
 <script type="module">
 import { applyI18n, t } from './i18n.js';
 applyI18n();
+import { mountNav } from './nav.js';
+mountNav('index.html');
 import { Pc8001TextSystem, PC8001 } from '../pc8001.js';
 import { CrtPhosphor, PHOSPHORS, collapseScan, rollScan } from '../crt.js';
 import { CrtTube } from '../tube.js';

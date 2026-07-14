@@ -40,7 +40,7 @@
 </head>
 <body>
 <h1>CRT VIDEO PLAYER — 手持ちの動画をブラウン管で観る</h1>
-<p class="note">▶ <a href="./index.html" style="color:#8fd">CRT物理デモ</a> · <a href="./video.html" style="color:#8fd">動画セミグラ</a> · <a href="./terminal.html" style="color:#8fd">ターミナル</a> · <a href="./rhythm.html" style="color:#8fd">ドラムマシン</a></p>
+<p class="note" id="navrow"></p>
 <div id="stage">
   <canvas id="crt" width="640" height="480"></canvas>
   <div id="vbar">
@@ -102,6 +102,8 @@
 <script type="module">
 import { applyI18n, t } from './i18n.js';
 applyI18n();
+import { mountNav } from './nav.js';
+mountNav('crt-player.html');
 import { CrtPhosphor, PHOSPHORS, rollScan } from '../crt.js';
 import { CrtTube } from '../tube.js';
 

@@ -30,7 +30,7 @@
 </head>
 <body>
 <h1>PC-8001 — Z80 + N-BASIC ROM + μPD8257 + μPD3301（フルマシン）</h1>
-<p class="note">▶ <a href="./index.html" style="color:#8fd">CRT物理デモ</a> · <a href="./terminal.html" style="color:#8fd">ターミナル</a> · <a href="./video.html" style="color:#8fd">動画セミグラ</a> · <a href="./crt-player.html" style="color:#8fd">CRT動画プレイヤー</a></p>
+<p class="note" id="navrow"></p>
 <div id="stage"><canvas id="crt" tabindex="0" width="640" height="400"></canvas></div>
 <div class="row">
   <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
@@ -60,6 +60,8 @@
 <script type="module">
 import { applyI18n, t } from './i18n.js';
 applyI18n();
+import { mountNav } from './nav.js';
+mountNav('machine.html');
 import { Pc8001Machine } from '../machine.js';
 import { Pc8801Machine } from '../machine88.js';
 import { mountCrtPanel } from './crt-panel.js';

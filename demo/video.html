@@ -40,7 +40,7 @@
 </head>
 <body>
 <h1>動画 → セミグラフィック（失われた技術で映像を観る）</h1>
-<p class="note">▶ <a href="./index.html" style="color:#8fd">CRT物理デモ</a> · <a href="./crt-player.html" style="color:#8fd">CRT動画プレイヤー</a> · <a href="./terminal.html" style="color:#8fd">ターミナル</a> · <a href="./rhythm.html" style="color:#8fd">ドラムマシン</a></p>
+<p class="note" id="navrow"></p>
 <div id="stage">
   <canvas id="crt" width="1280" height="800"></canvas>
   <div id="vbar">
@@ -123,6 +123,8 @@
 <script type="module">
 import { applyI18n, t } from './i18n.js';
 applyI18n();
+import { mountNav } from './nav.js';
+mountNav('video.html');
 import { Terminal } from '../term.js';
 import { rgbaToSemigraphic, rgbaToLineArt, analyzePc98, renderPc98Phase, analyzeFullColor, renderFullColorPhase } from '../semivideo.js';
 import { ATTR } from '../pc8001.js';

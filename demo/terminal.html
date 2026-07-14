@@ -27,7 +27,7 @@
 </head>
 <body>
 <h1>μPD3301 terminal — ANSIエスケープ → アトリビュートペア変換層</h1>
-<p class="note">▶ <a href="./index.html" style="color:#8fd">CRT物理デモ</a> · <a href="./video.html" style="color:#8fd">動画セミグラデモ</a></p>
+<p class="note" id="navrow"></p>
 <canvas id="crt" tabindex="0" width="800" height="480"></canvas>
 <div class="row"><span class="lbl">モード:</span>
   <button id="gex" class="on">EX 100×30 (全桁アトリビュート)</button>
@@ -48,6 +48,8 @@
 <script type="module">
 import { applyI18n, t } from './i18n.js';
 applyI18n();
+import { mountNav } from './nav.js';
+mountNav('terminal.html');
 import { Terminal } from '../term.js';
 import { buildFont } from './font.js';
 
