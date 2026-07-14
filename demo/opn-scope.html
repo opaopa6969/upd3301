@@ -42,6 +42,13 @@
   <span class="legend" id="srcName">— 演奏データ(ノート表示)は共通。教師を鳴らせば「原曲を聴きながら、うちのどの音が弱いか」を指せる</span>
 </div>
 <div class="row">
+  <span class="legend">🔧 シンク調整:</span>
+  <input type="range" id="sync" min="-8" max="8" step="0.05" value="0" style="width:220px;accent-color:#4a8">
+  <span class="legend" id="syncLbl">0.00s</span>
+  <button id="syncAuto">教師に合わせる(-5.85s)</button>
+  <span class="legend">うちの音v6は0でぴったり。教師mp3はブート無音が無いので約-5.85s</span>
+</div>
+<div class="row">
   <span class="legend">
     <span class="sw" style="background:#ff5a5a"></span>FM0
     <span class="sw" style="background:#ffb14a"></span>FM1
@@ -133,14 +140,15 @@ function drawKeys(frame) {
 function frameAt(tSec) { return trace ? trace.frames[Math.min(trace.frames.length - 1, Math.max(0, Math.floor(tSec * fps)))] : null; }
 function fmt(s) { const m = Math.floor(s / 60); const ss = Math.floor(s % 60); return `${m}:${ss.toString().padStart(2, '0')}`; }
 
+let syncOffset = 0; // seconds added to audio time when reading the trace
 function tick() {
-  const t = au.currentTime;
+  const t = au.currentTime + syncOffset;
   drawRollWindow(t);
   const fr = frameAt(t);
   drawKeys(fr);
   if (fr) for (let v = 0; v < 6; v++) { const lvl = fr[v * 2 + 1] / 99; meters[v].style.height = (lvl * 100) + '%'; }
-  $('time').textContent = `${fmt(t)} / ${fmt(au.duration || secs)}`;
-  if (!au.paused) $('seek').value = Math.round((t / (au.duration || secs)) * 1000);
+  $('time').textContent = `${fmt(au.currentTime)} / ${fmt(au.duration || secs)}`;
+  if (!au.paused) $('seek').value = Math.round((au.currentTime / (au.duration || secs)) * 1000);
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
@@ -161,9 +169,11 @@ $('srcMine').onclick = () => {
 $('srcFile').onchange = (e) => {
   const f = e.target.files[0]; if (!f) return;
   au.pause(); au.src = URL.createObjectURL(f); au.currentTime = 0;
-  $('srcName').textContent = '📂 ' + f.name + ' — 頭出しがずれたらシークで合わせて';
+  $('srcName').textContent = '📂 ' + f.name + ' — ずれたら🔧シンク調整で合わせて';
   $('srcMine').classList.remove('on'); $('play').textContent = '▶ 再生'; $('play').classList.remove('on');
 };
+$('sync').oninput = (e) => { syncOffset = +e.target.value; $('syncLbl').textContent = syncOffset.toFixed(2) + 's'; };
+$('syncAuto').onclick = () => { syncOffset = -5.85; $('sync').value = -5.85; $('syncLbl').textContent = '-5.85s'; };
 </script>
 </body>
 </html>
