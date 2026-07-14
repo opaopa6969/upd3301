@@ -57,6 +57,7 @@
   <input type="file" id="file" accept="video/*">
   <button id="bsample">▶ サンプル</button>
   <button id="bcam">Webカメラ</button>
+  <button id="bshare">🖥 画面/タブ共有</button>
   <button id="brec">⏺ 録画</button>
 </div>
 <div class="row"><span class="lbl">モード:</span>
@@ -385,6 +386,19 @@ $('bsample').onclick = () => {
   video.src = 'sample.mp4';
   video.load();
   tryPlay();
+};
+$('bshare').onclick = async () => {
+  // YouTube and friends: play the video in another tab, share that tab
+  // here, and the frames flow through the same pipeline as a local file.
+  // (Tick "share tab audio" in the picker to bring the sound along.
+  // DRM'd streams arrive as black frames — that's the DRM, not us.)
+  try {
+    video.removeAttribute('src');
+    video.srcObject = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: 30 }, audio: true,
+    });
+    tryPlay();
+  } catch (err) { say('share: ' + err.message); }
 };
 $('bcam').onclick = async () => {
   try {
