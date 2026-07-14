@@ -91,7 +91,7 @@ class Operator {
   }
 }
 
-class FmChannel {
+export class FmChannel {
   constructor() {
     this.ops = [new Operator(), new Operator(), new Operator(), new Operator()];
     this.alg = 0; this.fb = 0;
@@ -141,6 +141,7 @@ export class Ym2203 {
     this.mute = { fm: false, ssg: false };
     // per-voice mute for stem rendering: [FM0,FM1,FM2, SSG0,SSG1,SSG2]
     this.chMute = [false, false, false, false, false, false];
+    this.ssgMuteBase = 3; // chMute index where SSG0 starts (OPNA overrides to 6)
     this.board = true;
     this._hpX = 0; this._hpY = 0; // output AC-coupling high-pass state
     // anti-aliased (2×) soft-saturation: a real analog amp saturates the
@@ -214,23 +215,29 @@ export class Ym2203 {
       this.timerARun = runA; this.timerBRun = runB;
       return;
     }
-    if (a === 0x28) { // key on/off
-      const c = v & 3;
-      if (c > 2) return;
-      const ch = this.ch[c];
-      for (let i = 0; i < 4; i++) {
-        const on = (v & (0x10 << i)) !== 0;
-        this._key(ch.ops[i], on);
-      }
-      ch.keyOn = v >> 4;
-      return;
-    }
+    if (a === 0x28) return this._keyReg(v); // key on/off
 
     const c = a & 3;
     if (c > 2) return;
-    const ch = this.ch[c];
-    const slot = [0, 2, 1, 3][(a >> 2) & 3]; // register order is 1,3,2,4
+    this._writeFm(c, a, v);
+  }
 
+  // key-on/off register ($28). OPN: bits0-1 = channel (0-2). Subclasses (OPNA)
+  // override to honour the group bit for FM4-6.
+  _keyReg(v) {
+    const c = v & 3;
+    if (c > 2) return;
+    const ch = this.ch[c];
+    for (let i = 0; i < 4; i++) this._key(ch.ops[i], (v & (0x10 << i)) !== 0);
+    ch.keyOn = v >> 4;
+  }
+
+  // FM operator/channel register write for channel `ci`, register `a` ($30-$B6).
+  // The $00-$B6 layout is identical for the OPNA second bank (FM4-6), so the
+  // OPNA reuses this with ci = 3..5.
+  _writeFm(ci, a, v) {
+    const ch = this.ch[ci];
+    const slot = [0, 2, 1, 3][(a >> 2) & 3]; // register order is 1,3,2,4
     switch (a & 0xf0) {
       case 0x30: { const o = ch.ops[slot]; o.dt = (v >> 4) & 7; o.mul = MUL[v & 15]; return; }
       case 0x40: ch.ops[slot].tl = v & 0x7f; return;
@@ -345,7 +352,7 @@ export class Ym2203 {
     const s = this.ssg;
     let sum = 0;
     for (let c = 0; c < 3; c++) {
-      if (this.chMute[3 + c]) continue; // SSG0..2 → chMute[3..5] (state still advances in _ssgTick)
+      if (this.chMute[this.ssgMuteBase + c]) continue; // SSG mute (base 3 on OPN, 6 on OPNA)
       const tone = s.toneOff[c] ? 1 : (s.sign[c] > 0 ? 1 : 0);
       const noise = s.noiseOff[c] ? 1 : s.noiseBit;
       if (!(tone & noise)) continue;
