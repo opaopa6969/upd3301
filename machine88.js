@@ -26,6 +26,7 @@ import { I8255, crossWire } from './i8255.js';
 import { Pc80s31 } from './pc80s31.js';
 import { snapObj, restoreObj } from './snap.js';
 import { Ym2203 } from './ym2203.js';
+import { Ym2608 } from './ym2608.js';
 
 export const SCHEMA_VERSION = 1;
 
@@ -34,7 +35,7 @@ const GVRAM_SIZE = 0x4000; // 16KB per plane, window at C000-FFFF
 export class Pc8801Machine {
   constructor({
     main, ext = null, n80 = null, sub = null, mode = 'n88',
-    frameHz = 60, clockHz = 3_993_600, dmaSteal = 0.3,
+    frameHz = 60, clockHz = 3_993_600, dmaSteal = 0.3, sb2 = false,
   } = {}) {
     if (!main || main.length < 0x8000) throw new Error('need a 32KB N88 main ROM');
     this.romMain = main;
@@ -114,6 +115,10 @@ export class Pc8801Machine {
     // the μPD8214's SOUND source (number 4, level 5) — the music driver's
     // clock. Registers in, samples out; the machine only carries it.
     this.opn = new Ym2203({ clockHz, sampleRate: 48000 });
+    // Sound Board II (OPNA) — optional, at ports A8h-ABh. Default off so a
+    // plain machine looks driveless-OPN to the game (the empirically-observed
+    // fallback). Enable to iterate SB2 detection / capture OPNA arrangements.
+    this.opna = sb2 ? new Ym2608({ clockHz, sampleRate: 48000 }) : null;
     this.crtc = new Upd3301({ frameHz, drq: (buf) => this.dmac.drqPull(2, buf) });
     this.dmac = new Upd8257({ readMemory: (a) => this.ram[a & 0xffff] });
     this.width80 = true;
@@ -226,6 +231,12 @@ export class Pc8801Machine {
     if (port >= 0x60 && port <= 0x68) return this.dmac.readPort(port - 0x60);
     if (port === 0x44) return this.opn.readStatus(); // OPN status (timer flags)
     if (port === 0x45) return this.opn.reg[this.opn.addr];
+    if (this.opna) { // Sound Board II (OPNA) at A8h-ABh
+      if (port === 0xa8) return this.opna.readStatus();
+      if (port === 0xa9) return this.opna.reg[this.opna.addr];
+      if (port === 0xaa) return this.opna.readStatus();
+      if (port === 0xab) return this.opna.reg1[this.opna.addr1];
+    }
     if (port === 0xe2 || port === 0xe3) return 0xff; // EMM
     // FCh-FFh: the main half of the 8255 pair to the disk sub-system. With
     // no sub board the inputs float high and the boot ROM's BC×D timeout
@@ -266,6 +277,10 @@ export class Pc8801Machine {
         return;
       case 0x44: this.opn.writeAddr(v); return; // OPN register select
       case 0x45: this.opn.writeData(v); return; // OPN register data
+      case 0xa8: if (this.opna) this.opna.writeAddr(v); return;  // OPNA bank0 addr
+      case 0xa9: if (this.opna) this.opna.writeData(v); return;  // OPNA bank0 data
+      case 0xaa: if (this.opna) this.opna.writeAddr1(v); return; // OPNA bank1 addr
+      case 0xab: if (this.opna) this.opna.writeData1(v); return; // OPNA bank1 data
       case 0x34: this._alu1 = v; return; // ALU op per plane
       case 0x35: this._alu2 = v; return; // ALU mode / compare colour / enable
       case 0x5c: this.gvramWindow = 0; return; // plane B into C000
@@ -359,7 +374,8 @@ export class Pc8801Machine {
           const t = (this._opnCyc / 72) | 0;
           this._opnCyc -= t * 72;
           this.opn.tickTimers(t);
-          const irqNow = this.opn.irq;
+          if (this.opna) this.opna.tickTimers(t); // SB2 shares the SOUND IRQ line
+          const irqNow = this.opn.irq || (this.opna && this.opna.irq);
           if (irqNow && !this._opnIrqPrev) this.intPending |= 1 << 4; // SOUND, src 4
           this._opnIrqPrev = irqNow;
         }
