@@ -126,6 +126,8 @@ export class Ym2203 {
     //           coupling high-pass); false = raw digital sum, no filter
     this.sineMode = 'accurate';
     this.mute = { fm: false, ssg: false };
+    // per-voice mute for stem rendering: [FM0,FM1,FM2, SSG0,SSG1,SSG2]
+    this.chMute = [false, false, false, false, false, false];
     this.board = true;
     this._hpX = 0; this._hpY = 0; // output AC-coupling high-pass state
     this.timerA = 0; this.timerACount = 0; this.timerARun = false;
@@ -292,6 +294,7 @@ export class Ym2203 {
     const s = this.ssg;
     let sum = 0;
     for (let c = 0; c < 3; c++) {
+      if (this.chMute[3 + c]) continue; // SSG0..2 → chMute[3..5] (state still advances in _ssgTick)
       const tone = s.toneOff[c] ? 1 : (s.sign[c] > 0 ? 1 : 0);
       const noise = s.noiseOff[c] ? 1 : s.noiseBit;
       if (!(tone & noise)) continue;
@@ -452,10 +455,12 @@ export class Ym2203 {
       if (fmTicks > 0) {
         for (let t = 0; t < fmTicks; t++) {
           fm = 0;
-          for (const ch of this.ch) fm += this._fmChannel(ch);
+          // always advance the operator state (phase/env); a muted channel just
+          // contributes 0, so live mute/solo is glitch-free and reversible.
+          for (let ci = 0; ci < this.ch.length; ci++) { const s = this._fmChannel(this.ch[ci]); if (!this.chMute[ci]) fm += s; }
         }
       } else {
-        for (const ch of this.ch) fm += this._fmChannel(ch);
+        for (let ci = 0; ci < this.ch.length; ci++) { const s = this._fmChannel(this.ch[ci]); if (!this.chMute[ci]) fm += s; }
       }
 
       this.ssgAcc += this.ssgStep;
