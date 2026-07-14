@@ -64,10 +64,10 @@
 <canvas id="keys" width="960" height="70"></canvas>
 <div id="meters"></div>
 
-<audio id="au" src="feena-v6.mp3?v=12" preload="auto"></audio>
+<audio id="au" src="feena-v6.mp3?v=13" preload="auto"></audio>
 
 <script type="module">
-import { Ym2203 } from '../ym2203.js?v=12'; // ?v= busts the browser module cache on each chip change
+import { Ym2203 } from '../ym2203.js?v=13'; // ?v= busts the browser module cache on each chip change
 
 const COLORS = ['#ff5a5a','#ffb14a','#ffe14a','#5ad1ff','#7affb0','#c68aff'];
 const NAMES = ['FM0','FM1','FM2','SSG0','SSG1','SSG2'];
@@ -113,7 +113,7 @@ const KNOBS = [
   { key: 'ssgGain', label: 'SSG音量',          min: 0.4, max: 3.0,   step: 0.05, def: 1.25, fmt: v => v.toFixed(2) + '×' },
   { key: 'ssgHpHz', label: 'SSG線の細さ(HP)',   min: 20,  max: 3000,  step: 20,   def: 20,   fmt: v => v >= 1000 ? (v / 1000).toFixed(1) + 'kHz' : v + 'Hz' },
   { key: 'ssgBright', label: 'SSG明るさ(高域)', min: 0,   max: 3.0,   step: 0.1,  def: 0.6,  fmt: v => v.toFixed(1) + (v >= 1 ? '↑' : '') },
-  { key: 'ssgLpHz', label: 'SSG透明感(LP上限)', min: 3000, max: 20000, step: 500,  def: 8000, fmt: v => (v / 1000).toFixed(1) + 'kHz' },
+  { key: 'ssgLpHz', label: 'SSG透明感(LP上限)', min: 3000, max: 20000, step: 500,  def: 13000, fmt: v => (v / 1000).toFixed(1) + 'kHz' },
   { key: 'fmGain',  label: 'FM音量',            min: 0.4, max: 1.4,   step: 0.05, def: 0.9,  fmt: v => v.toFixed(2) + '×' },
 ];
 const knobVal = {};
@@ -319,7 +319,7 @@ $('srcEngine').onclick = async () => {
 };
 $('srcMine').onclick = () => {
   playing = false; toEngine(false);
-  au.pause(); au.src = 'feena-v6.mp3?v=12'; au.currentTime = 0;
+  au.pause(); au.src = 'feena-v6.mp3?v=13'; au.currentTime = 0;
   $('srcName').textContent = 'うちの音 (v6) — 表示と完全一致（mp3なので個別ミュートは表示のみ）';
   setPlayBtn(false);
 };
