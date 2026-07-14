@@ -62,6 +62,7 @@ export class Pc8801Machine {
     this.n80mode = mode === 'n80';
     this.extMapped = false; // port 71h bit0=0 → ext ROM at 6000-7FFF
     this._port71 = 0xff; // the raw latch (read back by the call dispatcher)
+    this._port31 = 0;
     this._port32 = 0; // bits 0-1 = EROMSL (which ext bank)
     this.gvramWindow = -1; // -1 = RAM at C000-FFFF; 0..2 = plane B/R/G
     this.gvramOn = false; // port 31h bit3
@@ -188,11 +189,16 @@ export class Pc8801Machine {
       case 0x30: // system: 40/80 col, 20/25 lines, mono
         this.width80 = (v & 1) !== 0;
         return;
-      case 0x31: // ROM/RAM, GVRAM enable, color, 200/400 line
-        this.line400 = (v & 1) !== 0;
+      case 0x31: // graphics control. The bits are NOT what you'd guess:
+        // b0 = 1 → 200-line (0 = 400-line), b1 = 64K-RAM mode,
+        // b2 = N-BASIC select, b3 = VRAM displayed, b4 = 1 → COLOR (0 = mono),
+        // b5 = text 25 lines. Reading b0 as "400-line" and b2 as "mono"
+        // (the earlier guess) makes every game come out mono and half-height.
+        this._port31 = v;
+        this.line400 = (v & 1) === 0;
         this.romEnabled = (v & 2) === 0;
         this.gvramOn = (v & 8) !== 0;
-        this.mono = (v & 4) !== 0;
+        this.mono = (v & 0x10) === 0;
         return;
       case 0x32: // mkII SR+: palette mode, sound int mask, ALU
         this._port32 = v;
@@ -220,13 +226,21 @@ export class Pc8801Machine {
       default:
         break;
     }
-    if (port >= 0x54 && port <= 0x5b) { // SR V2 palette: 8 entries, 512 cube
-      const i = port - 0x54;
-      // V2 mode: two writes per entry (G/R then B) via port 32h bit5 latch;
-      // simplified single-write form: bits 0-2 = B, 3-5 = R, 6-7+carry = G
-      this.palette[i * 3] = (v >> 3) & 7; // R
-      this.palette[i * 3 + 1] = ((v >> 6) & 3) | ((v & 0x80) ? 4 : 0); // G (approx)
-      this.palette[i * 3 + 2] = v & 7; // B
+    if (port >= 0x54 && port <= 0x5b) {
+      // Palette. Port 32h bit5 picks the world:
+      //   digital (mkII): one write, bits 0-2 = B/R/G, full-on or off
+      //   analog (SR V2): 3 bits per gun from the 512-cube, but the port is
+      //     8 bits wide — so it takes TWO writes, bit6 selecting which half:
+      //     bit6=0 → B (bits 0-2) and R (bits 3-5); bit6=1 → G (bits 0-2).
+      const i = (port - 0x54) * 3;
+      if (this._port32 & 0x20) { // analog
+        if (v & 0x40) this.palette[i + 1] = v & 7; // G
+        else { this.palette[i + 2] = v & 7; this.palette[i] = (v >> 3) & 7; } // B, R
+      } else { // digital: each bit is a gun, all-or-nothing
+        this.palette[i] = (v & 2) ? 7 : 0; // R
+        this.palette[i + 1] = (v & 4) ? 7 : 0; // G
+        this.palette[i + 2] = (v & 1) ? 7 : 0; // B
+      }
       return;
     }
     if (port >= 0x60 && port <= 0x68) { this.dmac.writePort(port - 0x60, v); return; }

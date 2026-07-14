@@ -235,3 +235,33 @@ test('machine88: a mounted disk boots — the FDC reads and loaded code runs', a
   // and the ROM does not fall back into the BASIC banner
   assert.ok(!m.screenText().join('\n').includes('N-88 BASIC'), 'did not fall back to ROM BASIC');
 });
+
+test('machine88: port 31h and the palette decode the way the silicon does', async (t) => {
+  const roms = await loadRoms();
+  if (!roms) return t.skip('no ROMs (bring your own)');
+  const { Pc8801Machine } = await import('./machine88.js');
+  const m = new Pc8801Machine({ main: roms.main, ext: roms.ext, sub: roms.sub });
+
+  // port 31h: b0 = 200-line (NOT 400), b2 = N-BASIC select (NOT mono),
+  // b3 = VRAM displayed, b4 = COLOR
+  m.out(0x31, 0x01 | 0x08 | 0x10); // 200-line, display on, color
+  assert.equal(m.line400, false);
+  assert.equal(m.gvramOn, true);
+  assert.equal(m.mono, false);
+  m.out(0x31, 0x00); // 400-line, display off, mono
+  assert.equal(m.line400, true);
+  assert.equal(m.mono, true);
+
+  // digital palette (port 32h bit5 clear): one write, bits = B,R,G, all-or-nothing
+  m.out(0x32, 0x00);
+  m.out(0x56, 0x07); // entry 2 = white
+  assert.deepEqual([...m.palette.slice(6, 9)], [7, 7, 7]);
+  m.out(0x56, 0x02); // red only
+  assert.deepEqual([...m.palette.slice(6, 9)], [7, 0, 0]);
+
+  // analog palette (bit5 set): TWO writes per entry, bit6 picks the half
+  m.out(0x32, 0x20);
+  m.out(0x55, 0x00 | (5 << 3) | 3); // bit6=0 → R=5, B=3
+  m.out(0x55, 0x40 | 6); //            bit6=1 → G=6
+  assert.deepEqual([...m.palette.slice(3, 6)], [5, 6, 3]);
+});
