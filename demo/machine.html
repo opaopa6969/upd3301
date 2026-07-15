@@ -277,9 +277,12 @@ function applyDispScale() {
     canvas.style.maxWidth = '100%'; canvas.style.width = ''; canvas.style.height = '';
   } else {
     const n = parseInt(dispScale, 10) || 2;
-    canvas.style.maxWidth = 'none';
-    canvas.style.width = (logicalW * n) + 'px';   // logical, NOT backing — a
-    canvas.style.height = (logicalH * n) + 'px';  // supersampled backing shows 1:1
+    // Target the integer size, but keep max-width:100% so a big scale (or a CRT
+    // supersample that makes the backing physically larger) can't push past the
+    // window — it just scales down to fit. height:auto keeps the aspect when it does.
+    canvas.style.maxWidth = '100%';
+    canvas.style.width = (logicalW * n) + 'px';
+    canvas.style.height = 'auto';
   }
 }
 // Size the backing to exactly bw×bh; lw×lh is the logical on-screen size the CSS
