@@ -62,7 +62,9 @@
   <button id="bfull">⛶ 全画面</button>
   <button id="bice">🔬 ICE</button>
   <button id="bide">🛠 IDE</button>
+  <button id="bpad" title="ゲームパッドの各ボタンを、どのエミュ入力（テンキー/カーソル/決定など）に割り当てるか設定。Ys等はテンキーで移動するのでパッドはキーボードのテンキーを叩く方式">🎮 パッド設定</button>
 </div>
+<div class="row" id="padcfg" style="display:none;background:#1a1a28;border:1px solid #446;border-radius:6px;padding:8px;flex-wrap:wrap;gap:6px 14px"></div>
 <div class="row" style="font-size:12px" id="romstore"></div>
 <div class="row"><span class="lbl">起動モード:</span>
   <button id="mn80" class="on">N-BASIC (N80)</button>
@@ -833,7 +835,6 @@ const CODEJOY = { Numpad8: 0, Numpad2: 1, Numpad4: 2, Numpad6: 3, Numpad0: 4, Nu
 // A key maps to one matrix cell [row,bit] or several [[row,bit],...] (e.g. Enter
 // hits both CR and tenkey RETURN). Normalise so the handlers always see a list.
 function cellsOf(k) { return (k && Array.isArray(k[0])) ? k : [k]; }
-function pressKey(k, down) { for (const c of cellsOf(k)) down ? machine.keyDown(c[0], c[1]) : machine.keyUp(c[0], c[1]); }
 // Mirror directional keys + Z/X onto the joystick (OPN port A) so games that
 // poll the pad instead of the keyboard (many PC-8801 action games, incl. Ys II)
 // still respond to the keyboard. joy bit: 0=up 1=down 2=left 3=right 4/5=trig.
@@ -843,28 +844,92 @@ function joyBitFor(e) {
   if (is88 && e.code && CODEJOY[e.code] !== undefined) return CODEJOY[e.code];
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key; return KEYJOY[k];
 }
-let kbdJoy = 0xff; // keyboard-mirrored pad bits (active low), combined with a real pad each frame
+// ---- input: keyboard + gamepad, combined per frame -----------------------
+// The KEYBOARD mutates a base matrix (kbMatrix) + a joy byte (kbdJoy); a physical
+// GAMEPAD is polled each frame into pad matrices; the two are AND-combined (active
+// low, so a bit is pressed if EITHER source presses it) into machine.keys/joy just
+// before stepping. Ys II reads its cursor from the keyboard TENKEY (confirmed: the
+// numeric keypad moves it, the OPN joystick does nothing), so the pad must drive
+// keyboard cells — that's why a joystick-only pad did nothing. The mapping is
+// user-configurable (🎮 パッド設定) and persisted.
+const kbMatrix = new Uint8Array(16).fill(0xff); // keyboard's own matrix (active low)
+let kbdJoy = 0xff;                              // keyboard's own joy byte (active low)
+function kbSet(cells, down) { for (const c of cells) { if (down) kbMatrix[c[0]] &= ~(1 << c[1]); else kbMatrix[c[0]] |= (1 << c[1]); } }
+
+// Named emulator "actions" a pad button can fire: each lights matrix cell(s) and,
+// where meaningful, a joystick bit too (so the pad works for keyboard-reading AND
+// joystick-reading games). cells use the KEY88 layout; z=[5,2] x=[5,0].
+const ACTIONS = {
+  none:   { label: '（なし）', cells: [] },
+  num8:   { label: 'テンキー8 ↑', cells: [[1, 0]], joy: 0 },
+  num2:   { label: 'テンキー2 ↓', cells: [[0, 2]], joy: 1 },
+  num4:   { label: 'テンキー4 ←', cells: [[0, 4]], joy: 2 },
+  num6:   { label: 'テンキー6 →', cells: [[0, 6]], joy: 3 },
+  cup:    { label: 'カーソル ↑', cells: [[8, 1]], joy: 0 },
+  cdown:  { label: 'カーソル ↓', cells: [[9, 3]], joy: 1 },
+  cleft:  { label: 'カーソル ←', cells: [[9, 7]], joy: 2 },
+  cright: { label: 'カーソル →', cells: [[8, 2]], joy: 3 },
+  enter:  { label: 'Enter / 決定', cells: [[9, 6], [1, 7]] },
+  space:  { label: 'スペース', cells: [[9, 0]] },
+  esc:    { label: 'ESC / STOP', cells: [[9, 1]] },
+  trig1:  { label: 'トリガ1 (Z)', cells: [[5, 2]], joy: 4 },
+  trig2:  { label: 'トリガ2 (X)', cells: [[5, 0]], joy: 5 },
+  key0:   { label: 'テンキー0', cells: [[0, 0]] },
+  keyret: { label: 'テンキー RET', cells: [[1, 7]] },
+};
+// Pad controls we expose for mapping, in display order.
+const PAD_CONTROLS = [
+  ['up', '↑ (D-pad/Stick上)'], ['down', '↓ (D-pad/Stick下)'],
+  ['left', '← (D-pad/Stick左)'], ['right', '→ (D-pad/Stick右)'],
+  ['a', 'A'], ['b', 'B'], ['x', 'X'], ['y', 'Y'],
+  ['lb', 'LB'], ['rb', 'RB'], ['start', 'START'], ['back', 'BACK/SELECT'],
+];
+const DEFAULT_PADMAP = {
+  up: 'num8', down: 'num2', left: 'num4', right: 'num6',
+  a: 'enter', b: 'space', x: 'trig1', y: 'trig2',
+  lb: 'esc', rb: 'space', start: 'enter', back: 'esc',
+};
+let padMap = (() => {
+  try { return { ...DEFAULT_PADMAP, ...JSON.parse(localStorage.getItem('upd3301-padmap') || '{}') }; }
+  catch { return { ...DEFAULT_PADMAP }; }
+})();
+const savePadMap = () => { try { localStorage.setItem('upd3301-padmap', JSON.stringify(padMap)); } catch {} };
+
 window.addEventListener('gamepadconnected', (e) => console.log(`[gamepad] connected: "${e.gamepad.id}" mapping=${e.gamepad.mapping} axes=${e.gamepad.axes.length} buttons=${e.gamepad.buttons.length}`));
 window.addEventListener('gamepaddisconnected', (e) => console.log(`[gamepad] disconnected: "${e.gamepad.id}"`));
-// Read a physical gamepad (Gamepad API) into a PC-8801 pad byte (active low).
-// D-pad or left stick → directions; buttons 0/1 → trig1/trig2. null if no pad.
-function pollGamepad() {
+// Which logical pad controls are currently pressed? (D-pad buttons OR left stick
+// OR standard face/shoulder buttons.) Returns a Set of control names, or null.
+function readPadControls() {
   if (!navigator.getGamepads) return null;
-  const pads = navigator.getGamepads();
   let gp = null;
-  for (const p of pads) if (p && p.connected) { gp = p; break; }
+  for (const p of navigator.getGamepads()) if (p && p.connected) { gp = p; break; }
   if (!gp) return null;
-  let b = 0xff;
   const ax = gp.axes, bt = gp.buttons;
-  const down = (bit) => { b &= ~(1 << bit); };
-  const btn = (i) => bt[i] && bt[i].pressed;
-  if ((ax[1] ?? 0) < -0.5 || btn(12)) down(0); // up
-  if ((ax[1] ?? 0) > 0.5 || btn(13)) down(1);   // down
-  if ((ax[0] ?? 0) < -0.5 || btn(14)) down(2); // left
-  if ((ax[0] ?? 0) > 0.5 || btn(15)) down(3);   // right
-  if (btn(0) || btn(2)) down(4);                 // trig1 (A/X)
-  if (btn(1) || btn(3)) down(5);                 // trig2 (B/Y)
-  return b;
+  const btn = (i) => !!(bt[i] && bt[i].pressed);
+  const s = new Set();
+  if ((ax[1] ?? 0) < -0.5 || btn(12)) s.add('up');
+  if ((ax[1] ?? 0) > 0.5 || btn(13)) s.add('down');
+  if ((ax[0] ?? 0) < -0.5 || btn(14)) s.add('left');
+  if ((ax[0] ?? 0) > 0.5 || btn(15)) s.add('right');
+  if (btn(0)) s.add('a'); if (btn(1)) s.add('b'); if (btn(2)) s.add('x'); if (btn(3)) s.add('y');
+  if (btn(4)) s.add('lb'); if (btn(5)) s.add('rb'); if (btn(9)) s.add('start'); if (btn(8)) s.add('back');
+  return s;
+}
+let lastPadControls = null; // for the config panel's live "pressed" highlight
+// Build the pad's contribution and AND it into machine.keys / machine.joy.
+function applyPad() {
+  const active = readPadControls();
+  lastPadControls = active;
+  const padM = new Uint8Array(16).fill(0xff);
+  let padJoy = 0xff;
+  if (active) for (const ctrl of active) {
+    const act = ACTIONS[padMap[ctrl]];
+    if (!act) continue;
+    for (const c of act.cells) padM[c[0]] &= ~(1 << c[1]);
+    if (act.joy !== undefined) padJoy &= ~(1 << act.joy);
+  }
+  for (let i = 0; i < 16; i++) machine.keys[i] = kbMatrix[i] & padM[i];
+  machine.joy[0] = kbdJoy & padJoy;
 }
 function matrixKey(e) {
   const map = activeKeymap();
@@ -887,19 +952,55 @@ window.addEventListener('keydown', (e) => {
   if (!k && !e.shiftKey) return; // nothing we handle → let the browser have it
   if (bootMode === 'n88') ensureAudio(); // a keypress is a user gesture → unblock autoplay
   if (frozen()) resumePlay(); // any game key un-freezes
-  if (e.shiftKey) machine.keyDown(8, 6); else machine.keyUp(8, 6);
+  kbSet([[8, 6]], e.shiftKey); // shift
   const jb = joyBitFor(e);
-  if (jb !== undefined) { kbdJoy &= ~(1 << jb); machine.joyDown(jb); e.preventDefault(); }
-  if (k) { pressKey(k, true); e.preventDefault(); }
+  if (jb !== undefined) { kbdJoy &= ~(1 << jb); e.preventDefault(); }
+  if (k) { kbSet(cellsOf(k), true); e.preventDefault(); }
 });
 window.addEventListener('keyup', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = matrixKey(e);
-  if (!e.shiftKey) machine.keyUp(8, 6);
+  if (!e.shiftKey) kbSet([[8, 6]], false);
   const jb = joyBitFor(e);
-  if (jb !== undefined) { kbdJoy |= (1 << jb); machine.joyUp(jb); e.preventDefault(); }
-  if (k) { pressKey(k, false); e.preventDefault(); }
+  if (jb !== undefined) { kbdJoy |= (1 << jb); e.preventDefault(); }
+  if (k) { kbSet(cellsOf(k), false); e.preventDefault(); }
 });
+
+// ---- gamepad config panel -------------------------------------------------
+function buildPadConfig() {
+  const box = $('padcfg');
+  const opts = Object.entries(ACTIONS).map(([k, a]) => `<option value="${k}">${a.label}</option>`).join('');
+  box.innerHTML =
+    '<span style="color:#9ab;font-size:12px;width:100%">🎮 パッド割当（Ys等はテンキーで移動。緑=今押してるボタン。変更は自動保存）</span>' +
+    PAD_CONTROLS.map(([ctrl, label]) =>
+      `<label style="color:#bcd;font-size:12px;display:inline-flex;align-items:center;gap:4px" data-ctrl="${ctrl}">` +
+        `<b class="padlit" style="display:inline-block;min-width:118px;padding:1px 5px;border-radius:3px;transition:background .05s">${label}</b>` +
+        `<select data-ctrl="${ctrl}" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:2px;font-size:11px">${opts}</select>` +
+      '</label>').join('') +
+    '<button id="padreset" style="font-size:11px;padding:2px 8px">既定に戻す</button>';
+  for (const sel of box.querySelectorAll('select[data-ctrl]')) {
+    sel.value = padMap[sel.dataset.ctrl] || 'none';
+    sel.onchange = () => { padMap[sel.dataset.ctrl] = sel.value; savePadMap(); };
+  }
+  $('padreset').onclick = () => { padMap = { ...DEFAULT_PADMAP }; savePadMap(); buildPadConfig(); };
+}
+$('bpad').onclick = () => {
+  const box = $('padcfg');
+  const show = box.style.display === 'none';
+  box.style.display = show ? 'flex' : 'none';
+  if (show) buildPadConfig();
+};
+// live highlight of the control the pad is pressing (independent poll so it works
+// even before a game is loaded — lets you verify the mapping by wiggling the stick)
+setInterval(() => {
+  const box = $('padcfg');
+  if (!box || box.style.display === 'none') return;
+  const active = readPadControls();
+  for (const lab of box.querySelectorAll('label[data-ctrl]')) {
+    const b = lab.querySelector('.padlit');
+    if (b) b.style.background = (active && active.has(lab.dataset.ctrl)) ? '#2a6' : 'transparent';
+  }
+}, 80);
 
 const FR = 1 / 60;
 let last = performance.now(), workMs = 0, audioClockLast = null;
@@ -923,9 +1024,8 @@ function loop(now) {
   last = now;
   const t0 = performance.now();
   if (machine) {
-    // fold a physical gamepad into the pad register (keyboard bits still apply)
-    const pad = pollGamepad();
-    if (pad !== null) machine.joy[0] = kbdJoy & pad;
+    // combine keyboard + gamepad into the live matrix / joystick each frame
+    applyPad();
     if (scrubIndex !== null) {
       // frozen at a scrubbed snapshot (state already restored by the scrub handler)
     } else if (rewinding && history.length > 1) {
