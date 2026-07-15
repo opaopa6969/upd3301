@@ -54,9 +54,6 @@
   <button id="bclean" title="CRTシミュレーション(残光/管面/インターレース/走査線)を通さず、エミュの生描画をフルパレットでそのまま表示。崩れ無し・色正確・軽い。もう一度押すとCRT表示に戻る">🟢 クリーン表示</button>
   <label style="color:#778;font-size:12px" title="表示中のテキストドット(黒でも)でグラフィックをマスクする実験。Ys等の画面外バッファ隠し用"><input type="checkbox" id="txtopaque"> Txtマスク</label>
   <label style="color:#778;font-size:12px" title="μPD3301の実表示エリア(cols×rows)の外を黒でクリップ。画面端の非表示バッファ隠し用"><input type="checkbox" id="clipactive"> 端クリップ</label>
-  <label style="color:#778;font-size:12px" title="漢字ROMのバイト順モード。漢字が読める字になるものを選ぶ（A=既定）">漢字 <select id="kanjimode" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
-    <option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option>
-  </select></label>
   <button id="bfull">⛶ 全画面</button>
   <button id="bice">🔬 ICE</button>
   <button id="bide">🛠 IDE</button>
@@ -516,12 +513,6 @@ $('txtopaque').onchange = (e) => { txtOpaque = e.target.checked; localStorage.se
 $('clipactive').onchange = (e) => { clipActive = e.target.checked; localStorage.setItem('upd3301-clip', clipActive ? '1' : '0'); };
 const renderOpts = () => ({ textOpaque: txtOpaque, clipActive });
 
-// kanji ROM byte-order mode (live-selectable; the readable one wins)
-let kanjiMode = parseInt(localStorage.getItem('upd3301-kanjimode') || '0', 10) || 0;
-$('kanjimode').value = String(kanjiMode);
-function applyKanjiMode() { if (machine && 'kanjiMode' in machine) machine.kanjiMode = kanjiMode; }
-$('kanjimode').onchange = (e) => { kanjiMode = parseInt(e.target.value, 10) || 0; localStorage.setItem('upd3301-kanjimode', String(kanjiMode)); applyKanjiMode(); };
-
 // ---- rewind (deterministic time-travel) -----------------------------------
 // The machine is deterministic with a full snapshot()/restore(), so we can
 // literally rewind: stash a state snapshot every few frames into a ring buffer,
@@ -640,7 +631,6 @@ function boot() {
       mode: 'n88', sb2,
     });
     machine.dipsw = [dipOf('dip1', 0xdb), dipOf('dip2', 0x79)];
-    applyKanjiMode();
     mountDisks(machine);
     // give the OPNA its drum PCM (async; FM works immediately, drums as soon
     // as the ROM lands). No-op on a plain (non-SB2) machine.

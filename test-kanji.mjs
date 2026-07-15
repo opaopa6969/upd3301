@@ -9,10 +9,10 @@ import { Pc8801Machine } from './machine88.js';
 const main = () => new Uint8Array(0x8000).fill(0xff);
 // a 128 KB ROM whose byte i is a known function of i, so reads are checkable
 const synthRom = () => { const r = new Uint8Array(0x20000); for (let i = 0; i < r.length; i++) r[i] = (i * 7 + 3) & 0xff; return r; };
-// the driver walks consecutive word addresses; 0xE8 = even byte, 0xE9 = odd.
-const kanjiByte = (addr, port, len) => ((addr << 1) | (port & 1)) & (len - 1);
+// confirmed on real kana: 0xE8 = ODD byte, 0xE9 = EVEN (halves swapped).
+const kanjiByte = (addr, port, len) => ((addr << 1) | ((port & 1) ^ 1)) & (len - 1);
 
-test('kanji1: address latch (0xE8/0xE9) + data read = rom[(addr<<1)|(port&1)]', () => {
+test('kanji1: address latch (0xE8/0xE9) + data read = rom[(addr<<1)|((port&1)^1)]', () => {
   const rom = synthRom();
   const m = new Pc8801Machine({ main: main(), kanji: rom });
   for (const addr of [0x0000, 0x1234, 0x7fff, 0xffff, 0x0905]) {
@@ -20,18 +20,9 @@ test('kanji1: address latch (0xE8/0xE9) + data read = rom[(addr<<1)|(port&1)]', 
     m.out(0xe9, (addr >> 8) & 0xff);
     assert.equal(m.in(0xe8), rom[kanjiByte(addr, 0xe8, rom.length)], `e8 @ ${addr}`);
     assert.equal(m.in(0xe9), rom[kanjiByte(addr, 0xe9, rom.length)], `e9 @ ${addr}`);
+    assert.equal(m.in(0xe8), rom[(addr << 1) | 1], '0xE8 = odd byte');
+    assert.equal(m.in(0xe9), rom[(addr << 1)], '0xE9 = even byte');
   }
-});
-
-test('kanji1: consecutive addresses yield consecutive ROM bytes (the glyph in order)', () => {
-  const rom = synthRom();
-  const m = new Pc8801Machine({ main: main(), kanji: rom });
-  const base = 0x0900; const got = [];
-  for (let w = 0; w < 16; w++) { // 16 words = 32 bytes = one glyph
-    m.out(0xe8, (base + w) & 0xff); m.out(0xe9, ((base + w) >> 8) & 0xff);
-    got.push(m.in(0xe8), m.in(0xe9));
-  }
-  for (let i = 0; i < 32; i++) assert.equal(got[i], rom[base * 2 + i], `byte ${i} is consecutive`);
 });
 
 test('kanji2: level-2 ROM on its own ports (0xEC/0xED), independent address', () => {
