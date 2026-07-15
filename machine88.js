@@ -708,19 +708,33 @@ export class Pc8801Machine {
       }
       return idx & 7;
     };
-    if (indexed) {
-      const pixels = out && out.length === W * H ? out : new Uint8Array(W * H);
-      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x; pixels[i] = composite(x, y, i); }
-      return { width: W, height: H, pixels, schemaVersion: SCHEMA_VERSION };
-    }
-    const rgb = out && out.length === W * H * 3 ? out : new Uint8Array(W * H * 3);
     // per-row palette (raster palette): each character row is coloured with the
     // palette captured when it was scanned. No rows displayed → the single
-    // current palette. (The 512-cube RGB path only; the indexed CRT path shows
-    // the 8 GRB primaries and doesn't consult the palette.)
+    // current palette.
     const raster = crtc.rows > 0;
     const lpc = crtc.linesPerChar || 8;
     const maxRow = crtc.rows - 1;
+    if (indexed) {
+      const pixels = out && out.length === W * H ? out : new Uint8Array(W * H);
+      // Resolve each composite index THROUGH the palette (just like the RGB path),
+      // then reduce to the 3 GRB primaries the phosphor consumes. Feeding the raw
+      // composite index to the phosphor (the old behaviour) ignored the palette,
+      // so indices the game had mapped to BLACK — Ys II parks its off-screen
+      // scroll material on such an index — showed up as bright coloured dots on
+      // the CRT while the RGB/clean path (which honours the palette) hid them.
+      for (let y = 0; y < H; y++) {
+        const pal = raster ? this.rowPal : this.palette;
+        const rbase = raster ? Math.min((y / lpc) | 0, maxRow) * 24 : 0;
+        for (let x = 0; x < W; x++) {
+          const i = y * W + x;
+          const p = rbase + composite(x, y, i) * 3;
+          // pal[p]=R pal[p+1]=G pal[p+2]=B (each 0..7); GRB index = G<<2|R<<1|B
+          pixels[i] = (pal[p + 1] ? 4 : 0) | (pal[p] ? 2 : 0) | (pal[p + 2] ? 1 : 0);
+        }
+      }
+      return { width: W, height: H, pixels, schemaVersion: SCHEMA_VERSION };
+    }
+    const rgb = out && out.length === W * H * 3 ? out : new Uint8Array(W * H * 3);
     for (let y = 0; y < H; y++) {
       const pal = raster ? this.rowPal : this.palette;
       const base = raster ? Math.min((y / lpc) | 0, maxRow) * 24 : 0;
