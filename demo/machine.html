@@ -328,8 +328,10 @@ $('bpng').onclick = () => {
   const crtc = is88 ? machine.crtc : machine.sys.crtc;
   console.log(`[raw PNG] ${W}x${H}  crtc=${crtc.cols}x${crtc.rows} linesPerChar=${crtc.linesPerChar} gvramOn=${machine.gvramOn} line400=${machine.line400} width80=${machine.width80} mono=${machine.mono} pc=${machine.cpu.pc.toString(16)}`);
   if (is88) { // palette diagnostic (R,G,B per index 0-7, each 0-7) + analog/mono flags
-    const pal = []; for (let n = 0; n < 8; n++) pal.push(`${n}:(${machine.palette[n * 3]},${machine.palette[n * 3 + 1]},${machine.palette[n * 3 + 2]})`);
-    console.log(`[palette] analog=${(machine._port32 & 0x20) !== 0} port32=0x${(machine._port32 || 0).toString(16)} mono=${machine.mono}  ${pal.join(' ')}`);
+    const pal = []; for (let n = 0; n < 8; n++) pal.push(`${n}:${machine.palette[n * 3]}${machine.palette[n * 3 + 1]}${machine.palette[n * 3 + 2]}`);
+    const line = `pal ${(machine._port32 & 0x20) ? 'analog' : 'digital'} p32=${(machine._port32 || 0).toString(16)}  ${pal.join(' ')}`;
+    console.log('[palette] ' + line);
+    $('dipnote').textContent = line; // also on-screen (each entry = index:RGB, digits 0-7)
   }
   const a = document.createElement('a'); a.download = `upd3301-raw-f${machine.frame}.png`; a.href = c.toDataURL('image/png'); a.click();
 };
