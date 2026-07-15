@@ -1006,6 +1006,32 @@ setInterval(() => {
   }
 }, 80);
 
+// ---- perf HUD: split emulation vs render cost, and measure whether the
+// emulation keeps up with real time. stepFrames/sec below 60×speed means the
+// game (and its music sequencer, which rides the emulation clock) is running
+// behind real time while the 48 kHz audio keeps going — i.e. "music finishes
+// first". This turns that hunch into a number.
+let emuMsEMA = 0, renMsEMA = 0, perfHud = '';
+let _perfWin = { t0: null, ticks: 0, steps: 0 };
+try { guts.style.whiteSpace = 'pre-line'; } catch {}
+function perfAccountEmu(steps, ms) { emuMsEMA = emuMsEMA * 0.9 + ms * 0.1; _perfWin.steps += steps; }
+function perfAccountRender(ms, nowP) {
+  renMsEMA = renMsEMA * 0.9 + ms * 0.1;
+  _perfWin.ticks++;
+  if (_perfWin.t0 == null) { _perfWin.t0 = nowP; return; }
+  const el = nowP - _perfWin.t0;
+  if (el < 1000) return;
+  const rafFps = _perfWin.ticks * 1000 / el;
+  const emuFps = _perfWin.steps * 1000 / el;
+  const target = 60 * speedMul;
+  const behind = emuFps < target * 0.97;
+  perfHud = `⏱ emu ${emuMsEMA.toFixed(1)}ms + 描画 ${renMsEMA.toFixed(1)}ms／tick　`
+    + `描画 ${rafFps.toFixed(0)}fps・emu ${emuFps.toFixed(1)}fps(目標${target.toFixed(0)})　`
+    + (behind ? '⚠ 映像が音楽より遅れてる（追いつけてない）' : '✓ 実時間同期OK');
+  console.log(`[perf] emu=${emuMsEMA.toFixed(1)}ms draw=${renMsEMA.toFixed(1)}ms raf=${rafFps.toFixed(1)}fps emuFps=${emuFps.toFixed(2)}/${target} ${behind ? 'BEHIND' : 'ok'}`);
+  _perfWin = { t0: nowP, ticks: 0, steps: 0 };
+}
+
 const FR = 1 / 60;
 let last = performance.now(), workMs = 0, audioClockLast = null;
 function loop(now) {
@@ -1028,6 +1054,7 @@ function loop(now) {
   last = now;
   const t0 = performance.now();
   if (machine) {
+    const frameBefore = machine.frame; // stepFrames executed this tick (drift metric)
     // combine keyboard + gamepad into the live matrix / joystick each frame
     applyPad();
     if (scrubIndex !== null) {
@@ -1048,6 +1075,8 @@ function loop(now) {
         if (history.length > REWIND_MAX) history.shift();
       }
     }
+    const tEmu = performance.now(); // emulation (update) done; render starts now
+    perfAccountEmu(machine.frame - frameBefore, tEmu - t0);
     // Both machines emit a GRB-indexed frame (0..7 per dot) that the shared
     // phosphor pipeline below consumes verbatim. The 8001 exposes it via its
     // text system (machine.sys), the 8801 via render({indexed:true}) which
@@ -1104,9 +1133,12 @@ function loop(now) {
       }
       ctx.putImageData(img, 0, 0);
     }
-    workMs = workMs * 0.9 + (performance.now() - t0) * 0.1;
+    const nowP = performance.now();
+    workMs = workMs * 0.9 + (nowP - t0) * 0.1;
+    perfAccountRender(nowP - tEmu, nowP);
     guts.textContent = `${is88 ? 'PC-8801/N88' : 'PC-8001/N80'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
-      + `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz`;
+      + `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz`
+      + (perfHud ? `\n${perfHud}` : '');
     updatePlayerBar();
   }
   requestAnimationFrame(loop);
