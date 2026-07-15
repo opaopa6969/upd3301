@@ -811,7 +811,25 @@ const KEY88 = {
   // row 10: F1-F5 (+ ROLL/HELP unmapped)
   F1: [10, 0], F2: [10, 1], F3: [10, 2], F4: [10, 3], F5: [10, 4],
 };
+// PC-8801 TENKEY (numeric keypad) lives on matrix ports 00h/01h, PHYSICALLY
+// separate from the main number row (06h/07h). The browser only tells them apart
+// through e.code (Numpad2 vs Digit2), never e.key ("2" for both) — which is why
+// they were indistinguishable before. Many PC-8801 games (incl. Ys II) drive the
+// cursor from the tenkey (8=up 2=down 4=left 6=right), so this split matters.
+// Bit positions per the 8801 matrix: 00h = tenkey 0..7, 01h = tenkey 8,9,*,+,=,,,.,RET.
+const CODE88 = {
+  Numpad0: [0, 0], Numpad1: [0, 1], Numpad2: [0, 2], Numpad3: [0, 3],
+  Numpad4: [0, 4], Numpad5: [0, 5], Numpad6: [0, 6], Numpad7: [0, 7],
+  Numpad8: [1, 0], Numpad9: [1, 1], NumpadMultiply: [1, 2], NumpadAdd: [1, 3],
+  NumpadEqual: [1, 4], NumpadDecimal: [1, 6], NumpadEnter: [1, 7],
+  // main number row stays on 06h/07h (matches KEY88's "0".."9")
+  Digit0: [6, 0], Digit1: [6, 1], Digit2: [6, 2], Digit3: [6, 3], Digit4: [6, 4],
+  Digit5: [6, 5], Digit6: [6, 6], Digit7: [6, 7], Digit8: [7, 0], Digit9: [7, 1],
+};
 function activeKeymap() { return (machine && !machine.n80mode) ? KEY88 : KEY; }
+// tenkey arrows → joystick D-pad too (8=up 2=down 4=left 6=right), so the pad
+// path and games that only read the joystick still respond to the numeric keypad.
+const CODEJOY = { Numpad8: 0, Numpad2: 1, Numpad4: 2, Numpad6: 3, Numpad0: 4, Numpad5: 5 };
 // A key maps to one matrix cell [row,bit] or several [[row,bit],...] (e.g. Enter
 // hits both CR and tenkey RETURN). Normalise so the handlers always see a list.
 function cellsOf(k) { return (k && Array.isArray(k[0])) ? k : [k]; }
@@ -820,7 +838,11 @@ function pressKey(k, down) { for (const c of cellsOf(k)) down ? machine.keyDown(
 // poll the pad instead of the keyboard (many PC-8801 action games, incl. Ys II)
 // still respond to the keyboard. joy bit: 0=up 1=down 2=left 3=right 4/5=trig.
 const KEYJOY = { ArrowUp: 0, ArrowDown: 1, ArrowLeft: 2, ArrowRight: 3, z: 4, x: 5 };
-function joyBitFor(e) { const k = e.key.length === 1 ? e.key.toLowerCase() : e.key; return KEYJOY[k]; }
+function joyBitFor(e) {
+  const is88 = machine && !machine.n80mode;
+  if (is88 && e.code && CODEJOY[e.code] !== undefined) return CODEJOY[e.code];
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key; return KEYJOY[k];
+}
 let kbdJoy = 0xff; // keyboard-mirrored pad bits (active low), combined with a real pad each frame
 window.addEventListener('gamepadconnected', (e) => console.log(`[gamepad] connected: "${e.gamepad.id}" mapping=${e.gamepad.mapping} axes=${e.gamepad.axes.length} buttons=${e.gamepad.buttons.length}`));
 window.addEventListener('gamepaddisconnected', (e) => console.log(`[gamepad] disconnected: "${e.gamepad.id}"`));
@@ -846,6 +868,9 @@ function pollGamepad() {
 }
 function matrixKey(e) {
   const map = activeKeymap();
+  // e.code disambiguates tenkey vs main number row (Numpad2 vs Digit2) — only
+  // the code carries that, so consult it first when running an 8801.
+  if (map === KEY88 && e.code && CODE88[e.code] !== undefined) return CODE88[e.code];
   if (map[e.key] !== undefined) return map[e.key];
   const lower = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   return map[lower];
