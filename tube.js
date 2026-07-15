@@ -156,8 +156,14 @@ export class CrtTube {
           // output row of the band so a 2x raster can actually *show* the
           // gap — otherwise both samples straddle the trace symmetrically
           // and you get two half-lit rows instead of line + black.
+          // Phase off the RAW output row v, NOT the barrel-warped bv: the raster
+          // is a straight physical sweep, so scanlines must stay horizontal and
+          // evenly spaced. Deriving the phase from bv let the barrel locally
+          // stretch the line grid, and where that beat against the beam period a
+          // bright horizontal band appeared (worse under supersampling, and
+          // x-dependent via r2 → it showed up off to one side).
           const rowsPerLine = outHeight / srcHeight;
-          const sy = (bv + 1) / 2 * srcHeight;
+          const sy = (v + 1) / 2 * srcHeight;
           const u = sy - Math.floor(sy); // 0..1 within the band
           const c = 0.5 / rowsPerLine; // trace center on the first row
           const d = Math.min(Math.abs(u - c), Math.abs(u - c - 1), Math.abs(u - c + 1));
