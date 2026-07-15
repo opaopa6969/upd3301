@@ -1191,8 +1191,8 @@ function applyPad() {
     for (const c of act.cells) padM[c[0]] &= ~(1 << c[1]);
     if (act.joy !== undefined) padJoy &= ~(1 << act.joy);
   }
-  for (let i = 0; i < 16; i++) machine.keys[i] = kbMatrix[i] & padM[i];
-  machine.joy[0] = kbdJoy & padJoy;
+  if (machine.keys) for (let i = 0; i < 16; i++) machine.keys[i] = kbMatrix[i] & padM[i];
+  if (machine.joy) machine.joy[0] = kbdJoy & padJoy; // 8001 has no joystick port
 }
 function matrixKey(e) {
   const map = activeKeymap();
