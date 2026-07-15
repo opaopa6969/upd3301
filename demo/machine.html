@@ -48,6 +48,10 @@
     </div>
   </div>
   <span id="playinfo" style="min-width:150px;text-align:right;font-variant-numeric:tabular-nums;color:#adf">frame 0 · 0:00.0</span>
+  <label style="color:#667;font-size:11px" title="巻き戻しバッファの長さ。長くするほど昔まで戻れるが、メモリを使う。約1.7分を超えると刻みが自動で粗くなりメモリを一定(約150MB)に抑える">⟲<select id="rewbuf" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:2px;font-size:11px">
+    <option value="15">15秒</option><option value="30">30秒</option><option value="45">45秒</option>
+    <option value="60">1分</option><option value="120">2分</option><option value="300">5分</option><option value="600">10分</option>
+  </select></label>
 </div>
 <div class="row">
   <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
@@ -674,11 +678,19 @@ const renderOpts = () => ({ textOpaque: txtOpaque, clipActive, hideText: !showTe
 // and while the button is HELD, restore backwards through it. Audio is muted
 // while scrubbing (the chip state is jumping around). A snapshot is ~130 KB
 // (RAM + GVRAM + sub-CPU), so REWIND_MAX bounds the memory (~45 s ≈ 60 MB).
-const REWIND_EVERY = 6; // one snapshot per 6 frames = 0.1 s granularity
-// buffer depth is configurable (seconds → snapshot count). A snapshot is ~130 KB,
-// so 45 s ≈ 60 MB; the setting lets you trade RAM for how far back you can go.
+// Buffer depth is configurable in SECONDS (5 s … 10 min). A snapshot is ~150 KB,
+// so memory = count × 150 KB. To keep that bounded no matter how long you ask for,
+// the snapshot INTERVAL auto-coarsens above ~1.7 min so the count stays ≤ ~1000
+// (≈150 MB): short buffers keep fine 0.1 s granularity, a 10-min buffer steps at
+// ~0.6 s. Both are configurable; REWIND_EVERY/REWIND_MAX are derived, not fixed.
+const REWIND_TARGET = 1000; // max snapshots kept (memory cap)
 let rewindSecs = Math.max(5, Math.min(600, parseInt(localStorage.getItem('upd3301-rewindsecs') || '45', 10) || 45));
-let REWIND_MAX = Math.round(rewindSecs * 60 / REWIND_EVERY);
+let REWIND_EVERY = 6, REWIND_MAX = 450;
+function applyRewindBudget() {
+  REWIND_EVERY = Math.max(6, Math.ceil(rewindSecs * 60 / REWIND_TARGET));
+  REWIND_MAX = Math.round(rewindSecs * 60 / REWIND_EVERY);
+}
+applyRewindBudget();
 let history = [], lastSnapFrame = -1, rewinding = false;
 let paused = false, scrubIndex = null; // scrubIndex != null → frozen at a past snapshot
 const canSnap = () => machine && typeof machine.snapshot === 'function';
@@ -686,10 +698,11 @@ const frozen = () => paused || scrubIndex !== null;
 function resetRewind() { history = []; lastSnapFrame = -1; rewinding = false; paused = false; scrubIndex = null; previewIdx = null; shuttleX = 0; transportSpeed = 1; }
 function setRewindSecs(s) {
   rewindSecs = Math.max(5, Math.min(600, s | 0));
-  REWIND_MAX = Math.round(rewindSecs * 60 / REWIND_EVERY);
+  applyRewindBudget();
   try { localStorage.setItem('upd3301-rewindsecs', String(rewindSecs)); } catch {}
   while (history.length > REWIND_MAX) history.shift();
 }
+{ const sel = $('rewbuf'); if (sel) { sel.value = String(rewindSecs); sel.onchange = (e) => setRewindSecs(parseInt(e.target.value, 10) || 45); } }
 function pressRewind(on) {
   rewinding = on && canSnap() && history.length > 1;
   $('brewind').classList.toggle('on', rewinding);
