@@ -795,11 +795,18 @@ const KEY88 = {
   Shift: [8, 6], Control: [8, 7],
   // row 9: SPACE ESC TAB ↓ BS INS CR ←
   ' ': [9, 0], Escape: [9, 1], Tab: [9, 2], ArrowDown: [9, 3],
-  Backspace: [9, 4], Insert: [9, 5], Enter: [9, 6], ArrowLeft: [9, 7],
+  // Enter presses BOTH the main CR [9,6] and the tenkey RETURN [1,7]: the in-game
+  // menu reads main CR, but the disk-swap prompt ("insert disk A") polls the
+  // tenkey return, so a single mapping left one of them dead.
+  Backspace: [9, 4], Insert: [9, 5], Enter: [[9, 6], [1, 7]], ArrowLeft: [9, 7],
   // row 10: F1-F5 (+ ROLL/HELP unmapped)
   F1: [10, 0], F2: [10, 1], F3: [10, 2], F4: [10, 3], F5: [10, 4],
 };
 function activeKeymap() { return (machine && !machine.n80mode) ? KEY88 : KEY; }
+// A key maps to one matrix cell [row,bit] or several [[row,bit],...] (e.g. Enter
+// hits both CR and tenkey RETURN). Normalise so the handlers always see a list.
+function cellsOf(k) { return (k && Array.isArray(k[0])) ? k : [k]; }
+function pressKey(k, down) { for (const c of cellsOf(k)) down ? machine.keyDown(c[0], c[1]) : machine.keyUp(c[0], c[1]); }
 // Mirror directional keys + Z/X onto the joystick (OPN port A) so games that
 // poll the pad instead of the keyboard (many PC-8801 action games, incl. Ys II)
 // still respond to the keyboard. joy bit: 0=up 1=down 2=left 3=right 4/5=trig.
@@ -847,7 +854,7 @@ window.addEventListener('keydown', (e) => {
   if (e.shiftKey) machine.keyDown(8, 6); else machine.keyUp(8, 6);
   const jb = joyBitFor(e);
   if (jb !== undefined) { kbdJoy &= ~(1 << jb); machine.joyDown(jb); e.preventDefault(); }
-  if (k) { machine.keyDown(k[0], k[1]); e.preventDefault(); }
+  if (k) { pressKey(k, true); e.preventDefault(); }
 });
 window.addEventListener('keyup', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -855,7 +862,7 @@ window.addEventListener('keyup', (e) => {
   if (!e.shiftKey) machine.keyUp(8, 6);
   const jb = joyBitFor(e);
   if (jb !== undefined) { kbdJoy |= (1 << jb); machine.joyUp(jb); e.preventDefault(); }
-  if (k) { machine.keyUp(k[0], k[1]); e.preventDefault(); }
+  if (k) { pressKey(k, false); e.preventDefault(); }
 });
 
 const FR = 1 / 60;
