@@ -561,19 +561,36 @@ const _hdb = () => new Promise((res, rej) => { const r = indexedDB.open('upd3301
 async function saveDirHandle(h) { try { const db = await _hdb(); db.transaction('h', 'readwrite').objectStore('h').put(h, 'diskdir'); } catch {} }
 async function loadDirHandle() { try { const db = await _hdb(); return await new Promise((res) => { const rq = db.transaction('h', 'readonly').objectStore('h').get('diskdir'); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => res(null); }); } catch { return null; } }
 let folderDisks = []; // { name, path, handle } scanned from the chosen folder
-async function scanFolder(dir, prefix = '', depth = 0, out = []) {
-  if (depth > 4) return out;
+// scan a picked folder for everything the machine can use: disk images, the PC-8801
+// BIOS ROM set, kanji/n80 ROMs, and a font ROM. Files stay on disk (handles only).
+async function scanFolder(dir, prefix = '', depth = 0, acc) {
+  acc = acc || { disks: [], roms: [], fonts: [] };
+  if (depth > 5) return acc;
   for await (const [nm, h] of dir.entries()) {
-    if (h.kind === 'file') { if (/\.(d88|88d|d77)$/i.test(nm)) out.push({ name: nm, path: prefix + nm, handle: h }); }
-    else if (h.kind === 'directory') await scanFolder(h, prefix + nm + '/', depth + 1, out);
+    if (h.kind === 'file') {
+      if (/\.(d88|88d|d77)$/i.test(nm)) acc.disks.push({ name: nm, path: prefix + nm, handle: h });
+      else if (classify88(nm)) acc.roms.push({ name: nm, handle: h });
+      else if (/^font88?\.rom$/i.test(nm) || /font.*\.rom$/i.test(nm)) acc.fonts.push({ name: nm, handle: h });
+    } else if (h.kind === 'directory') await scanFolder(h, prefix + nm + '/', depth + 1, acc);
   }
-  return out;
+  return acc;
 }
 async function useFolder(dir) {
   const cnt = $('diskfolderinfo'); if (cnt) cnt.textContent = 'スキャン中…';
-  folderDisks = (await scanFolder(dir)).sort((a, b) => a.path.localeCompare(b.path));
+  const acc = await scanFolder(dir);
+  folderDisks = acc.disks.sort((a, b) => a.path.localeCompare(b.path));
   await saveDirHandle(dir);
-  if (cnt) cnt.textContent = `📁 ${dir.name}: ${folderDisks.length}枚`;
+  let extra = '';
+  if (acc.roms.length) { // assemble + persist the 8801 BIOS set (n88/ext/disk/n80/kanji)
+    try {
+      const files = await Promise.all(acc.roms.map((r) => r.handle.getFile()));
+      const r = await assemble88(files); refreshStore();
+      extra += (r.gotMain && r.gotSub && r.banks === 4) ? ' ✓BIOS一式' : ` (ROM${acc.roms.length})`;
+    } catch {}
+  }
+  if (acc.fonts.length) { try { const b = new Uint8Array(await (await acc.fonts[0].handle.getFile()).arrayBuffer()); applyFontRom(cgrom, b); await putRom('font', acc.fonts[0].name, b); extra += ' +font'; } catch {} }
+  if (cnt) cnt.textContent = `📁 ${dir.name}: ${folderDisks.length}枚${extra}`;
+  if (has88Set() && bootMode !== 'n88') switchMode('n88'); // BIOS now present → boot N88 so disks run
   renderDiskList();
 }
 async function loadFolderDisk(item) {
