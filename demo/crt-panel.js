@@ -73,13 +73,19 @@ export class CrtPanel {
     return this._phosphor;
   }
 
-  tube(w, h) {
+  // ss = supersample factor. The mask/scanlines are drawn at ss× the native
+  // 640×400 output, so a higher-scale display gets a proportionally FINER mask
+  // pitch (a real high-dot-pitch monitor shows more, finer triads for the same
+  // picture) with no moiré (the backing is 1:1 with the screen). Cached per
+  // (mode, ss) so switching scale doesn't rebuild the geometry every frame.
+  tube(w, h, ss = 1) {
     this.phosphor(w, h); // keeps sizes in sync
-    if (!this._tubes[this.tubeMode]) {
+    const key = this.tubeMode + '@' + ss;
+    if (!this._tubes[key]) {
       const k = this.knobs;
-      this._tubes[this.tubeMode] = new CrtTube({
-        srcWidth: w, srcHeight: h, outWidth: w, outHeight: h * 2,
-        mask: this.tubeMode, maskPitch: k.pitch, convergence: k.conv,
+      this._tubes[key] = new CrtTube({
+        srcWidth: w, srcHeight: h, outWidth: w * ss, outHeight: h * 2 * ss,
+        mask: this.tubeMode, maskPitch: k.pitch * ss, convergence: k.conv,
         barrel: k.barrel, ghost: k.ghost, beamWidth: k.focus,
         hSize: k.hSize, vSize: k.vSize,
         // 400-line packs the traces until the gaps vanish; 200-line leaves
@@ -87,8 +93,9 @@ export class CrtPanel {
         scanlineDepth: this.line400 ? 0.3 : 1.0,
         beamHeight: this.line400 ? 1.0 : 0.35,
       });
+      this._tubes[key].ss = ss; // remember so knob recompute keeps the pitch scaled
     }
-    return this._tubes[this.tubeMode];
+    return this._tubes[key];
   }
 
   plotOpts() {
@@ -228,7 +235,7 @@ export class CrtPanel {
         else if (['hSize', 'vSize', 'pitch', 'conv', 'barrel'].includes(key)) {
           for (const tb of Object.values(this._tubes)) {
             tb.setGeometry({
-              hSize: this.knobs.hSize, vSize: this.knobs.vSize, maskPitch: this.knobs.pitch,
+              hSize: this.knobs.hSize, vSize: this.knobs.vSize, maskPitch: this.knobs.pitch * (tb.ss || 1),
               convergence: this.knobs.conv, barrel: this.knobs.barrel,
             });
           }
