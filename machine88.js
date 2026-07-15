@@ -254,15 +254,23 @@ export class Pc8801Machine {
       if (port === 0xaa || port === 0xab) return this.opna.readStatus(); // bank1 status (ADPCM flags: stubbed)
     }
     if (port === 0xe2 || port === 0xe3) return 0xff; // EMM
-    // Kanji ROM data: byte = rom[(addr<<1) | (port&1)]. 0xE8/0xE9 = level-1,
-    // 0xEC/0xED = level-2. No ROM loaded → 0xFF (the game then draws white boxes).
+    // Kanji ROM data. A glyph is 32 bytes = 16 LEFT column-bytes then 16 RIGHT
+    // (confirmed by rendering the ROM). The driver writes addr = wordBase + line
+    // (wordBase = glyphIndex·16, glyph-aligned to 16) per row and reads 0xE8 for
+    // the LEFT byte / 0xE9 for the RIGHT. So:
+    //   byte = ((addr & 0xFFF0) << 1) | ((port&1) << 4) | (addr & 0x0F)
+    //   – (wordBase<<1)=glyph byte base, +line for left, +16+line for right.
+    // (The earlier rom[addr*2 | port&1] read interleaved the halves → scrambled
+    // kana/kanji.) 0xE8/0xE9 = level-1, 0xEC/0xED = level-2. No ROM → 0xFF.
     if (port === 0xe8 || port === 0xe9) {
       if (!this.kanjiRom) return 0xff;
-      return this.kanjiRom[((this.kanjiAddr << 1) | (port & 1)) & (this.kanjiRom.length - 1)];
+      const a = this.kanjiAddr;
+      return this.kanjiRom[(((a & 0xfff0) << 1) | ((port & 1) << 4) | (a & 0x0f)) & (this.kanjiRom.length - 1)];
     }
     if (port === 0xec || port === 0xed) {
       if (!this.kanji2Rom) return 0xff;
-      return this.kanji2Rom[((this.kanji2Addr << 1) | (port & 1)) & (this.kanji2Rom.length - 1)];
+      const a = this.kanji2Addr;
+      return this.kanji2Rom[(((a & 0xfff0) << 1) | ((port & 1) << 4) | (a & 0x0f)) & (this.kanji2Rom.length - 1)];
     }
     // FCh-FFh: the main half of the 8255 pair to the disk sub-system. With
     // no sub board the inputs float high and the boot ROM's BC×D timeout
