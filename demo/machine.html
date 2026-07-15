@@ -333,6 +333,14 @@ $('bpng').onclick = () => {
     const line = `crtc ${crtc.cols}x${crtc.rows}×${crtc.linesPerChar}=${crtc.rows * crtc.linesPerChar}ln  pal ${(machine._port32 & 0x20) ? 'analog' : 'digital'}  ${pal.join(' ')}`;
     console.log('[palette] ' + line);
     $('dipnote').textContent = line; // on-screen: displayed height + palette (index:RGB, 0-7)
+    // text-layer + DMA diagnostic for the scroll-source / masking investigation
+    try {
+      const d2 = machine.dmac.channels[2];
+      const fill = [];
+      for (let r = 0; r < crtc.rows; r++) { let n = 0; for (let c = 0; c < crtc.cols; c++) if ((crtc.cells[r * crtc.cols + c] || 0) > 0x20) n++; fill.push(n); }
+      console.log(`[dma2] addr=${(d2.addr || 0).toString(16)} count=${d2.count} base=${(d2.baseAddr || 0).toString(16)} baseCount=${d2.baseCount} autoload=${machine.dmac.autoload} ve=${crtc.ve}`);
+      console.log(`[textrows] nonblank/row(0..${crtc.rows - 1}): ${fill.join(',')}`);
+    } catch (e) { console.log('[diag] ' + e.message); }
   }
   const a = document.createElement('a'); a.download = `upd3301-raw-f${machine.frame}.png`; a.href = c.toDataURL('image/png'); a.click();
 };
