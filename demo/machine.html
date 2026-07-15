@@ -75,7 +75,11 @@
     <option value="1" selected>×1</option><option value="2">×2</option>
     <option value="4">×4</option><option value="8">×8</option><option value="16">×16</option>
   </select></label>
-  <label style="color:#778;font-size:12px" title="CPUの実効速度。実機はテキストDMAでバスを取られ数割遅い（既定70%）。音楽はOPNクロック基準で不変なので、上げると『映像が音楽に追いつかず先に曲が終わる』ズレを詰められる。実機相当の目安は70〜85%">CPU <input type="range" id="cpupct" min="70" max="100" value="70" style="vertical-align:middle;width:96px"><span id="cpupctval" style="font-variant-numeric:tabular-nums;min-width:34px;display:inline-block">70%</span></label>
+  <label style="color:#778;font-size:12px" title="CPU実効速度。自動=テキストDMAの有無で動的にモデル化（テキスト面オフの全画面グラフィック時は0%横取り=フル4MHz、テキスト表示時は控えめに横取り）。音楽はOPNクロック基準で不変。手動固定も可">CPU <select id="cpumode" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
+    <option value="auto" selected>自動(DMA連動)</option>
+    <option value="100">手動 100%</option><option value="90">手動 90%</option>
+    <option value="80">手動 80%</option><option value="70">手動 70%</option>
+  </select></label>
   <label style="color:#778;font-size:12px">DIPSW1 <input id="dip1" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:34px;text-align:center"></label>
   <label style="color:#778;font-size:12px">DIPSW2 <input id="dip2" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:34px;text-align:center"></label>
   <span id="dipnote" style="color:#667;font-size:11px"></span>
@@ -576,19 +580,20 @@ updateCleanBtn();
 // — funny, and handy for skipping disk loads.
 let speedMul = 1;
 $('speed').onchange = (e) => { speedMul = parseFloat(e.target.value) || 1; };
-// CPU effective-speed knob (1 - dmaSteal). Higher = the CPU does more cycles per
-// frame, so CPU-bound game logic (Ys II opening scroll) speeds up while the music
-// tempo — anchored to the OPN clock — stays put. The lever for "music finishes
-// before the video". Persisted; re-applied to each freshly booted machine.
-let cpuThrottlePct = parseInt(localStorage.getItem('upd3301-cpupct') || '70', 10) || 70;
-function applyCpuThrottle() { if (machine && machine.setDmaSteal) machine.setDmaSteal(1 - cpuThrottlePct / 100); }
-{
-  const sl = $('cpupct'); if (sl) { sl.value = String(cpuThrottlePct); $('cpupctval').textContent = cpuThrottlePct + '%'; }
+// CPU effective-speed mode: 'auto' (steal derived from text-DMA activity) or a
+// fixed percentage. Auto lets a text-masked full-screen scene run full 4 MHz and
+// a text screen pay a small steal — modelling the μPD3301 bus theft — while the
+// OPN-clocked music tempo stays put. Persisted; re-applied to each fresh machine.
+let cpuMode = localStorage.getItem('upd3301-cpumode') || 'auto';
+function applyCpuThrottle() {
+  if (!machine || !machine.setAutoSteal) return;
+  if (cpuMode === 'auto') machine.setAutoSteal(true);
+  else machine.setDmaSteal(1 - (parseInt(cpuMode, 10) || 100) / 100);
 }
-$('cpupct').oninput = (e) => {
-  cpuThrottlePct = parseInt(e.target.value, 10) || 70;
-  $('cpupctval').textContent = cpuThrottlePct + '%';
-  try { localStorage.setItem('upd3301-cpupct', String(cpuThrottlePct)); } catch {}
+{ const sel = $('cpumode'); if (sel) sel.value = cpuMode; }
+$('cpumode').onchange = (e) => {
+  cpuMode = e.target.value;
+  try { localStorage.setItem('upd3301-cpumode', cpuMode); } catch {}
   applyCpuThrottle();
 };
 
@@ -1200,7 +1205,7 @@ function loop(now) {
     workMs = workMs * 0.9 + (nowP - t0) * 0.1;
     perfAccountRender(nowP - tEmu, nowP);
     guts.textContent = `${is88 ? 'PC-8801/N88' : 'PC-8001/N80'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
-      + `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz`
+      + `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz${is88 ? `  CPU ${machine.effectiveCpuPct}%` : ''}`
       + (perfHud ? `\n${perfHud}` : '');
     updatePlayerBar();
   }

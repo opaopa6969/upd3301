@@ -163,7 +163,18 @@ export class Pc8801Machine {
 
     this.frameHz = frameHz; // vertical refresh the emulation is pacing to
     this.clockHz = clockHz;
-    this.dmaSteal = dmaSteal;
+    this.dmaSteal = dmaSteal;       // manual steal (used when autoSteal is off)
+    // Dynamic DMA-steal model: the μPD3301 text DMA only steals CPU cycles while
+    // the text plane is actually being fetched. So a full-screen GVRAM scene with
+    // the text plane masked off (port 53h b0 — Ys II's map, and much of its
+    // opening) pays ZERO steal and the CPU runs full 4 MHz; a text-on screen pays
+    // a modest steal scaled by how many cells the CRTC fetches. The old fixed 0.3
+    // throttled the CPU to 70% everywhere, dragging CPU-bound game logic (the
+    // opening scroll) 30% slow while the OPN-clock-locked music stayed on time —
+    // "the music finishes first". textDmaSteal is deliberately small (real steal
+    // is ~1/10, not 1/3); tune it if a text-heavy scene still drifts.
+    this.autoSteal = true;
+    this.textDmaSteal = 0.08;       // steal at a full 80×25 text screen
     this.frameT = Math.round(clockHz / frameHz * (1 - dmaSteal));
     // the sub board has its own bus — no DMA steal there. Per T-state of
     // main CPU progress, the sub runs this many:
@@ -435,6 +446,7 @@ export class Pc8801Machine {
   // is level-polled on both sides, so slice granularity only paces the
   // transfer, it cannot break the protocol.
   stepFrame() {
+    this._applySteal(); // recompute frameT from this frame's text-DMA activity
     const SLICE = 100;
     // the 1/600s interval timer (level 0) — disk BASIC sleeps on it (EI/HALT),
     // so without these 10 ticks per frame the machine halts forever
@@ -506,18 +518,36 @@ export class Pc8801Machine {
   insertDisk(unit, disk) { this.sub?.insertDisk(unit, disk); return this; }
   ejectDisk(unit) { this.sub?.ejectDisk(unit); return this; }
 
-  // Live-tune the CPU's bus-steal fraction. The music tempo is anchored to the
-  // OPN's own clock (via _opnClkPerCpu), so it stays put; only the CPU's cycles
-  // per frame change. Lower steal = faster CPU-bound game logic (e.g. Ys II's
-  // opening scroll) without touching the music — the knob for "video lags the
-  // music" desync. Recomputes the frameT-derived ratios.
-  setDmaSteal(v) {
-    this.dmaSteal = Math.max(0, Math.min(0.6, v));
-    this.frameT = Math.round(this.clockHz / this.frameHz * (1 - this.dmaSteal));
+  // The effective bus-steal fraction for THIS frame. Auto mode derives it from
+  // whether the text plane is being fetched (and how big it is); manual mode uses
+  // the fixed dmaSteal. The music tempo is anchored to the OPN clock, so changing
+  // this only moves the CPU's cycles/frame, never the tempo.
+  _effectiveSteal() {
+    if (!this.autoSteal) return this.dmaSteal;
+    // text DMA runs only when the text plane is displayed (not masked by 53h b0,
+    // not in N80 mode). Scale the steal by cells fetched vs a full 80×25 screen.
+    const textOn = (this._port53 & 1) === 0 && !this.n80mode;
+    if (!textOn) return 0;
+    const cells = (this.crtc.cols || 80) * (this.crtc.rows || 25);
+    return this.textDmaSteal * Math.min(1, cells / (80 * 25));
+  }
+
+  // Recompute frameT + the derived ratios from the current effective steal. The
+  // OPN clock-per-CPU-cycle is rescaled in lock-step so the sound stays at real
+  // speed no matter how the CPU is throttled.
+  _applySteal() {
+    const steal = Math.max(0, Math.min(0.6, this._effectiveSteal()));
+    this.frameT = Math.round(this.clockHz / this.frameHz * (1 - steal));
     this._opnClkPerCpu = (this.clockHz / this.frameHz) / this.frameT;
     this.subRatio = (this.clockHz / this.frameHz) / this.frameT;
     return this;
   }
+
+  // Manual override: pin the steal to a fixed fraction (turns auto off).
+  setDmaSteal(v) { this.autoSteal = false; this.dmaSteal = Math.max(0, Math.min(0.6, v)); return this._applySteal(); }
+  setAutoSteal(on) { this.autoSteal = !!on; return this._applySteal(); }
+  // Effective CPU speed this frame, as a percentage of full 4 MHz (for the HUD).
+  get effectiveCpuPct() { return Math.round((1 - this._effectiveSteal()) * 100); }
 
   update(dt) {
     this._acc = (this._acc ?? 0) + dt;
