@@ -163,6 +163,12 @@
       <h2>メモリ</h2>
       <div class="row" style="margin-top:0">
         <label style="color:#778;font-size:12px">アドレス <input id="memaddr" value="0000" size="6"></label>
+        <button id="mempgup" title="256バイト戻る(16行)" style="padding:2px 6px">⏫</button>
+        <button id="memup" title="16バイト戻る(1行)" style="padding:2px 6px">▲</button>
+        <button id="memdown" title="16バイト進む(1行)" style="padding:2px 6px">▼</button>
+        <button id="mempgdn" title="256バイト進む(16行)" style="padding:2px 6px">⏬</button>
+      </div>
+      <div class="row" style="margin-top:0">
         <label style="color:#778;font-size:12px">書込先 <input id="waddr" size="6"></label>
         <input id="wdata" size="18" placeholder="AA 55 01 …">
         <button id="bwrite">書込</button>

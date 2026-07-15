@@ -640,7 +640,7 @@ export function mountIcePage(doc, env) {
   const els = {};
   for (const id of ['conn', 'minfo', 'clock', 'tabmain', 'tabsub', 'bpause', 'bcont', 'bstep',
     'bover', 'bstepout', 'bframe', 'bsyntax', 'regs', 'reginfo', 'regshadow', 'dis', 'memaddr', 'mem',
-    'memregion', 'waddr', 'wdata', 'bwrite', 'bpaddr', 'bpcond', 'bpbtn', 'bplist', 'fdc', 'fdcbox',
+    'memregion', 'memup', 'memdown', 'mempgup', 'mempgdn', 'waddr', 'wdata', 'bwrite', 'bpaddr', 'bpcond', 'bpbtn', 'bplist', 'fdc', 'fdcbox',
     'asrc', 'aorg', 'basm', 'bsetpc', 'brun', 'aout', 'anal',
     'btundo', 'btredo', 'btsnap', 'tree', 'ttinfo',
     'bprof', 'bprofreset', 'prof', 'stack',
@@ -1301,6 +1301,11 @@ export function mountIcePage(doc, env) {
     if (v !== null) state.memAddr = v & 0xffff;
     renderAll();
   };
+  const stepMem = (delta) => { state.memAddr = (state.memAddr + delta) & 0xfff0; els.memaddr.value = hex(state.memAddr, 4); renderAll(); };
+  if (els.memup) els.memup.onclick = () => stepMem(-16);      // one 16-byte line up
+  if (els.memdown) els.memdown.onclick = () => stepMem(16);   // one line down
+  if (els.mempgup) els.mempgup.onclick = () => stepMem(-256); // 16 lines up
+  if (els.mempgdn) els.mempgdn.onclick = () => stepMem(256);  // 16 lines down
   els.bwrite.onclick = () => {
     const c = activeCpu();
     const a = parseNum(els.waddr.value);
