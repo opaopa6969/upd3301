@@ -33,8 +33,13 @@ export const PHOSPHORS = Object.freeze({
   P22: {
     name: 'P22 (color TV, short)',
     tau: [0.0015, 0.0008, 0.0004],
-    tailTau: [0.15, 0.08, 0.05],
-    tailFrac: [0.045, 0.02, 0.012],
+    // Short afterglow. The old tail (0.15/0.08/0.05 s ≈ 9 frames at 60 Hz) was
+    // far too long for a color-TV P22: on a vertical scroll it stacked ~9 frames
+    // of already-departed content into a bright ghost mess (gamma 2.2 lifts even
+    // a 4.5% tail to ~23% on screen). Real P22 is medium-short; a ~2-3 frame tail
+    // keeps a faint CRT glow on static art without smearing motion into garbage.
+    tailTau: [0.02, 0.014, 0.01],
+    tailFrac: [0.03, 0.016, 0.01],
     primaries: [[1, 0.22, 0.12], [0.2, 1, 0.16], [0.14, 0.18, 1]],
   },
   LONG: {
