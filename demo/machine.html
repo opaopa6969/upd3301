@@ -59,9 +59,9 @@
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <select id="savedisk" title="このブラウザに保存済みのディスクから選ぶ" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px"><option value="">💾 保存済みディスク…</option></select>
-  <span id="grp-drive" style="color:#778;font-size:12px" title="どのディスクをどのドライブに入れるか選ぶ（マルチディスク用・実行中の入れ替え可）">💽 ドライブ
-    1<select id="drive0" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:3px;font-size:11px;max-width:170px"><option value="-1">（空）</option></select>
-    2<select id="drive1" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:3px;font-size:11px;max-width:170px"><option value="-1">（空）</option></select>
+  <span id="grp-drive" style="display:flex;flex-direction:column;gap:4px;color:#9ab;font-size:12px;min-width:240px" title="どのディスクをどのドライブに入れるか選ぶ（マルチディスク用・実行中の入れ替え可）">
+    <label style="display:flex;align-items:center;gap:5px">💽 ドライブ1 <select id="drive0" style="flex:1;min-width:0;background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:3px;font-size:11px"><option value="-1">（空）</option></select></label>
+    <label style="display:flex;align-items:center;gap:5px">💽 ドライブ2 <select id="drive1" style="flex:1;min-width:0;background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:3px;font-size:11px"><option value="-1">（空）</option></select></label>
   </span>
   <label style="color:#778;font-size:12px">FONT.ROM (任意): <input type="file" id="ffont" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="n88.rom + n88_0..3.rom + disk.rom (計6ファイル) をまとめて選ぶ">PC-8801 BIOS一式(n88): <input type="file" id="from88" multiple style="font-size:11px"></label>
