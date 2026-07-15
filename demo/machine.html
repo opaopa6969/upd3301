@@ -59,6 +59,10 @@
   <label style="color:#778;font-size:12px" title="表示中のテキストドット(黒でも)でグラフィックをマスクする実験。Ys等の画面外バッファ隠し用"><input type="checkbox" id="txtopaque"> Txtマスク</label>
   <label style="color:#778;font-size:12px" title="μPD3301の実表示エリア(cols×rows)の外を黒でクリップ。画面端の非表示バッファ隠し用"><input type="checkbox" id="clipactive"> 端クリップ</label>
   <label style="color:#778;font-size:12px" title="テキスト/セミグラフィック層の表示。OFFにするとグラフィックのみ＝合成バグの切り分け用"><input type="checkbox" id="showtext" checked> テキスト層</label>
+  <label style="color:#778;font-size:12px" title="表示倍率。整数倍(×1/×2/×3)はドット等倍なのでアパーチャ/シャドウマスクのモアレが出ない。フィットは幅可変で画面に合わせるが、非整数倍だとマスク周期がスクリーン画素と干渉してモアレが出やすい">表示 <select id="dispscale" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
+    <option value="fit">フィット</option><option value="1">×1</option>
+    <option value="2">×2</option><option value="3">×3</option>
+  </select></label>
   <button id="bfull">⛶ 全画面</button>
   <button id="bice">🔬 ICE</button>
   <button id="bide">🛠 IDE</button>
@@ -238,12 +242,31 @@ const panel = mountCrtPanel(document.getElementById('panel'), {
   storageKey: 'crt-panel-machine', collapsed: true,
 });
 let img = null, rgbaBuf = null, phosW = 0, phosH = 0;
+// Display scale. The CRT sim renders into a fixed 640×400 backing; how that maps
+// to screen pixels is what makes or breaks the mask. INTEGER scales (×1/×2/×3)
+// via image-rendering:pixelated duplicate each backing dot a whole number of
+// times, so the aperture/shadow mask period lands on an exact pixel count → no
+// moiré. 'fit' (max-width:100%) is convenient but scales by a fractional factor,
+// beating the mask stripes against the screen grid into moiré.
+let dispScale = localStorage.getItem('upd3301-dispscale') || 'fit';
+function applyDispScale() {
+  if (!canvas.width) return;
+  if (dispScale === 'fit') {
+    canvas.style.maxWidth = '100%'; canvas.style.width = ''; canvas.style.height = '';
+  } else {
+    const n = parseInt(dispScale, 10) || 2;
+    canvas.style.maxWidth = 'none';
+    canvas.style.width = (canvas.width * n) + 'px';
+    canvas.style.height = (canvas.height * n) + 'px';
+  }
+}
 function fitTo(w, h) {
   if (w === phosW && h === phosH) return;
   phosW = w; phosH = h;
   canvas.width = w; canvas.height = h * 2;
   img = ctx.createImageData(w, h * 2);
   rgbaBuf = null;
+  applyDispScale();
 }
 
 const $ = (id) => document.getElementById(id);
@@ -570,6 +593,12 @@ $('bclean').onclick = () => {
   updateCleanBtn();
 };
 updateCleanBtn();
+{ const sel = $('dispscale'); if (sel) { sel.value = dispScale; applyDispScale(); } }
+$('dispscale').onchange = (e) => {
+  dispScale = e.target.value;
+  try { localStorage.setItem('upd3301-dispscale', dispScale); } catch {}
+  applyDispScale();
+};
 
 // ---- emulation speed (fast-forward / slow-mo) -----------------------------
 // Scales the emulated time fed to machine.update(): >1 fast-forwards, <1 slows.
