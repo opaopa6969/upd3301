@@ -725,6 +725,7 @@ window.addEventListener('keydown', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = matrixKey(e);
   if (!k && !e.shiftKey) return; // nothing we handle → let the browser have it
+  if (bootMode === 'n88') ensureAudio(); // a keypress is a user gesture → unblock autoplay
   if (frozen()) resumePlay(); // any game key un-freezes
   if (e.shiftKey) machine.keyDown(8, 6); else machine.keyUp(8, 6);
   if (k) { machine.keyDown(k[0], k[1]); e.preventDefault(); }
