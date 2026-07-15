@@ -342,7 +342,7 @@ $('bpng').onclick = () => {
       console.log(`[textrows] nonblank/row(0..${crtc.rows - 1}): ${fill.join(',')}`);
       // GVRAM content: is the map drawn (bytes present) but not shown, or empty?
       const nz = (pl) => { let n = 0; for (let k = 0; k < pl.length; k++) if (pl[k]) n++; return n; };
-      console.log(`[gvram] on=${machine.gvramOn} nonzero B=${nz(machine.gvram[0])} R=${nz(machine.gvram[1])} G=${nz(machine.gvram[2])} (of ${machine.gvram[0].length})  port31=0x${(machine._port31 || 0).toString(16)} port32=0x${(machine._port32 || 0).toString(16)}`);
+      console.log(`[gvram] on=${machine.gvramOn} nonzero B=${nz(machine.gvram[0])} R=${nz(machine.gvram[1])} G=${nz(machine.gvram[2])} (of ${machine.gvram[0].length})  port31=0x${(machine._port31 || 0).toString(16)} port32=0x${(machine._port32 || 0).toString(16)} port53=0x${(machine._port53 || 0).toString(16)} (textOff=${!!(machine._port53 & 1)} graphOff=${!!(machine._port53 & 2)})`);
       // sample cells + per-cell colour/attr for a top/mid/bottom row (first 12 cols)
       const hx = (v) => (v || 0).toString(16).padStart(2, '0');
       for (const r of [0, (crtc.rows >> 1), crtc.rows - 1]) {

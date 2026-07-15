@@ -95,6 +95,7 @@ export class Pc8801Machine {
     this._port32 = 0; // bits 0-1 = EROMSL (which ext bank)
     this.gvramWindow = -1; // -1 = RAM at C000-FFFF; 0..2 = plane B/R/G
     this.gvramOn = false; // port 31h bit3
+    this._port53 = 0; // port 53h display mask: b0 text-off, b1 graph-off
     this.mono = false;
     this.line400 = false;
 
@@ -332,6 +333,12 @@ export class Pc8801Machine {
       case 0x32: // mkII SR+: b5 = analog palette, b6 = ALU/extended VRAM window
         this._port32 = v;
         return;
+      case 0x53: // display mask: b0 = 1 → text plane OFF, b1 = 1 → graphics OFF.
+        // Ys II draws its whole map in GVRAM and sets b0 to hide the text plane;
+        // without honouring this the leftover text VRAM occluded the map (black
+        // centre). Opening keeps text ON (b0=0) so its scroll mask still works.
+        this._port53 = v;
+        return;
       case 0x44: this.opn.writeAddr(v); return; // OPN register select
       case 0x45: this.opn.writeData(v); return; // OPN register data
       case 0xa8: if (this.opna) this.opna.writeAddr(v); return;  // OPNA bank0 addr
@@ -539,7 +546,7 @@ export class Pc8801Machine {
       bank: {
         romEnabled: this.romEnabled, extMapped: this.extMapped, port32: this._port32, port71: this._port71,
         port31: this._port31, alu1: this._alu1, alu2: this._alu2, aluBuf: [...this._aluBuf],
-        gvramWindow: this.gvramWindow, gvramOn: this.gvramOn,
+        gvramWindow: this.gvramWindow, gvramOn: this.gvramOn, port53: this._port53,
         mono: this.mono, line400: this.line400, width80: this.width80,
       },
       ints: { levels: this.intLevels, mask: this.intMaskBits, pending: this.intPending },
@@ -591,7 +598,7 @@ export class Pc8801Machine {
     this._port31 = b.port31 ?? 0;
     this._alu1 = b.alu1 ?? 0; this._alu2 = b.alu2 ?? 0;
     this._aluBuf = [...(b.aluBuf ?? [0, 0, 0])];
-    this.gvramWindow = b.gvramWindow; this.gvramOn = b.gvramOn;
+    this.gvramWindow = b.gvramWindow; this.gvramOn = b.gvramOn; this._port53 = b.port53 ?? 0;
     this.mono = b.mono; this.line400 = b.line400; this.width80 = b.width80;
     this.intLevels = s.ints.levels; this.intMaskBits = s.ints.mask; this.intPending = s.ints.pending;
     this._pioLast = s.pioPoll.last; this._pioPoll = s.pioPoll.count;
@@ -642,7 +649,11 @@ export class Pc8801Machine {
   //     clean with this on, the bug is the text layer wrongly compositing.
   render({ cgrom, out = null, indexed = false, textOpaque = false, clipActive = false, hideText = false } = {}) {
     const crtc = this.crtc;
-    const text = hideText ? null : renderScreen(crtc.getScreen(), {
+    // port 53h display mask: b0 hides the text plane, b1 hides graphics. Games
+    // (Ys II) toggle the text plane off while showing a full-screen GVRAM map.
+    const textOff = (this._port53 & 1) !== 0;
+    const graphOff = (this._port53 & 2) !== 0;
+    const text = (hideText || textOff) ? null : renderScreen(crtc.getScreen(), {
       cgrom, colorMode: !this.mono, width80: this.width80,
     });
     const ink = text ? text.ink : null;
@@ -654,7 +665,7 @@ export class Pc8801Machine {
     const composite = (x, y, i) => {
       if (clipActive && (x >= activeW || y >= activeH)) return 0; // border
       let idx = 0;
-      if (this.gvramOn) {
+      if (this.gvramOn && !graphOff) {
         const byte = (y * 80) + (x >> 3);
         const mask = 0x80 >> (x & 7);
         idx = ((G[byte] & mask) ? 4 : 0) | ((R[byte] & mask) ? 2 : 0) | ((B[byte] & mask) ? 1 : 0);
