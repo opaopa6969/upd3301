@@ -283,6 +283,9 @@ start:  LD B,8
 <script type="module">
 import { applyI18n, t, lang } from './i18n.js';
 applyI18n();
+// ---- rearrangeable / resizable panels (drag header to reorder, bottom edge to resize)
+import { makeDockable } from './dockgrid.js';
+makeDockable(document.getElementById('grid'), { storageKey: 'ice-dock' });
 
 // ---- View menu: show/hide panels so the many ICE views can be decluttered ---
 (() => {
