@@ -110,6 +110,22 @@ import { applyI18n, t } from './i18n.js';
 applyI18n();
 import { mountNav } from './nav.js';
 mountNav('crt-player.html');
+// ---- fold CRT-setting category rows into a menu bar + dock ------------------
+import { mountMenuBar } from './menubar.js';
+(() => {
+  let mm = document.getElementById('menubar-mount');
+  if (!mm) { mm = document.createElement('div'); mm.id = 'menubar-mount'; document.getElementById('navrow')?.after(mm); }
+  const catRow = (txt) => [...document.querySelectorAll('.row')].find((r) => r.firstElementChild?.classList?.contains('lbl') && r.firstElementChild.textContent.replace(/[:：]\s*$/, '') === txt);
+  const menus = [['蛍光体', '💡 蛍光体'], ['管', '📺 管'], ['ノブ', '🎛 ノブ']].map(([txt, label]) => {
+    const row = catRow(txt); if (!row) return null;
+    const grp = document.createElement('span'); grp.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;align-items:center';
+    const lbl = row.firstElementChild;
+    [...row.children].forEach((c) => { if (c !== lbl) grp.appendChild(c); });
+    row.dataset.catMenu = '1';
+    return { label, items: [{ id: 'cat-' + txt, label, el: grp }] };
+  }).filter(Boolean);
+  if (menus.length) { mountMenuBar(mm, { storageKey: 'menubar-crtplayer', brand: 'CRT', menus }); document.querySelectorAll('.row[data-cat-menu]').forEach((r) => { r.style.display = 'none'; }); }
+})();
 import { CrtPhosphor, PHOSPHORS, rollScan } from '../crt.js';
 import { CrtTube } from '../tube.js';
 
