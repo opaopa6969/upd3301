@@ -534,12 +534,11 @@ for (const [d, u] of [['mousedown', 1], ['touchstart', 1], ['mouseup', 0], ['mou
 }
 
 // ---- player bar: pause / resume + scrub through the snapshot ring ----------
-$('bpause').onclick = () => {
-  if (paused || scrubIndex !== null) { // resume: commit the scrub position, drop the discarded "future"
-    if (scrubIndex !== null) { history.length = scrubIndex + 1; lastSnapFrame = history.length ? history[history.length - 1].frame : -1; scrubIndex = null; }
-    paused = false;
-  } else { paused = true; }
-};
+function resumePlay() { // commit any scrub position (drop the discarded future) and unpause
+  if (scrubIndex !== null) { history.length = scrubIndex + 1; lastSnapFrame = history.length ? history[history.length - 1].frame : -1; scrubIndex = null; }
+  paused = false;
+}
+$('bpause').onclick = () => { if (frozen()) resumePlay(); else paused = true; canvas.focus(); };
 function trackToIndex(clientX) {
   const r = $('track').getBoundingClientRect();
   const n = history.length; if (n < 1) return 0;
@@ -716,14 +715,22 @@ function matrixKey(e) {
   const lower = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   return KEY[lower];
 }
-canvas.addEventListener('keydown', (e) => {
-  if (!machine) return;
+// Keys are handled at the WINDOW so they work no matter which control was last
+// clicked (the player bar / buttons steal focus from the canvas). Skipped while
+// a form field is focused (so the DIP/ROM inputs still type) and for Ctrl/Meta/
+// Alt combos (so browser shortcuts like Ctrl+R keep working). A game key also
+// lifts a pause/scrub — pressing a direction just resumes and plays.
+const isFormFocused = () => { const el = document.activeElement; return el && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName); };
+window.addEventListener('keydown', (e) => {
+  if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = matrixKey(e);
+  if (!k && !e.shiftKey) return; // nothing we handle → let the browser have it
+  if (frozen()) resumePlay(); // any game key un-freezes
   if (e.shiftKey) machine.keyDown(8, 6); else machine.keyUp(8, 6);
   if (k) { machine.keyDown(k[0], k[1]); e.preventDefault(); }
 });
-canvas.addEventListener('keyup', (e) => {
-  if (!machine) return;
+window.addEventListener('keyup', (e) => {
+  if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = matrixKey(e);
   if (!e.shiftKey) machine.keyUp(8, 6);
   if (k) { machine.keyUp(k[0], k[1]); e.preventDefault(); }
