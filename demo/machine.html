@@ -763,6 +763,13 @@ function boot() {
 // better. It IS deprecated (console warning), but a warning beats constant
 // stutter; the real fix is to run the whole chip inside the worklet with
 // timestamped register writes (a larger change, tracked for later).
+// BUFFER SIZE: 512 samples ≈ 10.7 ms. The OPN registers only change once per
+// emulation frame (~16.7 ms on the main thread), so the audio thread must re-read
+// them often to place note onsets tightly — a big 2048 buffer (42.7 ms) resampled
+// those updates so coarsely the beat wandered (the "後ノリ/前ノリ" rush-and-drag).
+// 512 tracks the beat far tighter; the main thread is only ~2 ms/frame busy now,
+// so the shorter callback has ample headroom before it risks underruns.
+const AUDIO_BUFSIZE = 512;
 let audioCtx = null, audioNode = null;
 function renderAudioInto(buf, n) {
   if (!machine || !machine.opn || rewinding || paused || scrubIndex !== null) { buf.fill(0); return buf; } // silent while scrubbing/paused
@@ -774,7 +781,7 @@ function ensureAudio() {
   try {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
   } catch { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-  audioNode = audioCtx.createScriptProcessor(2048, 0, 1);
+  audioNode = audioCtx.createScriptProcessor(AUDIO_BUFSIZE, 0, 1);
   audioNode.onaudioprocess = (e) => {
     const out = e.outputBuffer.getChannelData(0);
     renderAudioInto(out, out.length);
