@@ -565,17 +565,17 @@ $('speed').onchange = (e) => { speedMul = parseFloat(e.target.value) || 1; };
 // compositing toggles (see machine88.render). Txt-mask defaults ON (confirmed
 // correct on real games — displayed text, incl. black, occludes graphics);
 // edge-clip stays opt-in. Both persist.
-// Colour-only text/graphics compositing is the REAL PC-8801 rule (verified vs
-// ePC-8801MA/XM8: dest = t ? text_pal[t] : graph_pal[g] — a black text pixel
-// (t==0) is transparent and the graphics show). The "ink" opaque-text mode was
-// a wrong hypothesis that broke games masking with black text; default OFF now
-// (key bumped to -v3 to drop the earlier forced-ON).
-let txtOpaque = localStorage.getItem('upd3301-txtmask-v3') === '1';
+// Ink compositing is the REAL PC-8801 rule (re-verified in ePC-8801MA/XM8's
+// draw_text: a LIT dot stores its colour, and a lit BLACK dot is stored as a
+// distinct opaque "8", not 0 — so any lit dot occludes graphics, only the
+// UNLIT background is transparent). Colour-only (black transparent) was wrong
+// and leaked the mask in other scenes. Default ON (key -v4 drops the wrong v3).
+let txtOpaque = localStorage.getItem('upd3301-txtmask-v4') !== '0';
 let clipActive = localStorage.getItem('upd3301-clip') === '1';
 $('txtopaque').checked = txtOpaque;
 $('clipactive').checked = clipActive;
 let showText = true;
-$('txtopaque').onchange = (e) => { txtOpaque = e.target.checked; localStorage.setItem('upd3301-txtmask-v3', txtOpaque ? '1' : '0'); };
+$('txtopaque').onchange = (e) => { txtOpaque = e.target.checked; localStorage.setItem('upd3301-txtmask-v4', txtOpaque ? '1' : '0'); };
 $('clipactive').onchange = (e) => { clipActive = e.target.checked; localStorage.setItem('upd3301-clip', clipActive ? '1' : '0'); };
 $('showtext').onchange = (e) => { showText = e.target.checked; };
 const renderOpts = () => ({ textOpaque: txtOpaque, clipActive, hideText: !showText });
