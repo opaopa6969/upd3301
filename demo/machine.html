@@ -268,21 +268,21 @@ function applyDispScale() {
   }
 }
 // Size the backing to exactly bw×bh; lw×lh is the logical on-screen size the CSS
-// scale multiplies (they differ when the CRT path supersamples the mask).
+// scale multiplies (they differ when the CRT path supersamples the mask). The
+// `!img` guard is load-bearing: the tube path calls fitToRaw directly with
+// supersampled dims, so keying only off phosW/phosH (as fitTo used to) could
+// early-out with img still null → "Cannot read properties of null".
 function fitToRaw(bw, bh, lw, lh) {
-  if (canvas.width !== bw || canvas.height !== bh) {
+  if (!img || canvas.width !== bw || canvas.height !== bh) {
     canvas.width = bw; canvas.height = bh;
     img = ctx.createImageData(bw, bh);
     rgbaBuf = null;
   }
-  if (logicalW !== lw || logicalH !== lh) { logicalW = lw; logicalH = lh; }
+  logicalW = lw; logicalH = lh;
+  phosW = bw; phosH = bh;
   applyDispScale();
 }
-function fitTo(w, h) {
-  if (w === phosW && h === phosH && canvas.width === w) { applyDispScale(); return; }
-  phosW = w; phosH = h;
-  fitToRaw(w, h * 2, w, h * 2);
-}
+function fitTo(w, h) { fitToRaw(w, h * 2, w, h * 2); }
 
 const $ = (id) => document.getElementById(id);
 $('from').onchange = async (e) => {
