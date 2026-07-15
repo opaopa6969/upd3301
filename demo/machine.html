@@ -693,12 +693,17 @@ for (const [d, u] of [['mousedown', 1], ['touchstart', 1], ['mouseup', 0], ['mou
 }
 
 // ---- player bar: pause / resume + scrub through the snapshot ring ----------
-// Scrubbing is NON-DESTRUCTIVE: previewing the past never discards the future, so
-// you can always slide back to the present. resumePlay returns to the LIVE present
-// (latest snapshot) intact. (To deliberately re-live FROM a past point — the
-// classic "rewind and play" that branches the timeline — use the ◀◀ button.)
+// Scrubbing itself is NON-DESTRUCTIVE: while you DRAG you can slide past↔present
+// freely (nothing is discarded). resumePlay plays forward FROM wherever the
+// playhead currently sits — release/再開 in the past → play from there (the future
+// beyond re-generates); want to keep the buffered future → slide back to the
+// present before releasing. This is the media-player behaviour the user expects.
 function resumePlay() {
-  if (scrubIndex !== null) { if (history.length) machine.restore(history[history.length - 1].snap); scrubIndex = null; }
+  if (scrubIndex !== null) {
+    history.length = scrubIndex + 1; // continue forward from the previewed point
+    lastSnapFrame = history.length ? history[history.length - 1].frame : -1;
+    scrubIndex = null;
+  }
   paused = false; shuttleVel = 0;
 }
 $('bpause').onclick = () => { if (frozen()) resumePlay(); else paused = true; canvas.focus(); };
@@ -706,7 +711,7 @@ $('bpause').onclick = () => { if (frozen()) resumePlay(); else paused = true; ca
 // on the left / fast-forward on the right, faster the deeper you push); the middle
 // 60% is a direct seek across the whole buffer.
 const SHUTTLE_EDGE = 0.2, MAX_SHUTTLE = 6; // snapshot-indices per frame at full push
-let scrubbing = false, shuttleAcc = 0;
+let scrubbing = false, shuttleAcc = 0, resumeAfterScrub = false;
 function seekToFrac(f) {
   if (!machine || !canSnap() || history.length < 1) return;
   const n = history.length;
@@ -734,10 +739,19 @@ function applyShuttle() {
   scrubIndex = Math.max(0, Math.min(n - 1, next));
   if (history[scrubIndex]) machine.restore(history[scrubIndex].snap);
 }
-$('track').addEventListener('pointerdown', (e) => { scrubbing = true; shuttleAcc = 0; try { $('track').setPointerCapture(e.pointerId); } catch {} onTrackPointer(e.clientX); });
+$('track').addEventListener('pointerdown', (e) => {
+  if (!scrubbing) resumeAfterScrub = (scrubIndex === null && !paused); // were we live-playing? then play on release
+  scrubbing = true; shuttleAcc = 0;
+  try { $('track').setPointerCapture(e.pointerId); } catch {}
+  onTrackPointer(e.clientX);
+});
 $('track').addEventListener('pointermove', (e) => { if (scrubbing) onTrackPointer(e.clientX); });
-$('track').addEventListener('pointerup', () => { scrubbing = false; shuttleVel = 0; });
-$('track').addEventListener('pointercancel', () => { scrubbing = false; shuttleVel = 0; });
+function endScrub() {
+  scrubbing = false; shuttleVel = 0;
+  if (resumeAfterScrub && scrubIndex !== null) resumePlay(); // release → play from the previewed point
+}
+$('track').addEventListener('pointerup', endScrub);
+$('track').addEventListener('pointercancel', endScrub);
 function mmss(s) { const m = s / 60 | 0, sec = s - m * 60; return `${m}:${sec.toFixed(1).padStart(4, '0')}`; }
 function updatePlayerBar() {
   const n = history.length;
