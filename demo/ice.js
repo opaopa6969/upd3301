@@ -605,7 +605,9 @@ export function hexDump(read, addr, rows = 16) {
 //   storage          → { get(k), set(k,v) } (localStorage in the browser)
 //   download(name,s) → save text as a file (Blob+<a> in the browser)
 export function mountIcePage(doc, env) {
-  const $ = (id) => doc.getElementById(id);
+  // Look in the main document, then in any panels that dockgrid has popped out
+  // into their own windows (so their live updates keep flowing after the move).
+  const $ = (id) => doc.getElementById(id) || (globalThis.__dockFindEl ? globalThis.__dockFindEl(id) : null);
   const t = env.t ?? ((s) => s);
   const storage = env.storage ?? { get: () => null, set: () => {} };
   const ctrl = new IceController();

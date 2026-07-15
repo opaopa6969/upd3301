@@ -48,10 +48,49 @@ export function makeDockable(grid, { storageKey = 'dockgrid', panelSel = '.panel
   let dragged = null;
   const clearMarks = () => { for (const p of panels()) p.classList.remove('dropbefore', 'dropafter'); };
 
+  // ---- pop-out: detach a panel into its own window; closing it returns it -----
+  // The panel NODE moves into the popup (its live updates keep working because the
+  // page's element lookups also search these popup documents — see __dockFindEl).
+  const popupDocs = globalThis.__dockPopupDocs || (globalThis.__dockPopupDocs = new Set());
+  globalThis.__dockFindEl = (id) => { for (const d of popupDocs) { const e = d.getElementById(id); if (e) return e; } return null; };
+  function popOut(p) {
+    const w = window.open('', '', 'width=520,height=460');
+    if (!w) return;
+    const d = w.document;
+    d.title = (p.querySelector('h2')?.textContent || 'panel');
+    d.body.style.cssText = 'margin:0;padding:8px;background:#101014;color:#ccd;font-family:ui-monospace,monospace;box-sizing:border-box';
+    for (const st of document.querySelectorAll('style')) d.head.appendChild(st.cloneNode(true));
+    const ph = document.createComment('dock-popout');
+    p.parentNode.insertBefore(ph, p);
+    const savedCss = p.style.cssText, savedDraggable = p.draggable;
+    p.draggable = false;
+    p.style.cssText = 'height:calc(100vh - 16px);width:100%;box-sizing:border-box;overflow:auto;resize:none;margin:0';
+    d.body.appendChild(p); // adopts the node into the popup document
+    popupDocs.add(d);
+    let done = false;
+    const back = () => {
+      if (done) return; done = true;
+      popupDocs.delete(d);
+      p.style.cssText = savedCss; p.draggable = savedDraggable;
+      if (ph.parentNode) { ph.parentNode.insertBefore(p, ph); ph.remove(); } else grid.appendChild(p);
+      try { if (!w.closed) w.close(); } catch {}
+    };
+    const iv = setInterval(() => { if (w.closed) { clearInterval(iv); back(); } }, 400);
+    try { w.addEventListener('pagehide', back, { once: true }); } catch {}
+  }
+
   for (const p of panels()) {
     p.classList.add('dock-panel');
     const k = keyOf(p);
     if (heights[k]) p.style.height = heights[k] + 'px';
+    // pop-out button (top-right; not on the drag handle so it can't start a drag)
+    p.style.position = p.style.position || 'relative';
+    const pop = document.createElement('button');
+    pop.textContent = '⧉'; pop.title = '別ウィンドウに切り離す（閉じると元に戻る）';
+    pop.style.cssText = 'position:absolute;top:5px;right:6px;z-index:2;padding:0 6px;font-size:12px;line-height:1.6';
+    pop.addEventListener('mousedown', (e) => e.stopPropagation());
+    pop.addEventListener('click', (e) => { e.stopPropagation(); popOut(p); });
+    p.appendChild(pop);
     const handle = p.querySelector(handleSel) || p;
     // only let a drag START from the header (so text selection in the body works)
     handle.addEventListener('mousedown', () => { p.draggable = true; });
