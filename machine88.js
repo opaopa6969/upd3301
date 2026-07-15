@@ -349,11 +349,13 @@ export class Pc8801Machine {
       //   digital (mkII): one write, bits 0-2 = B/R/G, full-on or off
       //   analog (SR V2): 3 bits per gun from the 512-cube, but the port is
       //     8 bits wide — so it takes TWO writes, bit6 selecting which half:
-      //     bit6=0 → B (bits 0-2) and R (bits 3-5); bit6=1 → G (bits 0-2).
+      //     bit6=0 → RED (bits 0-2) and BLUE (bits 3-5); bit6=1 → GREEN (bits 0-2).
+      //     (Was decoded R/B-swapped, which turned every warm colour cyan —
+      //     yellow→cyan, white→cyan — while red-free blues looked fine.)
       const i = (port - 0x54) * 3;
       if (this._port32 & 0x20) { // analog
-        if (v & 0x40) this.palette[i + 1] = v & 7; // G
-        else { this.palette[i + 2] = v & 7; this.palette[i] = (v >> 3) & 7; } // B, R
+        if (v & 0x40) this.palette[i + 1] = v & 7; // G (bits 0-2)
+        else { this.palette[i] = v & 7; this.palette[i + 2] = (v >> 3) & 7; } // R (bits 0-2), B (bits 3-5)
       } else { // digital: each bit is a gun, all-or-nothing
         this.palette[i] = (v & 2) ? 7 : 0; // R
         this.palette[i + 1] = (v & 4) ? 7 : 0; // G
