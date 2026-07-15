@@ -683,7 +683,7 @@ let history = [], lastSnapFrame = -1, rewinding = false;
 let paused = false, scrubIndex = null; // scrubIndex != null → frozen at a past snapshot
 const canSnap = () => machine && typeof machine.snapshot === 'function';
 const frozen = () => paused || scrubIndex !== null;
-function resetRewind() { history = []; lastSnapFrame = -1; rewinding = false; paused = false; scrubIndex = null; previewIdx = null; shuttleX = 0; }
+function resetRewind() { history = []; lastSnapFrame = -1; rewinding = false; paused = false; scrubIndex = null; previewIdx = null; shuttleX = 0; transportSpeed = 1; }
 function setRewindSecs(s) {
   rewindSecs = Math.max(5, Math.min(600, s | 0));
   REWIND_MAX = Math.round(rewindSecs * 60 / REWIND_EVERY);
@@ -709,6 +709,7 @@ for (const [d, u] of [['mousedown', 1], ['touchstart', 1], ['mouseup', 0], ['mou
 const MAX_SHUTTLE_X = 16;      // shuttle speed multiplier at full deflection
 let previewIdx = null;         // float position in history while reviewing; null = live
 let shuttleX = 0, shuttling = false, jogging = false;
+let transportSpeed = 1;        // live-emulation × applied by a forward shuttle past the present
 const knob = () => $('shuttleknob');
 function restoreIdx(f) {
   const n = history.length; if (n < 1) return;
@@ -736,18 +737,32 @@ function shuttleFromX(clientX) {
   const k = knob(); if (k) { k.style.transition = 'none'; k.style.left = ((d * 0.5 + 0.5) * 100) + '%'; }
   if (shuttleX !== 0 && previewIdx === null) previewIdx = history.length - 1; // enter review at the present
 }
-function shuttleRelease() { shuttling = false; shuttleX = 0; recentreKnob(); } // spring back to pause (hold frame)
+// Release → resume forward play from wherever we are. Inside the buffer: play 1×
+// from that point. Past the present (live fast-forward): just drop back to 1×.
+function shuttleRelease() {
+  shuttling = false; shuttleX = 0; transportSpeed = 1; recentreKnob();
+  if (scrubIndex !== null) resumePlay(); else previewIdx = null, paused = false;
+}
 $('shuttle').addEventListener('pointerdown', (e) => { shuttling = true; try { $('shuttle').setPointerCapture(e.pointerId); } catch {} shuttleFromX(e.clientX); });
 $('shuttle').addEventListener('pointermove', (e) => { if (shuttling) shuttleFromX(e.clientX); });
 $('shuttle').addEventListener('pointerup', shuttleRelease);
 $('shuttle').addEventListener('pointercancel', shuttleRelease);
-// advance the preview by the shuttle speed each loop frame (called from the loop)
+// Called each loop frame while the shuttle is deflected. Backward or forward-
+// WITHIN-the-buffer → scrub the preview at that speed. Forward AT/PAST the present
+// → leave preview and drive the LIVE emulation fast (transportSpeed), so you blast
+// past "now" at ×16 and the buffer extends — the fun part.
 function applyShuttle(dt) {
-  if (shuttleX === 0 || history.length < 2) return;
-  if (previewIdx === null) previewIdx = history.length - 1;
-  const fps = machine ? (machine.frameHz || 60) : 60;
-  previewIdx += shuttleX * (fps / REWIND_EVERY) * dt; // ×real-time in index units
-  previewIdx = Math.max(0, Math.min(history.length - 1, previewIdx)); // clamp (no recorded future beyond present)
+  transportSpeed = 1;
+  if (shuttleX === 0 || history.length < 1) return;
+  const n = history.length, fps = machine ? (machine.frameHz || 60) : 60;
+  if (shuttleX > 0 && (previewIdx === null || previewIdx >= n - 1)) {
+    scrubIndex = null; previewIdx = null; paused = false; // go live
+    transportSpeed = shuttleX;                            // …and run the emulator this fast
+    return;
+  }
+  if (previewIdx === null) previewIdx = n - 1;
+  previewIdx += shuttleX * (fps / REWIND_EVERY) * dt;     // ×real-time in index units
+  previewIdx = Math.max(0, Math.min(n - 1, previewIdx));
   restoreIdx(previewIdx);
 }
 // JOG bar: absolute seek within the buffer (which is right-aligned = present at right)
@@ -773,7 +788,7 @@ function updatePlayerBar() {
   const playFrac = (scrubIndex !== null && n > 1) ? scrubIndex / (n - 1) : 1; // 0=oldest 1=present
   $('playhead').style.left = (((1 - bufFrac) + playFrac * bufFrac) * 100).toFixed(1) + '%';
   const lbl = $('shuttlelabel');
-  if (lbl) lbl.textContent = shuttleX === 0 ? '⏸' : (shuttleX > 0 ? '▶' : '◀') + Math.abs(shuttleX).toFixed(1) + '×';
+  if (lbl) lbl.textContent = shuttleX !== 0 ? (shuttleX > 0 ? '▶' : '◀') + Math.abs(shuttleX).toFixed(1) + '×' : (frozen() ? '⏸' : '▶');
   $('bpause').textContent = frozen() ? '▶ 再開' : '⏸ 停止';
   $('bpause').classList.toggle('on', frozen());
   const fr = machine ? machine.frame : 0;
@@ -895,7 +910,7 @@ let audioSetupStarted = false;
 let audioSamplesPushed = 0;        // play-cursor tracking for the push pump
 let pumpBuf = new Float32Array(AUDIO_MAXCHUNK);
 function renderAudioInto(buf, n) {
-  if (!machine || !machine.opn || rewinding || paused || scrubIndex !== null) { buf.fill(0, 0, n); return buf; } // silent while scrubbing/paused
+  if (!machine || !machine.opn || rewinding || paused || scrubIndex !== null || shuttleX !== 0) { buf.fill(0, 0, n); return buf; } // silent while scrubbing / shuttling / paused
   machine.renderAudio(buf, n);
   return buf;
 }
@@ -1265,7 +1280,7 @@ function loop(now) {
       // per-frame audio hook (8801 + worklet) keeps music tempo tight when the
       // render is slow; falls back to the post-loop pumpAudio otherwise.
       const onFrame = (machine instanceof Pc8801Machine && audioMode === 'worklet') ? emitFrameAudio : null;
-      machine.update(Math.min(dt * speedMul, 0.5), onFrame);
+      machine.update(Math.min(dt * speedMul * transportSpeed, 0.5), onFrame); // transportSpeed>1 = shuttle fast-forward
       if (canSnap() && machine.frame - lastSnapFrame >= REWIND_EVERY) {
         lastSnapFrame = machine.frame;
         history.push({ snap: machine.snapshot(), frame: machine.frame });
