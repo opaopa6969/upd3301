@@ -9,10 +9,12 @@ function injectStyle() {
   if (styled) return; styled = true;
   const s = document.createElement('style');
   s.textContent = `
-  /* FIXED height + internal scroll: a panel whose content grows (call stack,
-     trace…) scrolls inside itself instead of getting taller and shoving its
-     neighbours around. Drag the bottom edge to resize; the height is remembered. */
-  .dock-panel { height: 240px; overflow: auto; resize: vertical; }
+  /* Each panel is FREELY resizable in BOTH dimensions (drag the bottom-right
+     corner) with internal scroll, and the workspace is flex-wrap — so you size
+     panes however you like and the rest flows around them, and a panel whose
+     content grows (call stack, trace…) scrolls inside itself instead of shoving
+     its neighbours. Width + height are remembered. */
+  .dock-panel { flex: 0 0 auto; width: 360px; height: 240px; box-sizing: border-box; overflow: auto; resize: both; }
   .dock-panel > h2 { cursor: grab; position: sticky; top: 0; background: inherit; z-index: 1; }
   .dock-panel > h2::before { content: '⠿ '; color:#556; }
   .dock-panel.dragging { opacity:.45; outline:1px dashed #4a8; }
@@ -41,8 +43,8 @@ export function makeDockable(grid, { storageKey = 'dockgrid', panelSel = '.panel
     for (const k of order) { const p = byKey.get(k); if (p) grid.appendChild(p); } // append in saved sequence
   }
   const saveOrder = () => lsSet('-order', panels().map(keyOf));
-  const heights = lsGet('-h', '{}');
-  const saveHeights = () => lsSet('-h', heights);
+  const sizes = lsGet('-sz', '{}'); // key → { w, h } in px
+  const saveSizes = () => lsSet('-sz', sizes);
 
   let dragged = null;
   const clearMarks = () => { for (const p of panels()) p.classList.remove('dropinto'); };
@@ -90,7 +92,7 @@ export function makeDockable(grid, { storageKey = 'dockgrid', panelSel = '.panel
   for (const p of panels()) {
     p.classList.add('dock-panel');
     const k = keyOf(p);
-    if (heights[k]) p.style.height = heights[k] + 'px';
+    const sz = sizes[k]; if (sz) { if (sz.w) p.style.width = sz.w + 'px'; if (sz.h) p.style.height = sz.h + 'px'; }
     // pop-out button (top-right; not on the drag handle so it can't start a drag)
     p.style.position = p.style.position || 'relative';
     const pop = document.createElement('button');
@@ -115,10 +117,14 @@ export function makeDockable(grid, { storageKey = 'dockgrid', panelSel = '.panel
       clearMarks(); saveOrder();
     });
     if (window.ResizeObserver) {
-      new ResizeObserver(() => { if (p.style.height) { heights[k] = Math.round(parseFloat(p.style.height)); saveHeights(); } }).observe(p);
+      new ResizeObserver(() => {
+        if (!p.style.width && !p.style.height) return; // only after the user drags a corner
+        const r = p.getBoundingClientRect();
+        sizes[k] = { w: Math.round(r.width), h: Math.round(r.height) }; saveSizes();
+      }).observe(p);
     }
   }
   return {
-    reset() { lsSet('-order', null); lsSet('-h', {}); for (const p of panels()) p.style.height = ''; },
+    reset() { lsSet('-order', null); lsSet('-sz', {}); for (const p of panels()) { p.style.width = ''; p.style.height = ''; } },
   };
 }

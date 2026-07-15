@@ -22,9 +22,11 @@
      (masonry-ish via dense auto-flow) instead of two tall stacks. The two source
      column wrappers use display:contents so their panels become direct grid items
      without restructuring the HTML. */
-  #grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); grid-auto-flow: row dense; gap:10px; align-items:start; }
+  /* free-form workspace: panels flow (flex-wrap) and each is resized freely by
+     dragging its corner; dockgrid.js handles reorder/resize/pop-out. */
+  #grid { display:flex; flex-wrap:wrap; align-items:flex-start; gap:10px; }
   #grid > .gridcol { display:contents; }
-  #panel-dis { height: 520px; } /* the disassembly is the focus → taller by default */
+  #panel-dis { width: 560px; height: 520px; } /* the disassembly is the focus → bigger default */
   .panel.hidden { display:none !important; }
   #dis { font-size:12px; line-height:1.5; min-height:26em; color:#9db; font-family:inherit; white-space:pre; overflow-x:auto; }
   .disline { cursor:pointer; min-height:1.2em; }
