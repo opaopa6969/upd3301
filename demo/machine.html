@@ -40,6 +40,7 @@
   <label style="color:#778;font-size:12px">FONT.ROM (任意): <input type="file" id="ffont" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="n88.rom + n88_0..3.rom + disk.rom (計6ファイル) をまとめて選ぶ">PC-8801 BIOS一式(n88): <input type="file" id="from88" multiple style="font-size:11px"></label>
   <button id="breset">リセット</button>
+  <button id="brewind" title="長押しで時間を巻き戻す（決定論エミュなので状態をスナップショットから復元）。約45秒ぶん保持">◀◀ 巻き戻し</button>
   <button id="bpng" title="CRTシミュレーションを通さない生の描画出力(640×200・フルパレット)をPNG保存（バグ切り分け用）">PNG(raw)</button>
   <button id="brec" title="画面＋音声をWebM動画に録画（もう一度押すと停止して保存）">● 録画</button>
   <button id="bclean" title="CRTシミュレーション(残光/管面/インターレース/走査線)を通さず、エミュの生描画をフルパレットでそのまま表示。崩れ無し・色正確・軽い。もう一度押すとCRT表示に戻る">🟢 クリーン表示</button>
@@ -485,6 +486,24 @@ updateCleanBtn();
 let speedMul = 1;
 $('speed').onchange = (e) => { speedMul = parseFloat(e.target.value) || 1; };
 
+// ---- rewind (deterministic time-travel) -----------------------------------
+// The machine is deterministic with a full snapshot()/restore(), so we can
+// literally rewind: stash a state snapshot every few frames into a ring buffer,
+// and while the button is HELD, restore backwards through it. Audio is muted
+// while scrubbing (the chip state is jumping around). A snapshot is ~130 KB
+// (RAM + GVRAM + sub-CPU), so REWIND_MAX bounds the memory (~45 s ≈ 60 MB).
+const REWIND_EVERY = 6, REWIND_MAX = 450;
+let history = [], lastSnapFrame = -1, rewinding = false;
+const canSnap = () => machine && typeof machine.snapshot === 'function';
+function resetRewind() { history = []; lastSnapFrame = -1; rewinding = false; }
+function pressRewind(on) {
+  rewinding = on && canSnap() && history.length > 1;
+  $('brewind').classList.toggle('on', rewinding);
+}
+for (const [d, u] of [['mousedown', 1], ['touchstart', 1], ['mouseup', 0], ['mouseleave', 0], ['touchend', 0]]) {
+  $('brewind').addEventListener(d, (e) => { if (d.startsWith('touch')) e.preventDefault(); pressRewind(!!u); });
+}
+
 // ---- video capture: record the live screen (+ sound) to a WebM ------------
 // canvas.captureStream taps the CRT canvas as it's drawn each frame; the audio
 // graph is tapped via a MediaStreamDestination so the recording carries the
@@ -530,6 +549,7 @@ const dipOf = (id, dflt) => {
   return Number.isFinite(v) ? (v & 0xff) : dflt;
 };
 function boot() {
+  resetRewind(); // a fresh machine invalidates the old snapshot ring
   if (bootMode === 'n88') {
     if (!has88Set()) {
       guts.textContent = t('PC-8801 BIOS一式(n88.rom + n88_0..3.rom + disk.rom)を選んでね');
@@ -580,7 +600,7 @@ function boot() {
 // timestamped register writes (a larger change, tracked for later).
 let audioCtx = null, audioNode = null;
 function renderAudioInto(buf, n) {
-  if (!machine || !machine.opn) { buf.fill(0); return buf; }
+  if (!machine || !machine.opn || rewinding) { buf.fill(0); return buf; } // silent while scrubbing
   machine.renderAudio(buf, n);
   return buf;
 }
@@ -648,9 +668,20 @@ function loop(now) {
   last = now;
   const t0 = performance.now();
   if (machine) {
-    // scale emulated time by the speed multiplier; cap the per-frame slice so a
-    // huge multiplier (or a long hitch) can't lock the main thread catching up.
-    machine.update(Math.min(dt * speedMul, 0.5));
+    if (rewinding && history.length > 1) {
+      history.pop();                                  // drop the current state
+      machine.restore(history[history.length - 1].snap); // step back one snapshot
+    } else {
+      if (rewinding) { rewinding = false; $('brewind').classList.remove('on'); } // ran dry
+      // scale emulated time by the speed multiplier; cap the per-frame slice so a
+      // huge multiplier (or a long hitch) can't lock the main thread catching up.
+      machine.update(Math.min(dt * speedMul, 0.5));
+      if (canSnap() && machine.frame - lastSnapFrame >= REWIND_EVERY) {
+        lastSnapFrame = machine.frame;
+        history.push({ snap: machine.snapshot() });
+        if (history.length > REWIND_MAX) history.shift();
+      }
+    }
     // Both machines emit a GRB-indexed frame (0..7 per dot) that the shared
     // phosphor pipeline below consumes verbatim. The 8001 exposes it via its
     // text system (machine.sys), the 8801 via render({indexed:true}) which
