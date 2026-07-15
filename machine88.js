@@ -133,6 +133,12 @@ export class Pc8801Machine {
     // fallback). Enable to iterate SB2 detection / capture OPNA arrangements.
     this.opna = sb2 ? new Ym2608({ clockHz, sampleRate: 48000 }) : null;
     this.crtc = new Upd3301({ frameHz, drq: (buf) => this.dmac.drqPull(2, buf) });
+    // per-character-row palette snapshots (raster palette): stepFrame samples
+    // this.palette into rowPal[row] at the raster time each row is scanned, so
+    // a mid-frame palette change (Ys II's scroll mask goes black then back)
+    // shows on the right rows. 64 rows max × 8 entries × 3 guns.
+    this.rowPal = new Uint8Array(64 * 24);
+    this._crtcRow = 0;
     this.dmac = new Upd8257({ readMemory: (a) => this.ram[a & 0xffff] });
     this.width80 = true;
 
@@ -396,12 +402,25 @@ export class Pc8801Machine {
     const timerPeriod = this.frameT / 10;
     let subDebt = 0;
     let nextTimer = this.tInFrame + timerPeriod;
+    // raster-accurate text fetch: space the CRTC's per-row DMA + palette
+    // snapshot across the frame, so mid-frame VRAM/palette rewrites land on the
+    // rows actually scanning at that moment.
+    this.crtc.beginFrame();
+    this._crtcRow = 0;
+    const dispRows = this.crtc.rows;
+    const totalRows = (this.crtc.rows + this.crtc.vblankRows) || 1;
+    const rowT = this.frameT / totalRows;
     while (this.tInFrame < this.frameT) {
       const target = Math.min(this.frameT, this.tInFrame + SLICE);
       const before = this.tInFrame;
       while (this.tInFrame < target) {
         const cyc = this.cpu.step();
         this.tInFrame += cyc;
+        while (this._crtcRow < dispRows && this.tInFrame >= this._crtcRow * rowT) {
+          this.crtc.fetchRow(this._crtcRow);
+          this.rowPal.set(this.palette, this._crtcRow * 24);
+          this._crtcRow++;
+        }
         // OPN timers run on the chip's OWN clock at full speed — the ~30% DMA
         // bus-steal slows the CPU, not the sound chip. Advancing the timer by
         // raw CPU cycles ran it at 0.7× and dragged the tempo; scale back up
@@ -433,7 +452,13 @@ export class Pc8801Machine {
       }
     }
     this.tInFrame -= this.frameT;
-    this.crtc.stepFrame();
+    // any rows not yet reached (short/paused frame) — fetch + snapshot now
+    while (this._crtcRow < dispRows) {
+      this.crtc.fetchRow(this._crtcRow);
+      this.rowPal.set(this.palette, this._crtcRow * 24);
+      this._crtcRow++;
+    }
+    this.crtc.endFrame();
     if (this.intMaskBits & 2) this.intPending |= 1 << 1; // VSYNC, source 1
     this.frame++;
     return this;
@@ -536,6 +561,7 @@ export class Pc8801Machine {
     this.ram.set(s.ram);
     s.gvram.forEach((p, i) => this.gvram[i].set(p));
     this.palette.set(s.palette);
+    for (let r = 0; r < 64; r++) this.rowPal.set(this.palette, r * 24); // restored frames: uniform (raster rebuilt on next stepFrame)
     this.keys.set(s.keys);
     this.dipsw = [...s.dipsw];
     restoreObj(this.crtc, s.crtc);
@@ -626,12 +652,23 @@ export class Pc8801Machine {
       return { width: W, height: H, pixels, schemaVersion: SCHEMA_VERSION };
     }
     const rgb = out && out.length === W * H * 3 ? out : new Uint8Array(W * H * 3);
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const i = y * W + x;
-      const p = composite(x, y, i) * 3;
-      rgb[i * 3] = this.palette[p] * 36; // 0..7 → 0..252
-      rgb[i * 3 + 1] = this.palette[p + 1] * 36;
-      rgb[i * 3 + 2] = this.palette[p + 2] * 36;
+    // per-row palette (raster palette): each character row is coloured with the
+    // palette captured when it was scanned. No rows displayed → the single
+    // current palette. (The 512-cube RGB path only; the indexed CRT path shows
+    // the 8 GRB primaries and doesn't consult the palette.)
+    const raster = crtc.rows > 0;
+    const lpc = crtc.linesPerChar || 8;
+    const maxRow = crtc.rows - 1;
+    for (let y = 0; y < H; y++) {
+      const pal = raster ? this.rowPal : this.palette;
+      const base = raster ? Math.min((y / lpc) | 0, maxRow) * 24 : 0;
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        const p = base + composite(x, y, i) * 3;
+        rgb[i * 3] = pal[p] * 36; // 0..7 → 0..252
+        rgb[i * 3 + 1] = pal[p + 1] * 36;
+        rgb[i * 3 + 2] = pal[p + 2] * 36;
+      }
     }
     return { width: W, height: H, rgb, schemaVersion: SCHEMA_VERSION };
   }

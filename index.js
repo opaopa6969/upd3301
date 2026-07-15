@@ -260,30 +260,33 @@ export class Upd3301 {
     }
   }
 
-  stepFrame() {
-    this.frame++;
-    if (this.ve && this.rows > 0) {
-      const abpr = this.attrBytesPerRow;
-      const rowLen = this.cols + abpr;
-      for (let y = 0; y < this.rows; y++) {
-        const buf = this._rowBuf.subarray(0, rowLen);
-        let got = 0;
-        if (this.drq) got = this.drq(buf) | 0;
-        if (got < rowLen) {
-          this.status |= STATUS.U;
-          buf.fill(0, got);
-        }
-        this.cells.set(buf.subarray(0, this.cols), y * this.cols);
-        const attrBytes = buf.subarray(this.cols, rowLen);
-        this.attrPairs.set(attrBytes, y * abpr);
-        if (this.attrPerCell) {
-          this.attrs.set(attrBytes, y * this.cols);
-        } else {
-          expandAttrRow(attrBytes, this.attrsPerRow, this.cols,
-            this.attrs.subarray(y * this.cols, (y + 1) * this.cols));
-        }
-      }
+  // A frame is beginFrame() → fetchRow(0..rows-1) → endFrame(). The whole-frame
+  // stepFrame() runs them back-to-back (unchanged behaviour); a raster-accurate
+  // driver instead spaces the fetchRow() calls across the CPU frame so a game
+  // that rewrites text VRAM / the palette mid-frame (Ys II's scroll mask) is
+  // sampled per character-row at the raster time that row is actually scanned.
+  beginFrame() { this.frame++; }
+
+  fetchRow(y) {
+    if (!this.ve || y < 0 || y >= this.rows) return;
+    const abpr = this.attrBytesPerRow;
+    const rowLen = this.cols + abpr;
+    const buf = this._rowBuf.subarray(0, rowLen);
+    let got = 0;
+    if (this.drq) got = this.drq(buf) | 0;
+    if (got < rowLen) { this.status |= STATUS.U; buf.fill(0, got); }
+    this.cells.set(buf.subarray(0, this.cols), y * this.cols);
+    const attrBytes = buf.subarray(this.cols, rowLen);
+    this.attrPairs.set(attrBytes, y * abpr);
+    if (this.attrPerCell) {
+      this.attrs.set(attrBytes, y * this.cols);
+    } else {
+      expandAttrRow(attrBytes, this.attrsPerRow, this.cols,
+        this.attrs.subarray(y * this.cols, (y + 1) * this.cols));
     }
+  }
+
+  endFrame() {
     // VRTC: end-of-frame interrupt
     if (this.ve && (this.interruptMask & 1) === 0) {
       this.status |= STATUS.E;
@@ -292,6 +295,12 @@ export class Upd3301 {
         if (this.onIrq) this.onIrq();
       }
     }
+  }
+
+  stepFrame() {
+    this.beginFrame();
+    if (this.ve && this.rows > 0) for (let y = 0; y < this.rows; y++) this.fetchRow(y);
+    this.endFrame();
   }
 
   // ---- observation ---------------------------------------------------
