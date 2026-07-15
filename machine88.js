@@ -349,13 +349,13 @@ export class Pc8801Machine {
       //   digital (mkII): one write, bits 0-2 = B/R/G, full-on or off
       //   analog (SR V2): 3 bits per gun from the 512-cube, but the port is
       //     8 bits wide — so it takes TWO writes, bit6 selecting which half:
-      //     bit6=0 → RED (bits 0-2) and BLUE (bits 3-5); bit6=1 → GREEN (bits 0-2).
-      //     (Was decoded R/B-swapped, which turned every warm colour cyan —
-      //     yellow→cyan, white→cyan — while red-free blues looked fine.)
+      //     bit6=0 → B (bits 0-2) and R (bits 3-5); bit6=1 → G (bits 0-2).
+      // (An R/B-swapped decode was tried to fix AE's title cyan, but it made
+      // most other games worse — reverted; this order is right in general.)
       const i = (port - 0x54) * 3;
       if (this._port32 & 0x20) { // analog
-        if (v & 0x40) this.palette[i + 1] = v & 7; // G (bits 0-2)
-        else { this.palette[i] = v & 7; this.palette[i + 2] = (v >> 3) & 7; } // R (bits 0-2), B (bits 3-5)
+        if (v & 0x40) this.palette[i + 1] = v & 7; // G
+        else { this.palette[i + 2] = v & 7; this.palette[i] = (v >> 3) & 7; } // B, R
       } else { // digital: each bit is a gun, all-or-nothing
         this.palette[i] = (v & 2) ? 7 : 0; // R
         this.palette[i + 1] = (v & 4) ? 7 : 0; // G
@@ -592,12 +592,15 @@ export class Pc8801Machine {
   //     (cols·8 × rows·linesPerChar), i.e. show a black border instead of the
   //     GVRAM that lies outside what the CRTC is actually scanning. The other
   //     candidate for hiding edge scratch. No-op at a full 80×25 screen.
-  render({ cgrom, out = null, indexed = false, textOpaque = false, clipActive = false } = {}) {
+  //   hideText — skip the text/semigraphics layer entirely (graphics only).
+  //     A diagnostic: if a "text is riding on top of the graphics" scene goes
+  //     clean with this on, the bug is the text layer wrongly compositing.
+  render({ cgrom, out = null, indexed = false, textOpaque = false, clipActive = false, hideText = false } = {}) {
     const crtc = this.crtc;
-    const text = renderScreen(crtc.getScreen(), {
+    const text = hideText ? null : renderScreen(crtc.getScreen(), {
       cgrom, colorMode: !this.mono, width80: this.width80,
     });
-    const ink = text.ink;
+    const ink = text ? text.ink : null;
     const W = 640, H = 200;
     const [B, R, G] = this.gvram;
     const activeW = clipActive ? Math.min(W, crtc.cols * 8) : W;
@@ -611,8 +614,10 @@ export class Pc8801Machine {
         const mask = 0x80 >> (x & 7);
         idx = ((G[byte] & mask) ? 4 : 0) | ((R[byte] & mask) ? 2 : 0) | ((B[byte] & mask) ? 1 : 0);
       }
-      if (textOpaque) { if (i < ink.length && ink[i]) idx = text.pixels[i]; }
-      else { const t = i < text.pixels.length ? text.pixels[i] : 0; if (t) idx = t; }
+      if (text) {
+        if (textOpaque) { if (i < ink.length && ink[i]) idx = text.pixels[i]; }
+        else { const t = i < text.pixels.length ? text.pixels[i] : 0; if (t) idx = t; }
+      }
       return idx & 7;
     };
     if (indexed) {

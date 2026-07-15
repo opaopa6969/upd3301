@@ -58,6 +58,7 @@
   <button id="bclean" title="CRTシミュレーション(残光/管面/インターレース/走査線)を通さず、エミュの生描画をフルパレットでそのまま表示。崩れ無し・色正確・軽い。もう一度押すとCRT表示に戻る">🟢 クリーン表示</button>
   <label style="color:#778;font-size:12px" title="表示中のテキストドット(黒でも)でグラフィックをマスクする実験。Ys等の画面外バッファ隠し用"><input type="checkbox" id="txtopaque"> Txtマスク</label>
   <label style="color:#778;font-size:12px" title="μPD3301の実表示エリア(cols×rows)の外を黒でクリップ。画面端の非表示バッファ隠し用"><input type="checkbox" id="clipactive"> 端クリップ</label>
+  <label style="color:#778;font-size:12px" title="テキスト/セミグラフィック層の表示。OFFにするとグラフィックのみ＝合成バグの切り分け用"><input type="checkbox" id="showtext" checked> テキスト層</label>
   <button id="bfull">⛶ 全画面</button>
   <button id="bice">🔬 ICE</button>
   <button id="bide">🛠 IDE</button>
@@ -553,9 +554,11 @@ let txtOpaque = localStorage.getItem('upd3301-txtmask') !== '0';
 let clipActive = localStorage.getItem('upd3301-clip') === '1';
 $('txtopaque').checked = txtOpaque;
 $('clipactive').checked = clipActive;
+let showText = true;
 $('txtopaque').onchange = (e) => { txtOpaque = e.target.checked; localStorage.setItem('upd3301-txtmask', txtOpaque ? '1' : '0'); };
 $('clipactive').onchange = (e) => { clipActive = e.target.checked; localStorage.setItem('upd3301-clip', clipActive ? '1' : '0'); };
-const renderOpts = () => ({ textOpaque: txtOpaque, clipActive });
+$('showtext').onchange = (e) => { showText = e.target.checked; };
+const renderOpts = () => ({ textOpaque: txtOpaque, clipActive, hideText: !showText });
 
 // ---- rewind (deterministic time-travel) -----------------------------------
 // The machine is deterministic with a full snapshot()/restore(), so we can

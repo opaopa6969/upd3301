@@ -259,14 +259,11 @@ test('machine88: port 31h and the palette decode the way the silicon does', asyn
   m.out(0x56, 0x02); // red only
   assert.deepEqual([...m.palette.slice(6, 9)], [7, 0, 0]);
 
-  // analog palette (bit5 set): TWO writes per entry, bit6 picks the half.
-  // bit6=0 → RED in bits 0-2, BLUE in bits 3-5; bit6=1 → GREEN in bits 0-2.
-  // (The earlier R/B-swapped decode turned every warm colour cyan in real
-  // games — AE's title, Ys II — so red is the LOW three bits, not the high.)
+  // analog palette (bit5 set): TWO writes per entry, bit6 picks the half
   m.out(0x32, 0x20);
-  m.out(0x55, 0x00 | (5 << 3) | 3); // bit6=0 → R(bits0-2)=3, B(bits3-5)=5
+  m.out(0x55, 0x00 | (5 << 3) | 3); // bit6=0 → R=5, B=3
   m.out(0x55, 0x40 | 6); //            bit6=1 → G=6
-  assert.deepEqual([...m.palette.slice(3, 6)], [3, 6, 5]); // [R,G,B]
+  assert.deepEqual([...m.palette.slice(3, 6)], [5, 6, 3]);
 });
 
 test('machine88: the SR ALU writes three planes at once', async (t) => {
