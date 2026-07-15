@@ -45,6 +45,10 @@
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <select id="savedisk" title="このブラウザに保存済みのディスクから選ぶ" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px"><option value="">💾 保存済みディスク…</option></select>
+  <span style="color:#778;font-size:12px" title="どのディスクをどのドライブに入れるか選ぶ（マルチディスク用・実行中の入れ替え可）">💽 ドライブ
+    1<select id="drive0" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:3px;font-size:11px;max-width:170px"><option value="-1">（空）</option></select>
+    2<select id="drive1" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:3px;font-size:11px;max-width:170px"><option value="-1">（空）</option></select>
+  </span>
   <label style="color:#778;font-size:12px">FONT.ROM (任意): <input type="file" id="ffont" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="n88.rom + n88_0..3.rom + disk.rom (計6ファイル) をまとめて選ぶ">PC-8801 BIOS一式(n88): <input type="file" id="from88" multiple style="font-size:11px"></label>
   <button id="breset">リセット</button>
@@ -353,44 +357,77 @@ $('mn80').onclick = () => switchMode('n80');
 $('mn88').onclick = () => switchMode('n88');
 for (const id of ['dip1', 'dip2']) $(id).onchange = () => boot();
 
-// Mount a .d88. The image is parsed here (sector IDs, densities, the bad
-// sectors that copy protection lives in) and handed to the machine; actually
-// *booting* from it needs the FDD sub-CPU + μPD765, which is issue #4/#5.
-let disks = [];
+// Disk pool + drive assignment. A .d88 file can hold SEVERAL disk images, and a
+// game can span several files (Ys II is ~3 disks) and ask you to swap disks
+// between its two drives. So every image a user loads goes into a flat POOL,
+// and two selectors pick which pooled image sits in drive 1 / drive 2 — live,
+// so an in-game "insert disk A and press RETURN" is just a dropdown change.
+let diskPool = [];               // { name, disk }
+let driveAssign = [-1, -1];      // pool index per drive (unit 0/1), -1 = empty
+let disks = [];                  // kept: the most-recently-loaded file's images
+
+function addToPool(fileName, imgs) {
+  const start = diskPool.length;
+  imgs.forEach((d, i) => {
+    let label = fileName;
+    try { const s = summarize(d); if (s.name) label += ` «${s.name.trim()}»`; } catch {}
+    if (imgs.length > 1) label += ` #${i + 1}`;
+    diskPool.push({ name: label, disk: d });
+  });
+  return start;
+}
+function refreshDriveSelectors() {
+  for (const u of [0, 1]) {
+    const sel = $('drive' + u); if (!sel) continue;
+    sel.innerHTML = '<option value="-1">（空）</option>' +
+      diskPool.map((e, i) => `<option value="${i}">${e.name}</option>`).join('');
+    sel.value = String(driveAssign[u]);
+  }
+}
+// apply the current drive assignment to a live machine (or just record it)
+function mountDrives(m) {
+  if (!m || !(m instanceof Pc8801Machine)) { if (m) m.disks = diskPool.map((e) => e.disk); return; }
+  for (const u of [0, 1]) {
+    const idx = driveAssign[u];
+    if (idx >= 0 && diskPool[idx]) m.insertDisk(u, diskPool[idx].disk);
+    else m.ejectDisk(u);
+  }
+}
+const mountDisks = mountDrives; // (kept name for boot()/restoreFromStore call sites)
+$('drive0').onchange = (e) => { driveAssign[0] = parseInt(e.target.value, 10); mountDrives(machine); };
+$('drive1').onchange = (e) => { driveAssign[1] = parseInt(e.target.value, 10); mountDrives(machine); };
+
+// load a .d88 file: add its image(s) to the pool, auto-fill any empty drives
+// (image0→drive1, image1→drive2) so single/two-disk games "just work".
+function ingestDisks(fileName, imgs) {
+  const start = addToPool(fileName, imgs);
+  for (const u of [0, 1]) if (driveAssign[u] < 0 && diskPool[start + u]) driveAssign[u] = start + u;
+  disks = imgs;
+  refreshDriveSelectors();
+}
 $('fdisk').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   try {
     const diskBytes = new Uint8Array(await f.arrayBuffer());
-    disks = parseD88All(diskBytes);
+    const imgs = parseD88All(diskBytes);
     await putRom('disk', f.name, diskBytes);            // 'disk' = last-used (auto-boot)
     await putRom('disk:' + f.name, f.name, diskBytes);  // named slot for the library
     refreshStore(); refreshDiskList();
-    mountDisks(machine);
-    const s = summarize(disks[0]);
-    const extra = disks.length > 1 ? `  (+${disks.length - 1} more)` : '';
+    ingestDisks(f.name, imgs);
+    mountDrives(machine);
+    const s = summarize(imgs[0]);
+    const extra = imgs.length > 1 ? `  (計${imgs.length}枚をプールに追加)` : '';
     $('dipnote').textContent =
-      `${f.name}: ${s.name || '(no label)'} ${s.media}` +
-      ` ${s.tracks}trk ${s.sectors}sec ${(s.bytes / 1024) | 0}KB` +
-      (s.writeProtect ? ' [WP]' : '') +
-      (s.oddities.length ? '  ⚠ ' + s.oddities.join(', ') : '') + extra +
+      `${f.name}: ${s.name || '(no label)'} ${s.media} ${s.tracks}trk ${(s.bytes / 1024) | 0}KB` +
+      (s.writeProtect ? ' [WP]' : '') + extra +
       '  — ' + (bootMode === 'n88' && has88Set()
-        ? t('N88モードのFDDサブCPUにマウント済み（リセットでこのディスクから起動）')
+        ? t('ドライブに割当済み（ドライブ1/2セレクタで入替できる。リセットで起動）')
         : t('起動にはFDDサブCPUが必要（N88モード＋PC-8801 BIOS一式）'));
   } catch (err) {
     $('dipnote').textContent = 'D88: ' + err.message;
   }
 };
-// Hand mounted disks to whichever machine is live: the 8801 has a real FDD
-// sub-CPU (insertDisk drives its μPD765), the 8001 only records them.
-function mountDisks(m) {
-  if (!m) return;
-  if (m instanceof Pc8801Machine) {
-    disks.forEach((d, i) => { if (i < 2) m.insertDisk(i, d); });
-  } else {
-    m.disks = disks;
-  }
-}
 // Saved-disk library: every uploaded .d88 is kept in IndexedDB under a
 // `disk:<name>` slot, so you can re-pick it later without the file dialog. The
 // dropdown lists them; picking one mounts it (and marks it last-used).
@@ -407,14 +444,15 @@ async function loadSavedDisk(role) {
   const rec = await getRom(role);
   if (!rec) return;
   try {
-    disks = parseD88All(rec.bytes);
+    const imgs = parseD88All(rec.bytes);
     await putRom('disk', rec.name, rec.bytes); // becomes the last-used / auto-boot disk
-    mountDisks(machine);
-    const s = summarize(disks[0]);
-    const extra = disks.length > 1 ? `  (+${disks.length - 1})` : '';
+    ingestDisks(rec.name, imgs);
+    mountDrives(machine);
+    const s = summarize(imgs[0]);
+    const extra = imgs.length > 1 ? `  (計${imgs.length}枚をプールに追加)` : '';
     $('dipnote').textContent = `${rec.name}: ${s.name || '(no label)'} ${s.media} ${s.tracks}trk` + extra +
       '  — ' + (bootMode === 'n88' && has88Set()
-        ? t('マウント済み（リセットでこのディスクから起動）')
+        ? t('ドライブに割当済み（ドライブ1/2で入替可・リセットで起動）')
         : t('起動にはN88モード＋PC-8801 BIOS一式が必要'));
   } catch (err) { $('dipnote').textContent = 'saved disk: ' + err.message; }
 }
@@ -444,7 +482,7 @@ async function restoreFromStore() {
     const font = await getRom('font');
     if (font) applyFontRom(cgrom, font.bytes);
     const disk = await getRom('disk');
-    if (disk) { try { disks = parseD88All(disk.bytes); } catch {} }
+    if (disk) { try { ingestDisks(disk.name || 'disk', parseD88All(disk.bytes)); } catch {} }
     const have88 = await restore88Set();
     const rom = await getRom('rom');
     if (rom) romBytes = rom.bytes;
