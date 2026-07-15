@@ -754,40 +754,78 @@ function boot() {
 // rendering IS the pull, at 48 kHz (machine.renderAudio: OPN + optional OPNA
 // FM6 + rhythm). Needs a user gesture to start (autoplay-block), so ensureAudio
 // also runs on canvas click.
-// NOTE on the audio thread: an AudioWorklet was tried, pulling samples from the
-// audio thread via messages. It regressed the MUSIC — the worklet renders big
-// look-ahead batches, so the chip's registers (updated once per emulation frame
-// on the main thread) stay frozen across each batch and the tempo comes out
-// chunky. The ScriptProcessor callback fires at the audio-clock cadence and
-// interleaves with the per-frame register updates, so it tracks the music far
-// better. It IS deprecated (console warning), but a warning beats constant
-// stutter; the real fix is to run the whole chip inside the worklet with
-// timestamped register writes (a larger change, tracked for later).
-// BUFFER SIZE: 512 samples ≈ 10.7 ms. The OPN registers only change once per
+// AUDIO PATH: a PUSH AudioWorklet (ring-audio-worklet.js) is the primary path —
+// playback lives on the audio thread, so a busy main thread (the 15-18 ms CRT
+// sim) can't starve it into breaking up. The main thread renders one frame's
+// worth of samples per rAF (fresh OPN registers) and posts them to the worklet's
+// ring; pumpAudio() paces that off audioCtx.currentTime. An earlier PULL worklet
+// regressed the tempo (it asked for big 100 ms batches → frozen registers →
+// chunky beat); the push model sends ~16.7 ms frames so the beat stays tight.
+// The ScriptProcessor is kept only as a fallback where AudioWorklet is missing.
+// BUFFER SIZE (fallback only): 512 samples ≈ 10.7 ms. The OPN registers only change once per
 // emulation frame (~16.7 ms on the main thread), so the audio thread must re-read
 // them often to place note onsets tightly — a big 2048 buffer (42.7 ms) resampled
 // those updates so coarsely the beat wandered (the "後ノリ/前ノリ" rush-and-drag).
 // 512 tracks the beat far tighter; the main thread is only ~2 ms/frame busy now,
 // so the shorter callback has ample headroom before it risks underruns.
-const AUDIO_BUFSIZE = 512;
+const AUDIO_BUFSIZE = 512;         // ScriptProcessor fallback buffer
+const AUDIO_LATENCY = 3072;        // ~64 ms of ring cushion for the push pump —
+                                   // must exceed the worst main-thread hitch (a
+                                   // 15-18 ms CRT frame + rAF jitter) or it dries out
+const AUDIO_MAXCHUNK = 4800;       // cap one frame's render (100 ms) so a big
+                                   // catch-up after a stall can't lock the thread
 let audioCtx = null, audioNode = null;
+let audioMode = null;              // 'worklet' (push) | 'script' (fallback) | null
+let audioSetupStarted = false;
+let audioSamplesPushed = 0;        // play-cursor tracking for the push pump
+let pumpBuf = new Float32Array(AUDIO_MAXCHUNK);
 function renderAudioInto(buf, n) {
-  if (!machine || !machine.opn || rewinding || paused || scrubIndex !== null) { buf.fill(0); return buf; } // silent while scrubbing/paused
+  if (!machine || !machine.opn || rewinding || paused || scrubIndex !== null) { buf.fill(0, 0, n); return buf; } // silent while scrubbing/paused
   machine.renderAudio(buf, n);
   return buf;
+}
+// Push pump: once per frame, render exactly enough fresh samples to keep the
+// worklet's ring ~AUDIO_LATENCY ahead of the audio play cursor (currentTime).
+// Paced off the audio clock, so it self-corrects after a jank without drifting.
+function pumpAudio() {
+  if (audioMode !== 'worklet' || !audioNode) return;
+  const cursor = Math.floor(audioCtx.currentTime * 48000);
+  let n = (cursor + AUDIO_LATENCY) - audioSamplesPushed;
+  if (n <= 0) return;
+  if (n > AUDIO_MAXCHUNK) { audioSamplesPushed = cursor + AUDIO_LATENCY - AUDIO_MAXCHUNK; n = AUDIO_MAXCHUNK; } // resync after a big stall
+  renderAudioInto(pumpBuf, n);
+  audioNode.port.postMessage({ samples: pumpBuf.slice(0, n) });
+  audioSamplesPushed += n;
+}
+function startScriptProcessor() {
+  audioNode = audioCtx.createScriptProcessor(AUDIO_BUFSIZE, 0, 1);
+  audioNode.onaudioprocess = (e) => { const out = e.outputBuffer.getChannelData(0); renderAudioInto(out, out.length); };
+  audioNode.connect(audioCtx.destination);
+  audioMode = 'script';
+  console.log('[audio] ScriptProcessor fallback (buf=' + AUDIO_BUFSIZE + ')');
 }
 function ensureAudio() {
   if (audioCtx) { audioCtx.resume?.(); return; }
   try {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
   } catch { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-  audioNode = audioCtx.createScriptProcessor(AUDIO_BUFSIZE, 0, 1);
-  audioNode.onaudioprocess = (e) => {
-    const out = e.outputBuffer.getChannelData(0);
-    renderAudioInto(out, out.length);
-  };
-  audioNode.connect(audioCtx.destination);
   audioCtx.resume?.();
+  if (audioSetupStarted) return;
+  audioSetupStarted = true;
+  // Prefer the AudioWorklet push path (playback off the main thread → immune to
+  // the CRT sim starving it). Fall back to the ScriptProcessor if unavailable.
+  if (audioCtx.audioWorklet && window.AudioWorkletNode) {
+    audioCtx.audioWorklet.addModule('ring-audio-worklet.js').then(() => {
+      audioNode = new AudioWorkletNode(audioCtx, 'ring-player', { numberOfInputs: 0, outputChannelCount: [1] });
+      audioNode.port.onmessage = () => {}; // fill/underrun telemetry (unused for now)
+      audioNode.connect(audioCtx.destination);
+      audioSamplesPushed = Math.floor(audioCtx.currentTime * 48000);
+      audioMode = 'worklet';
+      console.log('[audio] AudioWorklet push path (latency≈' + (AUDIO_LATENCY / 48).toFixed(0) + 'ms)');
+    }).catch((err) => { console.warn('[audio] worklet failed, falling back:', err.message); startScriptProcessor(); });
+  } else {
+    startScriptProcessor();
+  }
 }
 canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); });
 autoLoad();
@@ -1099,6 +1137,7 @@ function loop(now) {
         if (history.length > REWIND_MAX) history.shift();
       }
     }
+    pumpAudio(); // feed the worklet fresh samples while the OPN registers are hot
     const tEmu = performance.now(); // emulation (update) done; render starts now
     perfAccountEmu(machine.frame - frameBefore, tEmu - t0);
     // Both machines emit a GRB-indexed frame (0..7 per dot) that the shared
