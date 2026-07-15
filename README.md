@@ -1,136 +1,146 @@
-**English** · [日本語](./README.ja.md)
+**日本語** · [English](./README.en.md)
 
-# upd3301 — NEC μPD3301 CRT controller emulator
+# upd3301 — NEC μPD3301 CRTコントローラ エミュレータ
 
-A chip-level emulator of the NEC μPD3301 CRTC and its partner in crime, the
-μPD8257 DMA controller — the pair that put text on the screen of the NEC
-PC-8001 (1979). Pure JavaScript, zero dependencies, deterministic, fully
-testable headless.
+NEC PC-8001（1979）の画面に文字を出していた張本人、μPD3301 CRTC と、その
+相棒 μPD8257 DMAコントローラのチップレベル・エミュレータ。pure JavaScript・
+依存ゼロ・決定論・headlessテスト可能。
 
-## Why this exists (the 3301 memorial)
+## なんで作ったか（3301記念）
 
-This repo was built to commemorate a chain of coincidences: the anime
-*Yanineko*'s opening chanting "3301! 3301!" → which turns out to be the
-Saizeriya menu code for a draft beer → which led us back to the most
-nostalgic 3301 of all, the μPD3301. It all comes back to 3301.
+偶然の連鎖の記念碑として作った：アニメ『ヤニねこ』OPの「3301！3301！」→
+実はサイゼリヤの生ビールの注文番号 → そして僕らが一番懐かしい3301、
+μPD3301 へ。すべては3301に帰る。
 
-## What's emulated
+## 使い方 — いちばん簡単な始め方
 
-- **μPD3301 core** (`index.js`): command/status ports (PC-8001 I/O 51h),
-  parameter port (50h), the 5-byte RESET parameter set (characters per row,
-  rows, lines per character, blink rate, cursor mode, h/v blanking, attribute
-  count and mode), START DISPLAY with reverse-video bit, interrupt mask,
-  cursor load, per-row DMA fetch of `chars + 2×attrs` bytes, fill-forward
-  attribute expansion, DMA-underrun status, VRTC end-of-frame interrupt,
-  deterministic cursor/attribute blink.
-- **μPD8257 model** (`upd8257.js`): 4 channels, low/high byte flip-flop,
-  read-mode terminal counts, TC status, autoload (channel 2 reloads from
-  channel 3 — how the PC-8001 repeats the screen every frame).
-- **PC-8001 wiring** (`pc8001.js`): 64KB memory + DMAC ch2 + CRTC glued via
-  the real port map (30h/50h/51h/60h–68h), text VRAM at F3C8h with 120-byte
-  rows (80 chars + 20 attribute pairs), dual-state attribute decoding
-  (color spec bit3=1: GRB + semigraphic; function spec bit3=0: reverse,
-  blink, secret, over/underline, mono semigraphic), 2×4-block semigraphics,
-  40/80-column dot doubling, and an indexed-color renderer taking an
-  injectable CGROM (no copyrighted font included).
+著作権上、NEC の ROM やゲームは同梱していません（自分の実機吸い出しを使ってください）。[PC-8801 デモ](./demo/machine.html)を開いて:
 
-The chip core never touches memory: it raises DRQ and the DMA model feeds it
-bytes, exactly like the real bus. That's also why the *Bemaga* July 1990
-"MAGICAL COLOR" trick works in this emulator unmodified: program the DMA
-count to two frames' worth (port 65h ← 8000h + 5999) and two screens
-alternate every frame, flicker-mixing 8 colors into 27. There's a test
-for it. Push it to *three* frames' worth and you get RGB plane mode:
-logically full per-dot color, at 1/3 duty per gun — dim, and only watchable
-on a long-persistence tube. Which is why there's a physical layer:
+1. **💽ディスク → 📚一覧 → 📁フォルダを開く** で、**ROM や D88 の入ったフォルダを雑に指定するだけ**（例 `C:\\var\\emulator`）
+2. フォルダを再帰スキャンして **PC-8801 BIOS一式・font・数百本のゲーム**を全部見つけ、検索付き一覧に並べる（一度許可すれば次回も記憶）
+3. 一覧からゲームをクリック → 起動。進行は自動セーブされ、次回は「▶ 前回の続きから再開」
 
-- **Phosphor physics** (`crt.js`): two-component decay per gun (fast flash +
-  slow afterglow, approximating hyperbolic decay), differential persistence
-  (P22's blue dies first, so white ghosts decay through orange), emission
-  primaries (P39 renders everything green; P7 radar phosphor flashes
-  blue-white and afterglows yellow), burn-in (accumulated dose lowers
-  efficiency), and interlaced excitation (per-field line parity).
-- **Tube physics** (`tube.js`): shadow-mask/aperture-grille/slot-mask
-  transmission patterns with Gaussian beam-spot pre-blur (the mask is where
-  color bleed — *nijimi* — comes from), barrel distortion from the curved
-  faceplate, a faint ghost image from the inner-glass reflection, and
-  corner vignette. All precomputed into LUTs; deterministic.
-- **The whine**: `crtc.hsyncHz()` derives the horizontal deflection
-  frequency from the programmed geometry — (25+7 rows) × 8 lines × 60 Hz =
-  15360 Hz — and the demo can play it. You know the sound.
-- **Terminal layer** (`term.js`): a sane write interface — `write()` with
-  cursor/scroll, ANSI escape sequences (SGR colors/reverse/blink/underline,
-  cursor addressing, erase) compiled into the chip's (position, value)
-  attribute pairs on `flush()`, plus an N-BASIC-feel semigraphic dot API
-  (`setDot`/`resetDot`/`dot`). Runs against real limits (80×25, 20
-  pairs/row → `stats.overflowRows` when you exceed them) or **EX mode**, a
-  fantasy silicon rev (`resetEx`/`setChannelEx`) with arbitrary cols×rows
-  and per-cell attributes — a usable terminal. Try `demo/terminal.html`.
+ファイルは**あなたの端末に残ったまま**（ハンドルだけ保持。著作物をどこにもアップしない設計）。フォルダ選択は Chrome 系ブラウザで動作（File System Access API）。個別に「📁ファイル選択」で ROM/ディスクを選ぶ従来方式も可。
 
-- **The whole machine** (`machine.js` + `demo/machine.html`): Z80 + your
-  own N-BASIC ROM dump + the chips above = a booting PC-8001.
-  `node tools/boot-nbasic.mjs roms/N80.ROM` prints the screen after boot;
-  the integration tests type `PRINT 3301` through the keyboard matrix and
-  assert the answer. ROMs are BYO (gitignored) — NEC's copyright runs to
-  2049.
+## ブラウザだけで、遊ぶ・作る・改造する
 
-ICE design — debugger, time travel, assembler, and the reverse-engineering
-"stone tools" (labels, source export, verified relocation):
-[docs/ice-design.md](./docs/ice-design.md).
+- **ジョグシャトル**プレイヤー（ビデオデッキ風。巻き戻し／早送り、現在を追い越すと実エミュを×16で爆走、非破壊シークで未来へ、10分バッファ）
+- **セッション自動セーブ＆再開**（うっかりリセットやタブを閉じても続きから）
+- **ICE / IDE デバッガ**（条件ブレーク・時間旅行・プロファイラ・Z80マクロアセンブラ・逆アセン。パネルは tmux 式に列で自由配置＋別ウィンドウ切り離し）
+- **サウンドボードII (OPNA)**、**CRTシミュレーション**（残光・高精細アパーチャ/シャドウマスク・走査線・アナログ色）、**WebM録画**
+- ROM・ディスク・設定・進行はブラウザ(IndexedDB)に保存。閉じても残る。データはどこにも送信しない。
 
-Using the pieces as libraries (CRT renderer, terminal, machines):
-[docs/library.md](./docs/library.md).
+## エミュレートしてるもの
 
-How this compares to QUASI88 / MAME / M88 (we read their sources — MAME and
-M88 are chip-level too; what's unique here is the physics below):
-[docs/comparison.md](./docs/comparison.md).
+- **μPD3301 コア**（`index.js`）: コマンド/ステータスポート（PC-8001の
+  I/O 51h）、パラメータポート（50h）、RESETの5バイトパラメータ（桁数・
+  行数・文字あたりライン数・ブリンク周期・カーソルモード・水平/垂直
+  ブランキング・アトリビュート数とモード）、反転ビット付きSTART DISPLAY、
+  割り込みマスク、カーソル設定、1行 `文字数 + 2×アトリビュート数` バイトの
+  行DMA、fill-forward方式のアトリビュート展開、DMAアンダーラン、VRTC
+  フレーム終端割り込み、決定論的なカーソル/アトリビュートブリンク。
+- **μPD8257 モデル**（`upd8257.js`）: 4チャネル、上位/下位バイトの
+  フリップフロップ、readモードのターミナルカウント、TCステータス、
+  オートロード（ch2がch3から再装填 — PC-8001が毎フレーム同じ画面を
+  繰り返す仕組み）。
+- **PC-8001 配線**（`pc8001.js`）: 64KBメモリ + DMAC ch2 + CRTC を実機の
+  ポートマップ（30h/50h/51h/60h〜68h）で接続。テキストVRAMは F3C8h、
+  1行120バイト（80文字 + アトリビュート20ペア）。カラー指定
+  （bit3=1: GRB+セミグラ）と機能指定（bit3=0: 反転・点滅・シークレット・
+  上下線・白黒セミグラ）の2状態デコード、2×4ブロックのセミグラフィック、
+  40/80桁のドット倍幅、CGROM注入式のインデックスカラーレンダラ
+  （著作権フォントは同梱しない）。
 
-Chip-level reference (datasheet-style, mermaid block diagrams):
-[docs/datasheet.md](./docs/datasheet.md).
+チップコアは自分でメモリを触らない。DRQを上げてDMAモデルにバイトを
+食わせてもらう — 実機のバスと同じ。だからベーマガ1990年7月号の
+「MAGICAL COLOR」がそのまま動く：DMAカウントを2フレーム分
+（port 65h ← 8000h + 5999）にすると2画面が毎フレーム交互に出て、
+ちらつき混色で8色が27色になる。テストもある。さらに**3フレーム分**に
+するとRGBプレーンモード：論理的にはドット単位フルカラー、ただし各ガンの
+デューティは1/3で暗い。それが見えるかは残光次第 — というわけで物理層がある：
 
-Vol.2 — the peripheral chips (8255 / μPD765 / μPD8214 / 8251 / clock tree): [docs/peripherals.md](./docs/peripherals.md).
+- **蛍光体物理**（`crt.js`）: ガンごとの2成分減衰（速い閃光＋遅い燐光。
+  双曲的減衰の近似）、差動残光（P22は青が先に死ぬので白の残像はオレンジに
+  変色して消える）、発光色（P39は何を映しても緑。P7レーダー管は青白い
+  閃光→黄緑の残光）、焼き付き（累積ドーズで効率低下）、インターレース励起
+  （フィールドごとのライン偶奇）。
+- **管物理**（`tube.js`）: シャドウマスク/アパーチャグリル/スロットマスクの
+  透過パターン＋ガウシアンビームスポットの前段ブラー（**滲みはマスクから
+  生まれる**）、曲面ガラスのバレル歪み、ガラス内面反射の薄いゴースト、
+  コーナーのビネット。全部LUTに事前計算、決定論。
+- **音鳴り**: `crtc.hsyncHz()` が設定ジオメトリから水平偏向周波数を導出 —
+  (25+7行)×8ライン×60Hz = **15360Hz**。デモで鳴らせる。あの音だよ。
+- **ターミナル層**（`term.js`）: まともな書き込みインターフェイス —
+  カーソル/スクロール付き `write()`、ANSIエスケープシーケンス（SGRの
+  色・反転・点滅・下線、カーソル移動、消去）を `flush()` でチップの
+  （位置, 値）アトリビュートペアにコンパイル。N-BASICの SET/RESET 感覚の
+  セミグラAPI（`setDot`/`resetDot`/`dot`）付き。実機制約モード（80×25・
+  20ペア/行 → 溢れたら `stats.overflowRows` に計上）と **EXモード**
+  （`resetEx`/`setChannelEx` の架空シリコン改版。任意の桁×行＋セル単位
+  アトリビュート）の両対応 — ターミナルとして使える。`demo/terminal.html`。
 
-## Use
+- **フルマシン**（`machine.js`＋`demo/machine.html`）: Z80＋手持ちの
+  N-BASIC ROM吸い出し＋上記チップ群＝起動するPC-8001。
+  `node tools/boot-nbasic.mjs roms/N80.ROM` で起動画面をダンプ、
+  統合テストはキーボードマトリクス経由で `PRINT 3301` を打って答えを
+  検証する。ROMはBYO（gitignore済み）— NECの著作権は2049年まで。
+
+ICE設計 — デバッガ・時間旅行・アセンブラ・リバース用「石器一式」
+（ラベル・ソース書き出し・検証付きリロケート）:
+[docs/ice-design.ja.md](./docs/ice-design.ja.md)。
+
+各部品をライブラリとして使う（CRTレンダラー・ターミナル・マシン）:
+[docs/library.ja.md](./docs/library.ja.md)。
+
+他エミュ（QUASI88 / MAME / M88）とのソースレベル比較 — MAMEとM88も同じく
+チップレベルだった。うちが唯一持つのはその下の物理層:
+[docs/comparison.ja.md](./docs/comparison.ja.md)。
+
+チップレベルの技術資料（データシート風、mermaidブロック図つき）:
+[docs/datasheet.ja.md](./docs/datasheet.ja.md)。
+
+第2巻 — 周辺チップ編（8255 / μPD765 / μPD8214 / 8251 / クロック体系）: [docs/peripherals.ja.md](./docs/peripherals.ja.md)。
+
+## 使い方
 
 ```js
 import { Pc8001TextSystem } from './pc8001.js';
 
 const sys = new Pc8001TextSystem();
-sys.initTextMode();                     // program CRTC+DMAC like N-BASIC boot
+sys.initTextMode();                     // N-BASIC起動と同じ手順でCRTC+DMACを設定
 sys.line(0).text(0, 'HELLO 3301').attrs(0, 0xe8);
-sys.update(1 / 60);                     // fixed-step, frame-exact
-const { width, height, pixels } = sys.render({ cgrom }); // 0..7 color indexes
+sys.update(1 / 60);                     // 固定ステップ・フレーム正確
+const { width, height, pixels } = sys.render({ cgrom }); // 0..7 の色インデックス
 ```
 
-Or drive the bare chip through ports: `crtc.writePort(1, 0x00)` … see
-`test.mjs` for full sequences.
+素のチップをポート経由で叩くなら `crtc.writePort(1, 0x00)` …
+完全なシーケンスは `test.mjs` を見て。
 
 ```sh
-node --test              # 30 deterministic tests
-python3 -m http.server   # from the repo root, then open http://localhost:8000/demo/
+node --test              # 決定論テスト30本
+python3 -m http.server   # リポジトリ直下で実行 → http://localhost:8000/demo/ を開く
 ```
 
-The demo has buttons for every layer: text/27-color/RGB-plane modes, 40/80
-columns, reverse video, the four phosphors, burn-in, mask type, interlace,
-and the 15 kHz whine (browser autoplay rules require the click).
+デモは全レイヤにボタンがある：テキスト/27色/RGB3プレーン、40/80桁、
+画面反転、蛍光体4種、焼き付き、マスク3種、インターレース、15kHz音鳴り
+（ブラウザの自動再生制限があるのでクリックで開始）。
 
-## Accuracy notes
+## 正確性メモ
 
-Faithful: command set, RESET parameter decoding, per-row DMA sizes, attribute
-expansion semantics (fill-forward, position 0 = end of row on non-first
-pairs), status bits incl. the undocumented bit 7 dropping on underrun, 8257
-autoload. Approximate: timing is frame-granular (no dot-clock, no mid-frame
-VRTC observation), light pen and special control characters are not
-supported, blink rates follow the documented formula but weren't verified
-against silicon. Browser demo is visually unverified in CI (headless smoke
-test only).
+忠実：コマンド体系、RESETパラメータのデコード、行DMAのバイト数、
+アトリビュート展開の意味論（fill-forward、2ペア目以降の位置0=行末）、
+アンダーランで落ちる非公開bit7を含むステータス、8257オートロード。
+近似：タイミングはフレーム粒度（ドットクロックなし、フレーム途中の
+VRTC観測不可）、ライトペンと特殊制御文字は未対応、ブリンク周期は
+資料の式どおりだが実チップ未検証。ブラウザデモの実描画はheadlessでは
+見られないため visual未検証（smoke testのみ）。
 
-## References
+## 参考資料
 
-- MAME `src/devices/video/upd3301.cpp` (behavior reference; reimplemented,
-  no code copied)
-- [nkomatsu's IC collection: uPD3301](http://www.st.rim.or.jp/~nkomatsu/crtif/uPD3301.html)
-- [kwhr0's PC-8001 FPGA notes](http://kwhr0.g2.xrea.com/hard/pc8001.html) (120-byte row buffer, hblank DMA)
-- [EnrPc PC-8001 port map](http://cmpslv3.stars.ne.jp/Pc80/EnrPc.htm)
-- [PC-8001 27-color trick](http://wwwb.pikara.ne.jp/minosoft/pc-8001/color.htm) (Bemaga 1990-07 "MAGICAL COLOR")
+- MAME `src/devices/video/upd3301.cpp`（挙動の参照。コードはコピーせず再実装）
+- [nkomatsuさんのICコレクション: uPD3301](http://www.st.rim.or.jp/~nkomatsu/crtif/uPD3301.html)
+- [kwhr0さんのPC-8001 FPGAノート](http://kwhr0.g2.xrea.com/hard/pc8001.html)（1行120バイトのバッファ、水平帰線中DMA）
+- [EnrPc PC-8001ポートマップ](http://cmpslv3.stars.ne.jp/Pc80/EnrPc.htm)
+- [PC-8001で27色](http://wwwb.pikara.ne.jp/minosoft/pc-8001/color.htm)（ベーマガ1990年7月号「MAGICAL COLOR」）
 
-MIT license. Not affiliated with NEC.
+MITライセンス。NECとは無関係の趣味プロジェクト。
