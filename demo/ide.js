@@ -31,7 +31,7 @@ export const CHANNEL = 'upd3301-ide';
 const ASM_EXT = /\.(z80|asm|inc)$/i;
 
 export function mountIdePage(doc, env) {
-  const $ = (id) => doc.getElementById(id);
+  const $ = (id) => doc.getElementById(id) || (globalThis.__dockFindEl ? globalThis.__dockFindEl(id) : null);
   const t = env.t ?? ((s) => s);
   const storage = env.storage ?? { get: () => null, set: () => {} };
 

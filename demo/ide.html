@@ -14,8 +14,7 @@
   pre { margin:0; white-space:pre; }
   .panel { background:#16161c; border:1px solid #2a3140; border-radius:6px; padding:8px 10px; }
   .panel h2 { font-size:12px; color:#778; margin:0 0 6px; font-weight:normal; }
-  #grid { display:grid; grid-template-columns: 220px minmax(480px, 1fr) 340px; gap:10px; align-items:start; }
-  @media (max-width: 1100px) { #grid { grid-template-columns: 1fr; } }
+  /* layout owned by dockgrid.js tiling (.dock-grid / .dock-col) */
   .frow, .srow, .erow { cursor:pointer; font-size:11px; line-height:1.6; color:#9ab; white-space:pre; overflow-x:hidden; text-overflow:ellipsis; }
   .frow:hover, .srow:hover, .erow:hover { color:#8fd; background:#1c2430; }
   .frow.on { color:#8fd; }
@@ -164,6 +163,10 @@
 import { applyI18n, t, lang } from './i18n.js';
 applyI18n();
 import { mountIdePage, PROMOTE_KEY, CHANNEL } from './ide.js';
+// tmux-style tiling: panels in resizable columns (drag headers to move, gutters to
+// rebalance widths, bottom edges for heights, ⧉ to pop out).
+import { makeTiling } from './dockgrid.js';
+makeTiling(document.getElementById('grid'), { storageKey: 'ide-dock', cols: 3 });
 
 // ---- tiny IndexedDB kv store (handles can't live in localStorage) ----------
 const idb = (() => {
