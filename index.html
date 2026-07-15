@@ -58,38 +58,39 @@
   <p class="small">ROMは同梱していません（後述のBYO-ROM）。ブラウザ内だけで動き、データはどこにも送信されません。</p>
 </header>
 
-<h2>何ができる</h2>
+<h2>何ができる — ブラウザだけで、遊ぶ・作る・改造する</h2>
 <ul class="feat">
   <li><b>PC-8801 (N88-BASIC)</b> をディスクから起動（FDDサブCPU＝2個目のZ80まで実装）</li>
   <li><b>PC-8001 (N-BASIC)</b> 起動、μPD3301＋μPD8257 DMA の実挙動</li>
+  <li><b>フォルダを雑に指定するだけ</b> — ROM一式・font・数百本のD88ゲームを自動スキャン＆記憶（File System Access。ファイルは端末に残る）</li>
   <li><b>サウンド</b>: YM2203(OPN) FM3+SSG3、<b>サウンドボードII (YM2608/OPNA)</b> FM6＋リズム</li>
-  <li><b>クリーン表示 / CRTシミュレーション</b>（蛍光体残光・管面・走査線）切替</li>
-  <li><b>速度コントロール</b> ×0.25〜×16（早送り／スロー）</li>
-  <li><b>巻き戻し</b>（決定論スナップショットで時間を遡る）</li>
-  <li><b>WebM録画</b>（画面＋音声）</li>
-  <li><b>保存済みディスク選択</b>（IndexedDBに一度入れれば次回から自動起動）</li>
-  <li><b>ICE / IDE</b> デバッガ、逆アセンブラ、Z80アセンブラ内蔵</li>
-  <li><b>決定論</b>: 同seed＋同入力→同出力。`node --test` で全数検証</li>
+  <li><b>ジョグシャトル</b>: ビデオデッキ風に巻き戻し／早送り。現在を追い越すと実エミュを<b>×16で爆走</b>、非破壊シークでいつでも未来へ</li>
+  <li><b>セッション自動セーブ＆再開</b>: うっかりリセットやタブを閉じても「前回の続きから再開」</li>
+  <li><b>CRTシミュレーション</b>: 蛍光体残光・アパーチャ/シャドウマスク（高精細ピッチ）・走査線・アナログ色。クリーン表示と切替</li>
+  <li><b>ICE / IDE</b>: 条件ブレーク・時間旅行・プロファイラ・Z80マクロアセンブラ・逆アセン。パネルは<b>tmux式に列で自由配置＋別ウィンドウ切り離し</b></li>
+  <li><b>速度 ×0.25〜×16 / WebM録画 / 巻き戻し10分バッファ</b></li>
+  <li><b>永続</b>: ROM・ディスク・設定・進行はブラウザ(IndexedDB)に保存。閉じても残る</li>
+  <li><b>決定論</b>: 同seed＋同入力→同出力。`node --test` で全数検証。データはどこにも送信しない</li>
 </ul>
 
 <h2>デモ一覧</h2>
 <div class="grid">
-  <a class="card" href="demo/machine.html" style="text-decoration:none;color:inherit"><h3>PC-8801 マシン ▶</h3><p>本体。ROM一式＋ディスクで実ゲームが動く。SB2・速度・巻き戻し・録画つき。</p></a>
-  <a class="card" href="demo/index.html" style="text-decoration:none;color:inherit"><h3>μPD3301 デモ</h3><p>CRTCがテキストを描く仕組みを可視化。プロジェクトの原点。</p></a>
+  <a class="card" href="demo/machine.html" style="text-decoration:none;color:inherit"><h3>PC-8801 マシン ▶</h3><p>本体。フォルダ取り込みで実ゲームが動く。ジョグシャトル・SB2・録画・自動再開つき。</p></a>
+  <a class="card" href="demo/index.html" style="text-decoration:none;color:inherit"><h3>μPD3301 / CRT物理デモ</h3><p>CRTCがテキストを描く仕組みと蛍光体・管面の物理を可視化。原点。</p></a>
+  <a class="card" href="demo/ice.html" style="text-decoration:none;color:inherit"><h3>ICE デバッガ</h3><p>条件ブレーク・時間旅行・プロファイラ。パネルはtmux式に自由配置＆別窓化。</p></a>
+  <a class="card" href="demo/ide.html" style="text-decoration:none;color:inherit"><h3>IDE / アセンブラ</h3><p>Z80マクロアセンブラ＋逆アセン＋実行。ICEと同じタイリングUI。</p></a>
+  <a class="card" href="demo/video.html" style="text-decoration:none;color:inherit"><h3>動画セミグラ</h3><p>動画をμPD3301のセミグラフィックスに落として再生。</p></a>
   <a class="card" href="demo/opn-scope.html" style="text-decoration:none;color:inherit"><h3>OPN スコープ</h3><p>YM2203/2608 のレジスタ列を再生してFM/SSG波形を観察。</p></a>
-  <a class="card" href="demo/ide.html" style="text-decoration:none;color:inherit"><h3>IDE / アセンブラ</h3><p>Z80アセンブラ＋逆アセンブラ＋実行環境。</p></a>
-  <a class="card" href="demo/ice.html" style="text-decoration:none;color:inherit"><h3>ICE デバッガ</h3><p>ブレークポイント・ステップ実行・メモリ観察。</p></a>
-  <a class="card" href="demo/rhythm.html" style="text-decoration:none;color:inherit"><h3>ドラムマシン</h3><p>FDDのヘッドシーク音を楽器にする実験。</p></a>
 </div>
 
-<h2>使い方（BYO-ROM）</h2>
-<p>著作権上、NECのROMは同梱できません。実機から吸い出した自分のROMを用意してください。<a href="demo/machine.html">PC-8801デモ</a>で:</p>
+<h2>使い方 — いちばん簡単な始め方</h2>
+<p>著作権上、NECのROMやゲームは同梱していません（自分の吸い出しを使ってください）。<a href="demo/machine.html">PC-8801デモ</a>を開いて:</p>
 <ol>
-  <li><b>「PC-8801 BIOS一式(n88)」</b>ボタンで <code>n88.rom</code> + <code>n88_0..3.rom</code> + <code>disk.rom</code>（計6ファイル）をまとめて選ぶ → 自動でN88モードへ</li>
-  <li><b>ディスク(.d88)</b> を選ぶ（ドライブ0にマウント）</li>
-  <li><b>リセット</b> → ブータブルなゲームディスクなら起動</li>
+  <li><b>💽ディスク → 📚一覧 → 📁フォルダを開く</b> で、<b>ROMやD88の入ったフォルダを雑に指定するだけ</b>（例 <code>C:\var\emulator</code>）</li>
+  <li>フォルダを再帰スキャンして <b>PC-8801 BIOS一式・font・数百本のゲーム</b>を全部見つけ、検索付き一覧に並べる（一度許可すれば次回も記憶）</li>
+  <li>一覧から遊びたいゲームをクリック → <b>リセット</b>で起動。進行は自動セーブされ、次回は「▶再開」で続きから</li>
 </ol>
-<p class="small">一度読み込めばブラウザのIndexedDBに保存され、次回から自動起動します。ローカルに <code>roms/&lt;機種&gt;/</code> を置いて <code>manifest.json</code> に <span class="mono">"n88": "&lt;dir&gt;"</span> を書けば、サーバから自動ロードもできます。</p>
+<p class="small">ファイルは<b>あなたの端末に残ったまま</b>（ハンドルだけ保持。著作物をどこにもアップしない設計）。個別に「📁ファイル選択」でROM/ディスクを選ぶ従来方式もOK。ローカルに <code>roms/&lt;機種&gt;/</code> を置いて <code>manifest.json</code> に <span class="mono">"n88": "&lt;dir&gt;"</span> を書けば、開くだけで自動ロードもできます。<br>※フォルダ選択は Chrome系ブラウザで動作（File System Access API）。</p>
 
 <h2>ROM ハッシュ表（自分の吸出しの照合用）</h2>
 <div class="rom-note">
