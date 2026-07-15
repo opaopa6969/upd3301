@@ -13,7 +13,6 @@ const PAGES = [
   ['terminal.html', 'ターミナル'],
   ['video.html', '動画セミグラ'],
   ['crt-player.html', 'CRT動画プレイヤー'],
-  ['rhythm.html', 'ドラムマシン'],
 ];
 const REPO = 'https://github.com/opaopa6969/upd3301';
 

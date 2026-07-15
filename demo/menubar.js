@@ -72,7 +72,10 @@ export function mountMenuBar(container, spec) {
     const btn = document.createElement('button'); btn.className = 'mbar-btn'; btn.textContent = m.label; bar.appendChild(btn);
     const panel = document.createElement('div'); panel.className = 'mbar-menu'; bar.appendChild(panel);
     btn._panel = panel; panels.push({ btn, panel });
-    btn.onclick = (e) => { e.stopPropagation(); const willOpen = !panel.classList.contains('open'); closeAll(); if (willOpen) { panel.classList.add('open'); btn.classList.add('open'); } };
+    btn.onclick = (e) => {
+      e.stopPropagation(); const willOpen = !panel.classList.contains('open'); closeAll();
+      if (willOpen) { panel.classList.add('open'); btn.classList.add('open'); panel.style.left = Math.max(2, Math.min(btn.offsetLeft, bar.clientWidth - panel.offsetWidth - 4)) + 'px'; }
+    };
     panel.onclick = (e) => e.stopPropagation();
     for (const it of m.items) {
       const row = document.createElement('div'); row.className = 'mbar-item';

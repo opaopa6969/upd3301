@@ -31,6 +31,7 @@
 <body>
 <h1>PC-8001 — Z80 + N-BASIC ROM + μPD8257 + μPD3301（フルマシン）</h1>
 <p class="note" id="navrow"></p>
+<div id="menubar-mount"></div>
 <div id="stage"><canvas id="crt" tabindex="0" width="640" height="400"></canvas></div>
 <div id="playerbar" style="max-width:664px;margin:8px 0 4px;display:flex;align-items:center;gap:10px;font-size:12px;color:#9ab">
   <button id="bpause" title="一時停止 / 再開" style="min-width:70px">⏸ 停止</button>
@@ -53,12 +54,12 @@
     <option value="60">1分</option><option value="120">2分</option><option value="300">5分</option><option value="600">10分</option>
   </select></label>
 </div>
-<div class="row">
+<div class="row" id="row-sys1">
   <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <select id="savedisk" title="このブラウザに保存済みのディスクから選ぶ" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px"><option value="">💾 保存済みディスク…</option></select>
-  <span style="color:#778;font-size:12px" title="どのディスクをどのドライブに入れるか選ぶ（マルチディスク用・実行中の入れ替え可）">💽 ドライブ
+  <span id="grp-drive" style="color:#778;font-size:12px" title="どのディスクをどのドライブに入れるか選ぶ（マルチディスク用・実行中の入れ替え可）">💽 ドライブ
     1<select id="drive0" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:3px;font-size:11px;max-width:170px"><option value="-1">（空）</option></select>
     2<select id="drive1" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:3px;font-size:11px;max-width:170px"><option value="-1">（空）</option></select>
   </span>
@@ -83,9 +84,9 @@
 </div>
 <div class="row" id="padcfg" style="display:none;background:#1a1a28;border:1px solid #446;border-radius:6px;padding:8px;flex-wrap:wrap;gap:6px 14px"></div>
 <div class="row" style="font-size:12px" id="romstore"></div>
-<div class="row"><span class="lbl">起動モード:</span>
-  <button id="mn80" class="on">N-BASIC (N80)</button>
-  <button id="mn88">N88-BASIC</button>
+<div class="row" id="row-sys2"><span class="lbl">起動モード:</span>
+  <span id="grp-bootmode"><button id="mn80" class="on">N-BASIC (N80)</button>
+  <button id="mn88">N88-BASIC</button></span>
   <label style="color:#778;font-size:12px" title="サウンドボードII (OPNA/YM2608) を有効にする">SB2 <input type="checkbox" id="sb2" style="vertical-align:middle"></label>
   <label style="color:#778;font-size:12px" title="エミュレーション速度。倍速・早送り（実CPUが追いつく範囲まで）">速度 <select id="speed" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
     <option value="0.25">×0.25</option><option value="0.5">×0.5</option>
@@ -115,6 +116,7 @@ import { applyI18n, t } from './i18n.js';
 applyI18n();
 import { mountNav } from './nav.js';
 mountNav('machine.html');
+import { mountMenuBar } from './menubar.js';
 import { Pc8001Machine } from '../machine.js';
 import { Pc8801Machine } from '../machine88.js';
 import { mountCrtPanel } from './crt-panel.js';
@@ -987,6 +989,42 @@ function ensureAudio() {
   }
 }
 canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); });
+
+// ---- fold the piecemeal control rows into a grouped menu bar + pinnable dock ---
+{
+  const lab = (id) => { const e = $(id); return e ? (e.closest('label') || e) : null; };
+  const it = (id, label, el, pin = false) => el ? { id, label, el, pin } : null;
+  const menus = [
+    { label: '📁 ファイル', items: [
+      it('from', 'ROM', lab('from')), it('fdisk', 'ディスク', lab('fdisk')),
+      it('ffont', 'FONT', lab('ffont')), it('from88', 'BIOS一式', lab('from88')),
+      it('romstore', '保存済ROM', $('romstore')),
+    ].filter(Boolean) },
+    { label: '🖥 システム', items: [
+      it('mach', '機種', $('mach')), it('grp-bootmode', '起動モード', $('grp-bootmode')),
+      it('sb2', 'SB2', lab('sb2')), it('dip1', 'DIPSW1', lab('dip1')), it('dip2', 'DIPSW2', lab('dip2')),
+    ].filter(Boolean) },
+    { label: '💽 ディスク', items: [
+      it('savedisk', '保存済み', $('savedisk')), it('grp-drive', 'ドライブ割当', $('grp-drive')),
+    ].filter(Boolean) },
+    { label: '🎨 表示', items: [
+      it('bclean', 'クリーン/CRT', $('bclean'), true), it('dispscale', '表示倍率', lab('dispscale'), true),
+      it('showtext', 'テキスト層', lab('showtext')), it('txtopaque', 'Txtマスク', lab('txtopaque')),
+      it('clipactive', '端クリップ', lab('clipactive')), it('bfull', '全画面', $('bfull'), true),
+    ].filter(Boolean) },
+    { label: '⚙ 設定', items: [
+      it('speed', '速度', lab('speed'), true), it('cpumode', 'CPU速度', lab('cpumode')),
+      it('rewbuf', '巻戻し長', lab('rewbuf')),
+    ].filter(Boolean) },
+    { label: '🛠 ツール', items: [
+      it('breset', 'リセット', $('breset'), true), it('bpad', 'パッド設定', $('bpad'), true),
+      it('brewind', '巻き戻し', $('brewind')), it('bpng', 'PNG', $('bpng')), it('brec', '録画', $('brec')),
+      it('bice', 'ICE', $('bice')), it('bide', 'IDE', $('bide')),
+    ].filter(Boolean) },
+  ];
+  mountMenuBar($('menubar-mount'), { storageKey: 'menubar-machine', brand: 'PC-8801', menus });
+  for (const r of ['row-sys1', 'row-sys2']) { const e = $(r); if (e) e.style.display = 'none'; }
+}
 autoLoad();
 refreshDiskList();
 
