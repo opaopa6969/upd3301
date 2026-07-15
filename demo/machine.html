@@ -846,6 +846,22 @@ function pumpAudio() {
   audioNode.port.postMessage({ samples: pumpBuf.slice(0, n) });
   audioSamplesPushed += n;
 }
+// Render ONE emulated frame's worth of audio with the registers as they are RIGHT
+// NOW — called from machine.update's per-frame hook. When the render loop crawls
+// (a 50 ms supersampled CRT frame = ~18 fps) the emulation still runs 60 frames/s
+// via _acc catch-up; emitting per frame keeps the music's note timing at 1/60 s
+// granularity instead of smearing a whole slow render-frame of notes onto one
+// register snapshot (which drifted the beat). pumpAudio() still does drift/lag
+// correction against the audio clock; both share audioSamplesPushed.
+function emitFrameAudio() {
+  if (audioMode !== 'worklet' || !audioNode) return;
+  const spf = Math.round(48000 / (machine.frameHz || 60));
+  const cursor = Math.floor(audioCtx.currentTime * 48000);
+  if (audioSamplesPushed >= cursor + AUDIO_LATENCY + spf) return; // ring full enough
+  renderAudioInto(pumpBuf, spf);
+  audioNode.port.postMessage({ samples: pumpBuf.slice(0, spf) });
+  audioSamplesPushed += spf;
+}
 function startScriptProcessor() {
   audioNode = audioCtx.createScriptProcessor(AUDIO_BUFSIZE, 0, 1);
   audioNode.onaudioprocess = (e) => { const out = e.outputBuffer.getChannelData(0); renderAudioInto(out, out.length); };
@@ -1179,14 +1195,17 @@ function loop(now) {
       if (rewinding) { rewinding = false; $('brewind').classList.remove('on'); } // ran dry
       // scale emulated time by the speed multiplier; cap the per-frame slice so a
       // huge multiplier (or a long hitch) can't lock the main thread catching up.
-      machine.update(Math.min(dt * speedMul, 0.5));
+      // per-frame audio hook (8801 + worklet) keeps music tempo tight when the
+      // render is slow; falls back to the post-loop pumpAudio otherwise.
+      const onFrame = (machine instanceof Pc8801Machine && audioMode === 'worklet') ? emitFrameAudio : null;
+      machine.update(Math.min(dt * speedMul, 0.5), onFrame);
       if (canSnap() && machine.frame - lastSnapFrame >= REWIND_EVERY) {
         lastSnapFrame = machine.frame;
         history.push({ snap: machine.snapshot(), frame: machine.frame });
         if (history.length > REWIND_MAX) history.shift();
       }
     }
-    pumpAudio(); // feed the worklet fresh samples while the OPN registers are hot
+    pumpAudio(); // drift/lag correction + silence while paused (per-frame emit does the fine feed)
     const tEmu = performance.now(); // emulation (update) done; render starts now
     perfAccountEmu(machine.frame - frameBefore, tEmu - t0);
     // Both machines emit a GRB-indexed frame (0..7 per dot) that the shared

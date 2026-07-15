@@ -549,13 +549,18 @@ export class Pc8801Machine {
   // Effective CPU speed this frame, as a percentage of full 4 MHz (for the HUD).
   get effectiveCpuPct() { return Math.round((1 - this._effectiveSteal()) * 100); }
 
-  update(dt) {
+  // onFrame (optional) is invoked after EACH emulated frame. The demo uses it to
+  // render that frame's audio while the OPN registers are fresh — so when the
+  // render loop is slow (a heavy CRT frame at ~18 fps) the music sequencing keeps
+  // its 1/60 s granularity instead of collapsing to the render rate (which made
+  // the beat drift). Without it, behaviour is unchanged.
+  update(dt, onFrame = null) {
     this._acc = (this._acc ?? 0) + dt;
     // pace to the machine's OWN refresh, not a hard-coded 60 — so constructing
     // with the real PC-8801 vertical rate makes the emulation (and the music
     // tempo that rides its clock) run at true speed. Default 60 → unchanged.
     const period = 1 / this.frameHz;
-    while (this._acc >= period) { this._acc -= period; this.stepFrame(); }
+    while (this._acc >= period) { this._acc -= period; this.stepFrame(); if (onFrame) onFrame(); }
     return this;
   }
 
