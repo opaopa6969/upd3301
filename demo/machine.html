@@ -58,7 +58,10 @@
   <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
-  <select id="savedisk" title="このブラウザに保存済みのディスクから選ぶ" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px"><option value="">💾 保存済みディスク…</option></select>
+  <span id="grp-savedisk" style="display:inline-flex;gap:4px;align-items:center">
+    <select id="savedisk" title="このブラウザに保存済みのディスクから選ぶ" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px;max-width:200px"><option value="">💾 保存済みディスク…</option></select>
+    <button id="bdiskbrowse" title="保存済みディスクを検索して選ぶ（数百件対応）">📚 一覧</button>
+  </span>
   <span id="grp-drive" style="display:flex;flex-direction:column;gap:4px;color:#9ab;font-size:12px;min-width:240px" title="どのディスクをどのドライブに入れるか選ぶ（マルチディスク用・実行中の入れ替え可）">
     <label style="display:flex;align-items:center;gap:5px">💽 ドライブ1 <select id="drive0" style="flex:1;min-width:0;background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:3px;font-size:11px"><option value="-1">（空）</option></select></label>
     <label style="display:flex;align-items:center;gap:5px">💽 ドライブ2 <select id="drive1" style="flex:1;min-width:0;background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:3px;font-size:11px"><option value="-1">（空）</option></select></label>
@@ -122,7 +125,7 @@ import { Pc8801Machine } from '../machine88.js';
 import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 import { parseD88All, summarize } from '../d88.js';
-import { putRom, getRom, listRoms, clearRoms } from './romstore.js';
+import { putRom, getRom, listRoms, clearRoms, deleteRom } from './romstore.js';
 
 // OPNA rhythm ROM (the six ADPCM-A drums) — fetched + decoded once, then
 // side-loaded into the OPNA so Sound Board II rhythm ($00-$0D) is audible.
@@ -550,6 +553,55 @@ async function loadSavedDisk(role) {
   } catch (err) { $('dipnote').textContent = 'saved disk: ' + err.message; }
 }
 $('savedisk').onchange = (e) => { if (e.target.value) loadSavedDisk(e.target.value); };
+// ---- disk browser: a searchable list for large saved-disk libraries (hundreds
+// of images make a <select> useless). Overlay with a filter box + scroll list. --
+function ensureDiskBrowser() {
+  if ($('diskbrowser')) return;
+  const ov = document.createElement('div'); ov.id = 'diskbrowser';
+  ov.style.cssText = 'display:none;position:fixed;inset:0;background:#000a;z-index:100;align-items:center;justify-content:center';
+  ov.innerHTML =
+    `<div style="background:#15151d;border:1px solid #3a3a4c;border-radius:10px;width:min(640px,92vw);max-height:82vh;display:flex;flex-direction:column;box-shadow:0 12px 40px #000c">
+       <div style="display:flex;gap:8px;align-items:center;padding:10px 12px;border-bottom:1px solid #2a2a38">
+         <b style="color:#8fd">📚 保存済みディスク</b>
+         <input id="diskfilter" placeholder="🔍 名前で絞り込み" style="flex:1;background:#181820;color:#cde;border:1px solid #446;border-radius:5px;padding:5px 8px">
+         <span id="diskcount" style="color:#778;font-size:12px"></span>
+         <button id="diskclose">✕</button>
+       </div>
+       <div id="disklist" style="overflow:auto;padding:6px"></div>
+     </div>`;
+  document.body.appendChild(ov);
+  ov.onclick = (e) => { if (e.target === ov) ov.style.display = 'none'; };
+  $('diskclose').onclick = () => { ov.style.display = 'none'; };
+  $('diskfilter').oninput = () => renderDiskList();
+}
+let _diskItems = [];
+async function renderDiskList() {
+  const q = ($('diskfilter').value || '').toLowerCase();
+  const kb = (n) => (n / 1024 < 1024 ? (n / 1024 | 0) + 'KB' : (n / 1048576).toFixed(1) + 'MB');
+  const shown = _diskItems.filter((i) => i.name.toLowerCase().includes(q));
+  $('diskcount').textContent = `${shown.length}/${_diskItems.length}`;
+  const list = $('disklist');
+  list.innerHTML = shown.length ? '' : '<div style="color:#667;padding:16px;text-align:center">該当なし</div>';
+  for (const i of shown) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:6px;cursor:pointer';
+    row.onmouseenter = () => { row.style.background = '#20202b'; };
+    row.onmouseleave = () => { row.style.background = ''; };
+    row.innerHTML = `<span style="flex:1;color:#cde;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">💾 ${i.name}</span><span style="color:#778;font-size:12px">${kb(i.size)}</span>`;
+    const del = document.createElement('button'); del.textContent = '🗑'; del.title = '削除'; del.style.cssText = 'padding:2px 6px;font-size:12px';
+    del.onclick = async (e) => { e.stopPropagation(); if (confirm(`「${i.name}」を保存済みから削除？`)) { try { await deleteRom(i.role); } catch {} await openDiskBrowser(true); refreshDiskList(); } };
+    row.onclick = () => { loadSavedDisk(i.role); $('diskbrowser').style.display = 'none'; };
+    row.appendChild(del); list.appendChild(row);
+  }
+}
+async function openDiskBrowser(keepOpen) {
+  ensureDiskBrowser();
+  let items = []; try { items = await listRoms(); } catch {}
+  _diskItems = items.filter((i) => i.role.startsWith('disk:')).sort((a, b) => a.name.localeCompare(b.name));
+  if (!keepOpen) { $('diskbrowser').style.display = 'flex'; $('diskfilter').value = ''; $('diskfilter').focus(); }
+  renderDiskList();
+}
+$('bdiskbrowse').onclick = () => openDiskBrowser(false);
 // ---- persisted ROMs (this browser's IndexedDB) ----------------------------
 // "upload once": the boot ROM / font / disk you pick are kept locally so a
 // return visit auto-boots without re-picking. Bytes stay in your browser.
@@ -1008,7 +1060,7 @@ canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); 
       it('sb2', 'SB2', lab('sb2')), it('dip1', 'DIPSW1', lab('dip1')), it('dip2', 'DIPSW2', lab('dip2')),
     ].filter(Boolean) },
     { label: '💽 ディスク', items: [
-      it('savedisk', '保存済み', $('savedisk')), it('grp-drive', 'ドライブ割当', $('grp-drive')),
+      it('grp-savedisk', '保存済み/一覧', $('grp-savedisk')), it('grp-drive', 'ドライブ割当', $('grp-drive')),
     ].filter(Boolean) },
     { label: '🎨 表示', items: [
       it('bclean', 'クリーン/CRT', $('bclean'), true), it('dispscale', '表示倍率', lab('dispscale'), true),

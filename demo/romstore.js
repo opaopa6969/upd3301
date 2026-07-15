@@ -57,6 +57,15 @@ export async function listRoms() {
   });
 }
 
+export async function deleteRom(role) {
+  const db = await open();
+  return new Promise((resolve, reject) => {
+    const rq = tx(db, 'readwrite').delete(role);
+    rq.onsuccess = () => resolve();
+    rq.onerror = () => reject(rq.error);
+  });
+}
+
 export async function clearRoms() {
   const db = await open();
   return new Promise((resolve, reject) => {
