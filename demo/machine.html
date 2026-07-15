@@ -730,9 +730,24 @@ canvas.addEventListener('keyup', (e) => {
 });
 
 const FR = 1 / 60;
-let last = performance.now(), workMs = 0;
+let last = performance.now(), workMs = 0, audioClockLast = null;
 function loop(now) {
-  const dt = Math.min(0.1, (now - last) / 1000);
+  // Timebase: while sound is running, pace the emulation off the AUDIO clock
+  // (audioCtx.currentTime) instead of the wall clock. The music is generated
+  // against that same 48 kHz hardware clock, so locking the emulation to it
+  // keeps video and music from drifting apart ("music ends first"). Falls back
+  // to wall-clock time before audio starts. dt is clamped to avoid a huge
+  // catch-up after a long stall / backgrounded tab.
+  let dt;
+  if (audioCtx && audioCtx.state === 'running') {
+    const at = audioCtx.currentTime;
+    dt = (audioClockLast == null) ? (1 / 60) : (at - audioClockLast);
+    audioClockLast = at;
+  } else {
+    dt = (now - last) / 1000;
+    audioClockLast = null; // re-sync to the audio clock when it next runs
+  }
+  dt = Math.min(0.1, Math.max(0, dt));
   last = now;
   const t0 = performance.now();
   if (machine) {
