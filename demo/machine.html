@@ -901,18 +901,22 @@ window.addEventListener('gamepaddisconnected', (e) => console.log(`[gamepad] dis
 // OR standard face/shoulder buttons.) Returns a Set of control names, or null.
 function readPadControls() {
   if (!navigator.getGamepads) return null;
-  let gp = null;
-  for (const p of navigator.getGamepads()) if (p && p.connected) { gp = p; break; }
-  if (!gp) return null;
-  const ax = gp.axes, bt = gp.buttons;
-  const btn = (i) => !!(bt[i] && bt[i].pressed);
+  const pads = [...navigator.getGamepads()].filter((p) => p && p.connected);
+  if (!pads.length) return null;
+  // UNION every connected pad: with two controllers plugged in (e.g. a Logitech
+  // AND an Xbox) picking only the first read the wrong one, so whichever pad the
+  // user actually holds now registers.
   const s = new Set();
-  if ((ax[1] ?? 0) < -0.5 || btn(12)) s.add('up');
-  if ((ax[1] ?? 0) > 0.5 || btn(13)) s.add('down');
-  if ((ax[0] ?? 0) < -0.5 || btn(14)) s.add('left');
-  if ((ax[0] ?? 0) > 0.5 || btn(15)) s.add('right');
-  if (btn(0)) s.add('a'); if (btn(1)) s.add('b'); if (btn(2)) s.add('x'); if (btn(3)) s.add('y');
-  if (btn(4)) s.add('lb'); if (btn(5)) s.add('rb'); if (btn(9)) s.add('start'); if (btn(8)) s.add('back');
+  for (const gp of pads) {
+    const ax = gp.axes, bt = gp.buttons;
+    const btn = (i) => !!(bt[i] && bt[i].pressed);
+    if ((ax[1] ?? 0) < -0.5 || btn(12)) s.add('up');
+    if ((ax[1] ?? 0) > 0.5 || btn(13)) s.add('down');
+    if ((ax[0] ?? 0) < -0.5 || btn(14)) s.add('left');
+    if ((ax[0] ?? 0) > 0.5 || btn(15)) s.add('right');
+    if (btn(0)) s.add('a'); if (btn(1)) s.add('b'); if (btn(2)) s.add('x'); if (btn(3)) s.add('y');
+    if (btn(4)) s.add('lb'); if (btn(5)) s.add('rb'); if (btn(9)) s.add('start'); if (btn(8)) s.add('back');
+  }
   return s;
 }
 let lastPadControls = null; // for the config panel's live "pressed" highlight
