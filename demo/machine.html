@@ -1204,13 +1204,17 @@ function loop(now) {
       }
       ctx.putImageData(img, 0, 0);
     } else {
-      const frame = is88 ? machine.render({ cgrom, indexed: true, ...renderOpts() }) : machine.sys.render({ cgrom });
+      // analog:true → the 8801 also emits per-gun beam levels so the phosphor
+      // renders the full analogue palette (smooth shades), matching the clean
+      // path's colour depth instead of collapsing to 8 primaries. The 8001 path
+      // has no drive → phosphor.step falls back to the 1-bit index automatically.
+      const frame = is88 ? machine.render({ cgrom, indexed: true, analog: true, ...renderOpts() }) : machine.sys.render({ cgrom });
       if (!frame.width || !frame.height) { requestAnimationFrame(loop); return; }
       const W = frame.width, H = frame.height;
       fitTo(W, H);
       const phosphor = panel.phosphor(W, H);
       const src = panel.applyDeflection(frame.pixels, W, H, machine.frame);
-      phosphor.step(src, FR, { fieldParity: panel.interlaced ? machine.frame & 1 : null });
+      phosphor.step(src, FR, { fieldParity: panel.interlaced ? machine.frame & 1 : null, drive: frame.drive });
       const d = img.data;
       const opts = panel.plotOpts();
       if (panel.tubeMode !== 'none') {

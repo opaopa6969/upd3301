@@ -141,8 +141,13 @@ export class CrtPhosphor {
   // fieldParity: null = progressive; 0/1 = interlaced field — only lines of
   // that parity are excited, the rest just decay, so each line refreshes at
   // half rate and detail flickers on short phosphor.
-  step(pixels, dt, { fieldParity = null } = {}) {
-    const w = this.width, h = this.height;
+  // `drive`, when given, is a gun-major Float32Array (3·w·h) of per-gun beam
+  // levels in 0..1 — the ANALOG excitation. It lets the CRT reproduce the full
+  // analogue palette (smooth shades) instead of the 8 on/off GRB primaries you
+  // get from the 1-bit `pixels` path. Omit it and each gun is simply on or off
+  // from the index bits, exactly as before (backward compatible).
+  step(pixels, dt, { fieldParity = null, drive = null } = {}) {
+    const w = this.width, h = this.height, n = w * h;
     for (let gun = 0; gun < 3; gun++) {
       const F = this.fast[gun], T = this.tail[gun];
       const D = this.dose ? this.dose[gun] : null;
@@ -150,6 +155,7 @@ export class CrtPhosphor {
       const dTail = Math.exp(-dt / this.tailTau[gun]);
       const frac = this.tailFrac[gun];
       const shift = gun === 0 ? 1 : gun === 1 ? 2 : 0; // R=bit1, G=bit2, B=bit0
+      const goff = gun * n;
       for (let y = 0; y < h; y++) {
         const excitable = fieldParity === null || (y & 1) === fieldParity;
         const o = y * w;
@@ -157,8 +163,9 @@ export class CrtPhosphor {
           const i = o + x;
           let f = F[i] * dFast;
           let t = T[i] * dTail;
-          if (excitable && ((pixels[i] >> shift) & 1)) {
-            let e = this.drive;
+          const lvl = drive ? drive[goff + i] : ((pixels[i] >> shift) & 1);
+          if (excitable && lvl > 0) {
+            let e = this.drive * lvl;
             if (D) {
               e /= 1 + this.burnRate * D[i];
               D[i] += dt;

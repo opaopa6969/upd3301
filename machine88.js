@@ -709,7 +709,7 @@ export class Pc8801Machine {
   //   hideText — skip the text/semigraphics layer entirely (graphics only).
   //     A diagnostic: if a "text is riding on top of the graphics" scene goes
   //     clean with this on, the bug is the text layer wrongly compositing.
-  render({ cgrom, out = null, indexed = false, textOpaque = false, clipActive = false, hideText = false } = {}) {
+  render({ cgrom, out = null, indexed = false, analog = false, textOpaque = false, clipActive = false, hideText = false } = {}) {
     const crtc = this.crtc;
     // port 53h display mask: b0 hides the text plane, b1 hides graphics. Games
     // (Ys II) toggle the text plane off while showing a full-screen GVRAM map.
@@ -752,6 +752,11 @@ export class Pc8801Machine {
       // so indices the game had mapped to BLACK — Ys II parks its off-screen
       // scroll material on such an index — showed up as bright coloured dots on
       // the CRT while the RGB/clean path (which honours the palette) hid them.
+      // analog: also emit per-gun beam levels (palette value / 7) so the phosphor
+      // can render the full analogue palette (smooth shades), not just 8 primaries.
+      const N = W * H;
+      let drive = null;
+      if (analog) { if (!this._driveBuf || this._driveBuf.length !== N * 3) this._driveBuf = new Float32Array(N * 3); drive = this._driveBuf; }
       for (let y = 0; y < H; y++) {
         const pal = raster ? this.rowPal : this.palette;
         const rbase = raster ? Math.min((y / lpc) | 0, maxRow) * 24 : 0;
@@ -760,9 +765,10 @@ export class Pc8801Machine {
           const p = rbase + composite(x, y, i) * 3;
           // pal[p]=R pal[p+1]=G pal[p+2]=B (each 0..7); GRB index = G<<2|R<<1|B
           pixels[i] = (pal[p + 1] ? 4 : 0) | (pal[p] ? 2 : 0) | (pal[p + 2] ? 1 : 0);
+          if (drive) { drive[i] = pal[p] / 7; drive[N + i] = pal[p + 1] / 7; drive[2 * N + i] = pal[p + 2] / 7; }
         }
       }
-      return { width: W, height: H, pixels, schemaVersion: SCHEMA_VERSION };
+      return { width: W, height: H, pixels, drive, schemaVersion: SCHEMA_VERSION };
     }
     const rgb = out && out.length === W * H * 3 ? out : new Uint8Array(W * H * 3);
     for (let y = 0; y < H; y++) {
