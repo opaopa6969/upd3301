@@ -54,6 +54,10 @@ export class Pc8801Machine {
     this.kanjiRom = kanji ? (kanji instanceof Uint8Array ? kanji : Uint8Array.from(kanji)) : null;
     this.kanji2Rom = kanji2 ? (kanji2 instanceof Uint8Array ? kanji2 : Uint8Array.from(kanji2)) : null;
     this.kanjiAddr = 0; this.kanji2Addr = 0;
+    // Kanji ROM byte-order is driver-defined and we can't trace the game here,
+    // so the exact address→byte mapping is a live-selectable mode (the demo
+    // exposes it; pick the one that renders readable kana). See _kanjiOffset.
+    this.kanjiMode = 0;
 
     // disk sub-system: a second Z80 running disk.rom, reached only through
     // the crossed 8255 pair at FCh-FFh. Without a sub ROM the ports float
@@ -262,11 +266,11 @@ export class Pc8801Machine {
     // 0xE8/0xE9 = level-1, 0xEC/0xED = level-2. No ROM loaded → 0xFF (white box).
     if (port === 0xe8 || port === 0xe9) {
       if (!this.kanjiRom) return 0xff;
-      return this.kanjiRom[((this.kanjiAddr << 1) | (port & 1)) & (this.kanjiRom.length - 1)];
+      return this.kanjiRom[this._kanjiOffset(this.kanjiAddr, port, this.kanjiRom.length)];
     }
     if (port === 0xec || port === 0xed) {
       if (!this.kanji2Rom) return 0xff;
-      return this.kanji2Rom[((this.kanji2Addr << 1) | (port & 1)) & (this.kanji2Rom.length - 1)];
+      return this.kanji2Rom[this._kanjiOffset(this.kanji2Addr, port, this.kanji2Rom.length)];
     }
     // FCh-FFh: the main half of the 8255 pair to the disk sub-system. With
     // no sub board the inputs float high and the boot ROM's BC×D timeout
@@ -283,6 +287,23 @@ export class Pc8801Machine {
       return v;
     }
     return 0xff;
+  }
+
+  // Kanji ROM offset for (addr, port) under the selected mode. A glyph is 32
+  // bytes; the driver's read pattern (which we can't trace) decides the order,
+  // so these are the plausible candidates — pick the one that reads as clean
+  // kana on screen. 0: word-interleaved (e8=even,e9=odd). 1: same, halves
+  // swapped. 2: split (left 16 bytes / right 16 bytes). 3: split, swapped.
+  _kanjiOffset(addr, port, len) {
+    const p = port & 1;
+    let off;
+    switch (this.kanjiMode | 0) {
+      case 1: off = (addr << 1) | (p ^ 1); break;
+      case 2: off = ((addr & 0xfff0) << 1) | (p << 4) | (addr & 0x0f); break;
+      case 3: off = ((addr & 0xfff0) << 1) | ((p ^ 1) << 4) | (addr & 0x0f); break;
+      default: off = (addr << 1) | p; break;
+    }
+    return off & (len - 1);
   }
 
   out(port, v) {
