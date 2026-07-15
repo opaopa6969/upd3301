@@ -18,7 +18,8 @@ function injectStyle() {
   .dock-panel > h2 { cursor: grab; position: sticky; top: 0; background: inherit; z-index: 1; }
   .dock-panel > h2::before { content: '⠿ '; color:#556; }
   .dock-panel.dragging { opacity:.45; outline:1px dashed #4a8; }
-  .dock-panel.dropinto { outline:2px solid #4a8; outline-offset:-2px; }
+  .dock-panel.dropbefore { box-shadow:-3px 0 0 #4a8; }
+  .dock-panel.dropafter  { box-shadow: 3px 0 0 #4a8; }
   `;
   document.head.appendChild(s);
 }
@@ -47,16 +48,7 @@ export function makeDockable(grid, { storageKey = 'dockgrid', panelSel = '.panel
   const saveSizes = () => lsSet('-sz', sizes);
 
   let dragged = null;
-  const clearMarks = () => { for (const p of panels()) p.classList.remove('dropinto'); };
-  // swap two panels' positions (predictable 2-D exchange — no cascade reflow)
-  function swapNodes(a, b) {
-    if (a === b) return;
-    const tmp = document.createComment('');
-    a.parentNode.insertBefore(tmp, a);
-    b.parentNode.insertBefore(a, b);
-    tmp.parentNode.insertBefore(b, tmp);
-    tmp.remove();
-  }
+  const clearMarks = () => { for (const p of panels()) p.classList.remove('dropbefore', 'dropafter'); };
 
   // ---- pop-out: detach a panel into its own window; closing it returns it -----
   // The panel NODE moves into the popup (its live updates keep working because the
@@ -109,11 +101,16 @@ export function makeDockable(grid, { storageKey = 'dockgrid', panelSel = '.panel
     p.addEventListener('dragend', () => { p.draggable = false; p.classList.remove('dragging'); clearMarks(); dragged = null; });
     p.addEventListener('dragover', (e) => {
       if (!dragged || dragged === p) return; e.preventDefault();
-      clearMarks(); p.classList.add('dropinto'); // whole target highlights → they'll swap
+      const r = p.getBoundingClientRect();
+      const before = (e.clientX - r.left) < r.width / 2; // drop on the left half → insert BEFORE
+      clearMarks(); p.classList.add(before ? 'dropbefore' : 'dropafter');
     });
     p.addEventListener('drop', (e) => {
       if (!dragged || dragged === p) return; e.preventDefault();
-      swapNodes(dragged, p); // exchange the two panels' spots
+      // flex-wrap: DOM order == visual order (LTR, wrapping), so inserting here
+      // drops the panel exactly where the marker shows — put the profiler right
+      // after the disassembly and it lands next to it.
+      grid.insertBefore(dragged, p.classList.contains('dropbefore') ? p : p.nextSibling);
       clearMarks(); saveOrder();
     });
     if (window.ResizeObserver) {
