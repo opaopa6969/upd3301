@@ -34,8 +34,9 @@
 <body>
 <h1>μPD3301 CRTC + μPD8257 DMAC — PC-8001 text pipeline emulator</h1>
 <p class="note" id="navrow"></p>
+<div id="menubar-mount"></div>
 <div id="stage"><canvas id="crt" width="640" height="400"></canvas></div>
-<div class="row"><span class="lbl">表示:</span>
+<div class="row" id="row-disp"><span class="lbl">表示:</span>
   <button id="bfull">⛶ 全画面</button>
   <button id="mtext" class="on">テキスト (80桁)</button>
   <button id="m40">テキスト (40桁)</button>
@@ -46,13 +47,13 @@
   <button id="bglitch">OUT &amp;H51 (事故)</button>
   <label style="color:#778;font-size:12px">FONT.ROM(2KB): <input type="file" id="ffont" style="font-size:11px"></label>
 </div>
-<div class="row"><span class="lbl">FONT改造:</span>
+<div class="row" id="row-font"><span class="lbl">FONT改造:</span>
   <button id="fmnone" class="on">無改造</button>
   <button id="fm54">D5-D4ショート</button>
   <button id="fm32">D3-D2ショート</button>
   <button id="fmbold">隣接全ショート (ボールド)</button>
 </div>
-<div class="row"><span class="lbl">蛍光体:</span>
+<div class="row" id="row-phos"><span class="lbl">蛍光体:</span>
   <button id="pP22" class="on">P22 (青が先に死ぬ)</button>
   <button id="pLONG">長残光カラー</button>
   <button id="pP39">P39 緑モノクロ</button>
@@ -61,7 +62,7 @@
   <button id="pPLASMA">プラズマ橙</button>
   <button id="bburn">焼き付き (加速)</button>
 </div>
-<div class="row"><span class="lbl">管:</span>
+<div class="row" id="row-tube"><span class="lbl">管:</span>
   <button id="tnone">物理OFF</button>
   <button id="taperture" class="on">アパーチャグリル</button>
   <button id="tshadow">シャドウマスク</button>
@@ -73,7 +74,7 @@
   <label style="color:#778;font-size:12px">ガラス反射<input type="checkbox" id="cghost" checked style="margin:2px"></label>
   <button id="b400">400ライン</button>
 </div>
-<div class="row knobs"><span class="lbl">裏のノブ:</span>
+<div class="row knobs" id="row-knobs"><span class="lbl">裏のノブ:</span>
   <label>FOCUS <input type="range" id="kfocus" min="0" max="2" step="0.05" value="1"></label>
   <label>H-SIZE <input type="range" id="khsize" min="0.7" max="1.15" step="0.01" value="1"></label>
   <label>V-SIZE <input type="range" id="kvsize" min="0.7" max="1.15" step="0.01" value="1"></label>
@@ -100,6 +101,20 @@ import { applyI18n, t } from './i18n.js';
 applyI18n();
 import { mountNav } from './nav.js';
 mountNav('index.html');
+// ---- fold the category rows into a grouped menu bar + pinnable dock ----------
+import { mountMenuBar } from './menubar.js';
+{
+  const byId = (id) => document.getElementById(id);
+  const cats = [['row-disp', '🖥 表示'], ['row-font', '🔤 FONT'], ['row-phos', '💡 蛍光体'], ['row-tube', '📺 管'], ['row-knobs', '🎛 ノブ']];
+  const menus = cats.map(([rowId, label]) => {
+    const row = byId(rowId); if (!row) return null;
+    const grp = document.createElement('span'); grp.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;align-items:center';
+    [...row.children].forEach((c) => { if (!c.classList.contains('lbl')) grp.appendChild(c); }); // move controls out of the row into a group
+    return { label, items: [{ id: rowId, label: label.replace(/^\S+\s/, ''), el: grp }] };
+  }).filter(Boolean);
+  mountMenuBar(byId('menubar-mount'), { storageKey: 'menubar-crtdemo', brand: 'CRT物理', menus });
+  cats.forEach(([rowId]) => { const r = byId(rowId); if (r) r.style.display = 'none'; });
+}
 import { Pc8001TextSystem, PC8001 } from '../pc8001.js';
 import { CrtPhosphor, PHOSPHORS, collapseScan, rollScan } from '../crt.js';
 import { CrtTube } from '../tube.js';
