@@ -271,20 +271,26 @@ export class Upd765 {
 
   _execDone() {
     const m = this._multi;
-    // μPD765 multi-sector rule: after each sector, if the just-read R equals the
-    // command's EOT → normal end. Otherwise step to R+1 and keep going; if R+1
-    // isn't on the track → abnormal End-of-Cylinder (ST0 AT + ST1 EN). Copy
-    // protections exploit this: they read with R far ABOVE EOT (e.g. R=87,
-    // EOT=16) and verify that the read comes back with EN set. The old
-    // `m.r < m.eot` gate returned NORMAL status for R>EOT, so those checks failed
-    // (the disk booted straight to N88-BASIC — e.g. 軽井沢誘拐案内).
-    if (m && !m.format && !this.execWrite) {
-      if (m.r === m.eot) { this._endRw(0, 0, 0); return; } // reached EOT → normal
+    // On the PC-8801 disk sub-board the sub-CPU reads exactly the bytes it wants
+    // and then pulses TC (IN from port F8h → tc()), so a read normally ends via
+    // TC, not by the FDC running off the track. We serve the current sector's
+    // bytes; when the host keeps reading past a sector boundary we auto-advance
+    // to R+1 (genuine multi-sector). If we can't advance we terminate NORMALLY —
+    // TC would have arrived here on real hardware. (Do NOT synthesize an
+    // End-of-Cylinder abnormal status: with TC-driven reads it never occurs, and
+    // forcing it broke single-sector protection reads where R>EOT, e.g. the
+    // C0/H82/R87 sector of 軽井沢誘拐案内.)
+    if (m && !m.format && m.r < m.eot) {
       const d = this.drives[this.us];
       const next = findSector(d.disk, d.cyl, this.hd, m.r + 1, m.n);
-      if (next) { m.r++; m.sec = next; this.execBuf = next.data; this.execPos = 0; this.int = true; return; }
-      this._endRw(ST0_AT, 0x80, 0); // ran off the track before EOT → EN (End of Cylinder)
-      return;
+      if (next && !this.execWrite) {
+        m.r++;
+        m.sec = next;
+        this.execBuf = next.data;
+        this.execPos = 0;
+        this.int = true;
+        return;
+      }
     }
     this._endRw(0, 0, 0);
   }
