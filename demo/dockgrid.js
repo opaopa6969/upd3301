@@ -9,8 +9,11 @@ function injectStyle() {
   if (styled) return; styled = true;
   const s = document.createElement('style');
   s.textContent = `
-  .dock-panel { resize: vertical; overflow: auto; }
-  .dock-panel > h2 { cursor: grab; }
+  /* FIXED height + internal scroll: a panel whose content grows (call stack,
+     trace…) scrolls inside itself instead of getting taller and shoving its
+     neighbours around. Drag the bottom edge to resize; the height is remembered. */
+  .dock-panel { height: 240px; overflow: auto; resize: vertical; }
+  .dock-panel > h2 { cursor: grab; position: sticky; top: 0; background: inherit; z-index: 1; }
   .dock-panel > h2::before { content: '⠿ '; color:#556; }
   .dock-panel.dragging { opacity:.45; outline:1px dashed #4a8; }
   .dock-panel.dropbefore { box-shadow:-3px 0 0 #4a8; }
