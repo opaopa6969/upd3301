@@ -32,6 +32,14 @@
 <h1>PC-8001 — Z80 + N-BASIC ROM + μPD8257 + μPD3301（フルマシン）</h1>
 <p class="note" id="navrow"></p>
 <div id="stage"><canvas id="crt" tabindex="0" width="640" height="400"></canvas></div>
+<div id="playerbar" style="max-width:664px;margin:8px 0 4px;display:flex;align-items:center;gap:10px;font-size:12px;color:#9ab">
+  <button id="bpause" title="一時停止 / 再開" style="min-width:70px">⏸ 停止</button>
+  <div id="track" title="ドラッグで巻き戻し／早送り（決定論スナップショット）。目盛=snapshot点" style="position:relative;flex:1;height:18px;background:#141419;border:1px solid #334;border-radius:4px;cursor:pointer;overflow:hidden;touch-action:none">
+    <div id="trackfill" style="position:absolute;left:0;top:0;bottom:0;width:0%;background:linear-gradient(#1e3226,#152018);background-image:repeating-linear-gradient(90deg,rgba(140,255,221,.18) 0 1px,transparent 1px 4px);"></div>
+    <div id="playhead" style="position:absolute;top:-1px;bottom:-1px;width:2px;background:#8fd;left:0;box-shadow:0 0 4px #8fd"></div>
+  </div>
+  <span id="playinfo" style="min-width:172px;text-align:right;font-variant-numeric:tabular-nums;color:#adf">frame 0 · 0:00.0</span>
+</div>
 <div class="row">
   <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
@@ -513,14 +521,55 @@ const renderOpts = () => ({ textOpaque: txtOpaque, clipActive });
 // (RAM + GVRAM + sub-CPU), so REWIND_MAX bounds the memory (~45 s ≈ 60 MB).
 const REWIND_EVERY = 6, REWIND_MAX = 450;
 let history = [], lastSnapFrame = -1, rewinding = false;
+let paused = false, scrubIndex = null; // scrubIndex != null → frozen at a past snapshot
 const canSnap = () => machine && typeof machine.snapshot === 'function';
-function resetRewind() { history = []; lastSnapFrame = -1; rewinding = false; }
+const frozen = () => paused || scrubIndex !== null;
+function resetRewind() { history = []; lastSnapFrame = -1; rewinding = false; paused = false; scrubIndex = null; }
 function pressRewind(on) {
   rewinding = on && canSnap() && history.length > 1;
   $('brewind').classList.toggle('on', rewinding);
 }
 for (const [d, u] of [['mousedown', 1], ['touchstart', 1], ['mouseup', 0], ['mouseleave', 0], ['touchend', 0]]) {
   $('brewind').addEventListener(d, (e) => { if (d.startsWith('touch')) e.preventDefault(); pressRewind(!!u); });
+}
+
+// ---- player bar: pause / resume + scrub through the snapshot ring ----------
+$('bpause').onclick = () => {
+  if (paused || scrubIndex !== null) { // resume: commit the scrub position, drop the discarded "future"
+    if (scrubIndex !== null) { history.length = scrubIndex + 1; lastSnapFrame = history.length ? history[history.length - 1].frame : -1; scrubIndex = null; }
+    paused = false;
+  } else { paused = true; }
+};
+function trackToIndex(clientX) {
+  const r = $('track').getBoundingClientRect();
+  const n = history.length; if (n < 1) return 0;
+  const bufFrac = Math.min(1, n / REWIND_MAX);
+  const frac = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
+  return Math.round((bufFrac > 0 ? Math.min(1, frac / bufFrac) : 0) * (n - 1));
+}
+function doScrub(clientX) {
+  if (!machine || !canSnap() || history.length < 1) return;
+  const idx = trackToIndex(clientX);
+  scrubIndex = idx;
+  if (history[idx]) machine.restore(history[idx].snap); // deterministic time-travel preview
+}
+let scrubbing = false;
+$('track').addEventListener('pointerdown', (e) => { scrubbing = true; try { $('track').setPointerCapture(e.pointerId); } catch {} doScrub(e.clientX); });
+$('track').addEventListener('pointermove', (e) => { if (scrubbing) doScrub(e.clientX); });
+$('track').addEventListener('pointerup', () => { scrubbing = false; });
+$('track').addEventListener('pointercancel', () => { scrubbing = false; });
+function mmss(s) { const m = s / 60 | 0, sec = s - m * 60; return `${m}:${sec.toFixed(1).padStart(4, '0')}`; }
+function updatePlayerBar() {
+  const n = history.length;
+  const bufFrac = Math.min(1, n / REWIND_MAX);
+  const playFrac = (scrubIndex !== null && n > 1) ? scrubIndex / (n - 1) : 1;
+  $('trackfill').style.width = (bufFrac * 100).toFixed(1) + '%';
+  $('playhead').style.left = (playFrac * bufFrac * 100).toFixed(1) + '%';
+  $('bpause').textContent = frozen() ? '▶ 再開' : '⏸ 停止';
+  $('bpause').classList.toggle('on', frozen());
+  const fr = machine ? machine.frame : 0;
+  const secs = machine ? fr / (machine.frameHz || 60) : 0;
+  $('playinfo').textContent = `frame ${fr} · ${mmss(secs)}${scrubIndex !== null ? ' ⟲' : ''}`;
 }
 
 // ---- video capture: record the live screen (+ sound) to a WebM ------------
@@ -619,7 +668,7 @@ function boot() {
 // timestamped register writes (a larger change, tracked for later).
 let audioCtx = null, audioNode = null;
 function renderAudioInto(buf, n) {
-  if (!machine || !machine.opn || rewinding) { buf.fill(0); return buf; } // silent while scrubbing
+  if (!machine || !machine.opn || rewinding || paused || scrubIndex !== null) { buf.fill(0); return buf; } // silent while scrubbing/paused
   machine.renderAudio(buf, n);
   return buf;
 }
@@ -687,9 +736,13 @@ function loop(now) {
   last = now;
   const t0 = performance.now();
   if (machine) {
-    if (rewinding && history.length > 1) {
+    if (scrubIndex !== null) {
+      // frozen at a scrubbed snapshot (state already restored by the scrub handler)
+    } else if (rewinding && history.length > 1) {
       history.pop();                                  // drop the current state
       machine.restore(history[history.length - 1].snap); // step back one snapshot
+    } else if (paused) {
+      // frozen (pause) — no emulation, no new snapshots
     } else {
       if (rewinding) { rewinding = false; $('brewind').classList.remove('on'); } // ran dry
       // scale emulated time by the speed multiplier; cap the per-frame slice so a
@@ -697,7 +750,7 @@ function loop(now) {
       machine.update(Math.min(dt * speedMul, 0.5));
       if (canSnap() && machine.frame - lastSnapFrame >= REWIND_EVERY) {
         lastSnapFrame = machine.frame;
-        history.push({ snap: machine.snapshot() });
+        history.push({ snap: machine.snapshot(), frame: machine.frame });
         if (history.length > REWIND_MAX) history.shift();
       }
     }
@@ -760,6 +813,7 @@ function loop(now) {
     workMs = workMs * 0.9 + (performance.now() - t0) * 0.1;
     guts.textContent = `${is88 ? 'PC-8801/N88' : 'PC-8001/N80'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
       + `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz`;
+    updatePlayerBar();
   }
   requestAnimationFrame(loop);
 }
