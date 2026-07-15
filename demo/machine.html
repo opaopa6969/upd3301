@@ -555,17 +555,54 @@ async function loadSavedDisk(role) {
 $('savedisk').onchange = (e) => { if (e.target.value) loadSavedDisk(e.target.value); };
 // ---- disk browser: a searchable list for large saved-disk libraries (hundreds
 // of images make a <select> useless). Overlay with a filter box + scroll list. --
+// A tiny IndexedDB slot to remember the chosen disk FOLDER handle across visits
+// (directory handles can't live in localStorage). Grant once → available next time.
+const _hdb = () => new Promise((res, rej) => { const r = indexedDB.open('upd3301-fs', 1); r.onupgradeneeded = () => r.result.createObjectStore('h'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+async function saveDirHandle(h) { try { const db = await _hdb(); db.transaction('h', 'readwrite').objectStore('h').put(h, 'diskdir'); } catch {} }
+async function loadDirHandle() { try { const db = await _hdb(); return await new Promise((res) => { const rq = db.transaction('h', 'readonly').objectStore('h').get('diskdir'); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => res(null); }); } catch { return null; } }
+let folderDisks = []; // { name, path, handle } scanned from the chosen folder
+async function scanFolder(dir, prefix = '', depth = 0, out = []) {
+  if (depth > 4) return out;
+  for await (const [nm, h] of dir.entries()) {
+    if (h.kind === 'file') { if (/\.(d88|88d|d77)$/i.test(nm)) out.push({ name: nm, path: prefix + nm, handle: h }); }
+    else if (h.kind === 'directory') await scanFolder(h, prefix + nm + '/', depth + 1, out);
+  }
+  return out;
+}
+async function useFolder(dir) {
+  const cnt = $('diskfolderinfo'); if (cnt) cnt.textContent = 'スキャン中…';
+  folderDisks = (await scanFolder(dir)).sort((a, b) => a.path.localeCompare(b.path));
+  await saveDirHandle(dir);
+  if (cnt) cnt.textContent = `📁 ${dir.name}: ${folderDisks.length}枚`;
+  renderDiskList();
+}
+async function loadFolderDisk(item) {
+  try {
+    const file = await item.handle.getFile();
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const imgs = parseD88All(bytes);
+    await putRom('disk', item.name, bytes);
+    ingestDisks(item.name, imgs); mountDrives(machine);
+    const s = summarize(imgs[0]);
+    $('dipnote').textContent = `${item.name}: ${s.name || '(no label)'} ${s.media} ${s.tracks}trk` + (imgs.length > 1 ? `  (計${imgs.length}枚)` : '') +
+      '  — ' + (bootMode === 'n88' && has88Set() ? t('ドライブに割当済み（リセットで起動）') : t('起動にはN88モード＋PC-8801 BIOS一式が必要'));
+  } catch (err) { $('dipnote').textContent = 'folder disk: ' + err.message; }
+}
 function ensureDiskBrowser() {
   if ($('diskbrowser')) return;
   const ov = document.createElement('div'); ov.id = 'diskbrowser';
   ov.style.cssText = 'display:none;position:fixed;inset:0;background:#000a;z-index:100;align-items:center;justify-content:center';
   ov.innerHTML =
-    `<div style="background:#15151d;border:1px solid #3a3a4c;border-radius:10px;width:min(640px,92vw);max-height:82vh;display:flex;flex-direction:column;box-shadow:0 12px 40px #000c">
-       <div style="display:flex;gap:8px;align-items:center;padding:10px 12px;border-bottom:1px solid #2a2a38">
-         <b style="color:#8fd">📚 保存済みディスク</b>
-         <input id="diskfilter" placeholder="🔍 名前で絞り込み" style="flex:1;background:#181820;color:#cde;border:1px solid #446;border-radius:5px;padding:5px 8px">
+    `<div style="background:#15151d;border:1px solid #3a3a4c;border-radius:10px;width:min(680px,94vw);max-height:82vh;display:flex;flex-direction:column;box-shadow:0 12px 40px #000c">
+       <div style="display:flex;gap:8px;align-items:center;padding:10px 12px;border-bottom:1px solid #2a2a38;flex-wrap:wrap">
+         <b style="color:#8fd">📚 ディスク</b>
+         <input id="diskfilter" placeholder="🔍 名前で絞り込み" style="flex:1;min-width:160px;background:#181820;color:#cde;border:1px solid #446;border-radius:5px;padding:5px 8px">
          <span id="diskcount" style="color:#778;font-size:12px"></span>
          <button id="diskclose">✕</button>
+       </div>
+       <div style="display:flex;gap:8px;align-items:center;padding:6px 12px;border-bottom:1px solid #23232f;font-size:12px">
+         <button id="diskpick" title="D88の入ったフォルダを選ぶ（例 C:\\var\\emulator）。中身は端末に残ったまま、ブラウザが直接読む">📁 フォルダを開く</button>
+         <span id="diskfolderinfo" style="color:#778"></span>
        </div>
        <div id="disklist" style="overflow:auto;padding:6px"></div>
      </div>`;
@@ -573,31 +610,49 @@ function ensureDiskBrowser() {
   ov.onclick = (e) => { if (e.target === ov) ov.style.display = 'none'; };
   $('diskclose').onclick = () => { ov.style.display = 'none'; };
   $('diskfilter').oninput = () => renderDiskList();
+  $('diskpick').onclick = async () => {
+    if (!window.showDirectoryPicker) { $('diskfolderinfo').textContent = 'このブラウザはフォルダ選択に未対応(Chrome系で可)'; return; }
+    try { const dir = await window.showDirectoryPicker(); await useFolder(dir); } catch {}
+  };
 }
-let _diskItems = [];
+let _idbItems = [];
 async function renderDiskList() {
   const q = ($('diskfilter').value || '').toLowerCase();
   const kb = (n) => (n / 1024 < 1024 ? (n / 1024 | 0) + 'KB' : (n / 1048576).toFixed(1) + 'MB');
-  const shown = _diskItems.filter((i) => i.name.toLowerCase().includes(q));
-  $('diskcount').textContent = `${shown.length}/${_diskItems.length}`;
+  const items = [
+    ...folderDisks.map((i) => ({ label: i.path, icon: '📁', load: () => loadFolderDisk(i), del: null })),
+    ..._idbItems.map((i) => ({ label: i.name, icon: '💾', sub: kb(i.size), load: () => loadSavedDisk(i.role), del: async () => { if (confirm(`「${i.name}」を保存済みから削除？`)) { try { await deleteRom(i.role); } catch {} await openDiskBrowser(true); refreshDiskList(); } } })),
+  ];
+  const shown = items.filter((i) => i.label.toLowerCase().includes(q));
+  $('diskcount').textContent = `${shown.length}/${items.length}`;
   const list = $('disklist');
-  list.innerHTML = shown.length ? '' : '<div style="color:#667;padding:16px;text-align:center">該当なし</div>';
-  for (const i of shown) {
+  list.innerHTML = shown.length ? '' : '<div style="color:#667;padding:16px;text-align:center">該当なし（フォルダを開くか、d88をアップロード）</div>';
+  for (const i of shown.slice(0, 2000)) {
     const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:6px;cursor:pointer';
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer';
     row.onmouseenter = () => { row.style.background = '#20202b'; };
     row.onmouseleave = () => { row.style.background = ''; };
-    row.innerHTML = `<span style="flex:1;color:#cde;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">💾 ${i.name}</span><span style="color:#778;font-size:12px">${kb(i.size)}</span>`;
-    const del = document.createElement('button'); del.textContent = '🗑'; del.title = '削除'; del.style.cssText = 'padding:2px 6px;font-size:12px';
-    del.onclick = async (e) => { e.stopPropagation(); if (confirm(`「${i.name}」を保存済みから削除？`)) { try { await deleteRom(i.role); } catch {} await openDiskBrowser(true); refreshDiskList(); } };
-    row.onclick = () => { loadSavedDisk(i.role); $('diskbrowser').style.display = 'none'; };
-    row.appendChild(del); list.appendChild(row);
+    row.innerHTML = `<span style="flex:1;color:#cde;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${i.icon} ${i.label}</span>${i.sub ? `<span style="color:#778;font-size:12px">${i.sub}</span>` : ''}`;
+    if (i.del) { const del = document.createElement('button'); del.textContent = '🗑'; del.style.cssText = 'padding:2px 6px;font-size:12px'; del.onclick = (e) => { e.stopPropagation(); i.del(); }; row.appendChild(del); }
+    row.onclick = () => { i.load(); $('diskbrowser').style.display = 'none'; };
+    list.appendChild(row);
   }
 }
 async function openDiskBrowser(keepOpen) {
   ensureDiskBrowser();
   let items = []; try { items = await listRoms(); } catch {}
-  _diskItems = items.filter((i) => i.role.startsWith('disk:')).sort((a, b) => a.name.localeCompare(b.name));
+  _idbItems = items.filter((i) => i.role.startsWith('disk:')).sort((a, b) => a.name.localeCompare(b.name));
+  // reconnect a previously-granted folder (needs a permission re-grant on some visits)
+  if (!folderDisks.length) {
+    const h = await loadDirHandle();
+    if (h) {
+      try {
+        let perm = await h.queryPermission?.({ mode: 'read' });
+        if (perm !== 'granted') perm = await h.requestPermission?.({ mode: 'read' });
+        if (perm === 'granted') await useFolder(h);
+      } catch {}
+    }
+  }
   if (!keepOpen) { $('diskbrowser').style.display = 'flex'; $('diskfilter').value = ''; $('diskfilter').focus(); }
   renderDiskList();
 }
