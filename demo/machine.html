@@ -101,8 +101,15 @@
     <option value="100">手動 100%</option><option value="90">手動 90%</option>
     <option value="80">手動 80%</option><option value="70">手動 70%</option>
   </select></label>
-  <label style="color:#778;font-size:12px">DIPSW1 <input id="dip1" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:34px;text-align:center"></label>
-  <label style="color:#778;font-size:12px">DIPSW2 <input id="dip2" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:34px;text-align:center"></label>
+  <div id="grp-dip" style="display:flex;flex-direction:column;gap:6px;min-width:270px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <label style="color:#9ab;font-size:12px">DIPSW1 <input id="dip1" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:40px;text-align:center"></label>
+      <label style="color:#9ab;font-size:12px">DIPSW2 <input id="dip2" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:40px;text-align:center"></label>
+      <button id="dippreset88" title="N88-BASIC V2・80桁・ディスク起動（標準）" style="font-size:11px;padding:2px 8px">N88 V2</button>
+      <button id="dippresetN" title="N-BASIC（N80）" style="font-size:11px;padding:2px 8px">N</button>
+    </div>
+    <div id="dipbits" style="font-size:11px;color:#9ab;display:flex;flex-direction:column;gap:3px"></div>
+  </div>
   <span id="dipnote" style="color:#667;font-size:11px"></span>
 </div>
 <div id="panel"></div>
@@ -984,6 +991,50 @@ const dipOf = (id, dflt) => {
   const v = parseInt($(id).value.trim(), 16);
   return Number.isFinite(v) ? (v & 0xff) : dflt;
 };
+// ---- DIP switches as labelled bit checkboxes (HEX is unreadable) -------------
+// Only a few bits have a firmly-known meaning in THIS emulator / the standard
+// N88 setup; the rest are shown as raw bit toggles (games read them). Presets
+// cover the real choices. Bit checkboxes stay in sync with the two hex inputs.
+const DIP_BITS = { // port 30h (DIPSW1) / 31h (DIPSW2) — label per bit (or '')
+  dip1: ['', '', '', '', '', '', '', ''],
+  dip2: ['', '', '', '', '', '', 'V2モード(専用テキストVRAM)', ''],
+};
+function buildDipUI() {
+  const box = $('dipbits'); if (!box) return;
+  box.innerHTML = '';
+  for (const [id, labels] of Object.entries(DIP_BITS)) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center';
+    row.innerHTML = `<span style="color:#778;min-width:52px">${id.toUpperCase()}</span>`;
+    for (let b = 7; b >= 0; b--) {
+      const lab = document.createElement('label');
+      lab.style.cssText = 'display:inline-flex;align-items:center;gap:2px;color:#9ab';
+      lab.title = labels[b] || `bit${b}`;
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.dataset.id = id; cb.dataset.bit = String(b);
+      cb.onchange = () => {
+        let v = dipOf(id, id === 'dip1' ? 0xdb : 0x79);
+        v = cb.checked ? (v | (1 << b)) : (v & ~(1 << b));
+        $(id).value = (v & 0xff).toString(16).toUpperCase().padStart(2, '0');
+        $(id).onchange(); syncDipUI();
+      };
+      lab.append(cb, document.createTextNode(labels[b] ? `b${b}✻` : `b${b}`));
+      row.appendChild(lab);
+    }
+    box.appendChild(row);
+  }
+  box.insertAdjacentHTML('beforeend', '<span style="color:#667">✻=意味の判っているbit。既定 DB/79 = N88 V2・80桁・ディスク起動</span>');
+  syncDipUI();
+}
+function syncDipUI() {
+  for (const cb of $('dipbits').querySelectorAll('input[type=checkbox]')) {
+    const v = dipOf(cb.dataset.id, cb.dataset.id === 'dip1' ? 0xdb : 0x79);
+    cb.checked = (v & (1 << +cb.dataset.bit)) !== 0;
+  }
+}
+$('dippreset88').onclick = () => { $('dip1').value = 'DB'; $('dip2').value = '79'; $('dip1').onchange(); syncDipUI(); };
+$('dippresetN').onclick = () => { $('dip1').value = 'FF'; $('dip2').value = 'FF'; $('dip1').onchange(); syncDipUI(); };
+for (const id of ['dip1', 'dip2']) { const el = $(id); const prev = el.oninput; el.addEventListener('input', () => syncDipUI()); }
+buildDipUI();
 function boot() {
   resetRewind(); // a fresh machine invalidates the old snapshot ring
   if (bootMode === 'n88') {
@@ -1129,7 +1180,7 @@ canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); 
     ].filter(Boolean) },
     { label: '🖥 システム', items: [
       it('mach', '機種', $('mach')), it('grp-bootmode', '起動モード', $('grp-bootmode')),
-      it('sb2', 'SB2', lab('sb2')), it('dip1', 'DIPSW1', lab('dip1')), it('dip2', 'DIPSW2', lab('dip2')),
+      it('sb2', 'SB2', lab('sb2')), it('grp-dip', 'DIPスイッチ', $('grp-dip')),
     ].filter(Boolean) },
     { label: '💽 ディスク', items: [
       it('grp-savedisk', '保存済み/一覧', $('grp-savedisk')), it('grp-drive', 'ドライブ割当', $('grp-drive')),
@@ -1151,6 +1202,10 @@ canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); 
   ];
   mountMenuBar($('menubar-mount'), { storageKey: 'menubar-machine', brand: 'PC-8801', menus });
   for (const r of ['row-sys1', 'row-sys2']) { const e = $(r); if (e) e.style.display = 'none'; }
+  // keep the status line (disk/DIP messages) visible — it lived in a now-hidden row
+  const st = document.createElement('div'); st.style.cssText = 'font-size:11px;color:#889;margin:5px 2px;min-height:1em';
+  if ($('dipnote')) st.appendChild($('dipnote'));
+  $('menubar-mount').after(st);
 }
 autoLoad();
 refreshDiskList();
