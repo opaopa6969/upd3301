@@ -565,12 +565,15 @@ $('speed').onchange = (e) => { speedMul = parseFloat(e.target.value) || 1; };
 // compositing toggles (see machine88.render). Txt-mask defaults ON (confirmed
 // correct on real games — displayed text, incl. black, occludes graphics);
 // edge-clip stays opt-in. Both persist.
-let txtOpaque = localStorage.getItem('upd3301-txtmask') !== '0';
+// key bumped to -v2 so a stale OFF (left over from an earlier "uncheck it to
+// diagnose" step) is ignored — opaque text is the correct default and games
+// rely on it to mask their off-screen scroll-compose area.
+let txtOpaque = localStorage.getItem('upd3301-txtmask-v2') !== '0';
 let clipActive = localStorage.getItem('upd3301-clip') === '1';
 $('txtopaque').checked = txtOpaque;
 $('clipactive').checked = clipActive;
 let showText = true;
-$('txtopaque').onchange = (e) => { txtOpaque = e.target.checked; localStorage.setItem('upd3301-txtmask', txtOpaque ? '1' : '0'); };
+$('txtopaque').onchange = (e) => { txtOpaque = e.target.checked; localStorage.setItem('upd3301-txtmask-v2', txtOpaque ? '1' : '0'); };
 $('clipactive').onchange = (e) => { clipActive = e.target.checked; localStorage.setItem('upd3301-clip', clipActive ? '1' : '0'); };
 $('showtext').onchange = (e) => { showText = e.target.checked; };
 const renderOpts = () => ({ textOpaque: txtOpaque, clipActive, hideText: !showText });
