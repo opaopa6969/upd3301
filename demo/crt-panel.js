@@ -85,7 +85,11 @@ export class CrtPanel {
       const k = this.knobs;
       this._tubes[key] = new CrtTube({
         srcWidth: w, srcHeight: h, outWidth: w * ss, outHeight: h * 2 * ss,
-        mask: this.tubeMode, maskPitch: k.pitch * ss, convergence: k.conv,
+        // maskPitch is in OUTPUT pixels, NOT scaled by ss — so a 2× backing packs
+        // 2× as many triads across the same picture = a genuinely FINER pitch
+        // (a high-end Trinitron GDM ran ~0.24 mm ≈ ×2–×3 here), not just a smoother
+        // render of the same coarse mask. Min ~3 px/triad to resolve R·G·B.
+        mask: this.tubeMode, maskPitch: k.pitch, convergence: k.conv,
         barrel: k.barrel, ghost: k.ghost, beamWidth: k.focus,
         hSize: k.hSize, vSize: k.vSize,
         // 400-line packs the traces until the gaps vanish; 200-line leaves
@@ -235,7 +239,7 @@ export class CrtPanel {
         else if (['hSize', 'vSize', 'pitch', 'conv', 'barrel'].includes(key)) {
           for (const tb of Object.values(this._tubes)) {
             tb.setGeometry({
-              hSize: this.knobs.hSize, vSize: this.knobs.vSize, maskPitch: this.knobs.pitch * (tb.ss || 1),
+              hSize: this.knobs.hSize, vSize: this.knobs.vSize, maskPitch: this.knobs.pitch,
               convergence: this.knobs.conv, barrel: this.knobs.barrel,
             });
           }
