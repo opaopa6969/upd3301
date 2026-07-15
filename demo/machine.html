@@ -1672,15 +1672,15 @@ const expandPanel = () => {
 };
 mountTourButton(document.querySelector('h1'), [
   { el: null,
-    title: { ja: 'PC-8001、まるごと', en: 'The whole PC-8001' },
+    title: { ja: 'PC-8001/8801、まるごと', en: 'The whole PC-8001/8801' },
     body: {
-      ja: 'このページは論理スタックの完成形。<b>Z80</b>が<b>N-BASIC ROM</b>を実行し、<b>μPD8257</b>が毎フレーム3000バイトをDMAで運び、<b>μPD3301</b>がアトリビュートを展開して、蛍光体と管がそれを光にする。\nESC・✕・外側クリックでいつでもツアーを抜けられるよ。',
-      en: 'This page is the full logical stack: a <b>Z80</b> runs the <b>N-BASIC ROM</b>, the <b>μPD8257</b> DMAs 3000 bytes every frame, the <b>μPD3301</b> expands attributes, and the phosphor + tube turn it into light.\nESC, ✕, or a click outside leaves the tour any time.' } },
-  { el: '#from',
-    title: { ja: 'ROMは持ち込み（BYO）', en: 'Bring your own ROM' },
+      ja: 'このページは論理スタックの完成形。<b>Z80</b>が<b>ROM</b>を実行し、<b>μPD8257</b>が毎フレーム3000バイトをDMAで運び、<b>μPD3301</b>がアトリビュートを展開して、蛍光体と管がそれを光にする。上に<b>メニューバー</b>、下に<b>dock</b>（よく使う物）、一番下に<b>ジョグシャトル</b>のプレイヤーバー。\nESC・✕・外側クリックでいつでもツアーを抜けられるよ。',
+      en: 'The full logical stack: a <b>Z80</b> runs the <b>ROM</b>, the <b>μPD8257</b> DMAs 3000 bytes a frame, the <b>μPD3301</b> expands attributes, the phosphor+tube make light. A <b>menu bar</b> on top, a <b>dock</b> of favourites, and a <b>jog-shuttle</b> player bar at the bottom.\nESC / ✕ / outside-click leaves the tour any time.' } },
+  { el: '#menubar-mount',
+    title: { ja: 'まずは ROMフォルダを指定するだけ', en: 'Just point at your ROM folder' },
     body: {
-      ja: 'N-BASICはNECの著作物だから、このリポジトリにはROMを<b>同梱していない</b>。実機から吸い出した N80.ROM 等をここで選ぶと起動する。ローカルで roms/ にダンプを置いて manifest.json を作れば、ページを開くだけで自動ロードされるよ。',
-      en: 'N-BASIC is NEC\'s copyrighted code, so no ROM ships with this repo. Pick your own dump (N80.ROM etc.) here to boot. Served locally with dumps in roms/ + a manifest.json, the page auto-loads on open.' } },
+      ja: 'いちばん簡単な始め方：<b>💽ディスク → 📚一覧 → 📁フォルダを開く</b> で、<b>ROMやD88が入ったフォルダを雑に指定</b>するだけ。中を再帰スキャンして、<b>PC-8801 BIOS一式・font・数百本のゲーム</b>を全部見つけて使えるようにする（一度許可すれば次回も記憶）。ファイルは<b>端末に残ったまま</b>（著作物を配布しない設計）。もちろん個別に📁ファイル選択でもOK。',
+      en: 'The easy start: <b>💽Disk → 📚List → 📁Open folder</b> and just point at a folder holding your ROMs / D88s. It recursively scans it and wires up the <b>PC-8801 BIOS set, a font, and hundreds of games</b> (granted once, remembered next time). Files stay on your machine — nothing copyrighted is copied in. Or pick files individually via 📁File.' } },
   { el: '#mach',
     title: { ja: '機種選択', en: 'Machine picker' },
     body: {
@@ -1691,6 +1691,11 @@ mountTourButton(document.querySelector('h1'), [
     body: {
       ja: 'キー入力はキャンバスに<b>フォーカスがあるとき</b>だけ届く（まずクリック）。キーはPC-8001の<b>キーマトリクス</b>（port 00h-09h、負論理）に変換されて、走査するのはエミュレータじゃなくROM自身。試しに <b>PRINT 3301</b> と打ってみて。ESC＝STOPキーだよ。',
       en: 'Keys only arrive while the canvas has focus (click it first). Keystrokes become the PC-8001 <b>key matrix</b> (ports 00h-09h, active low) — the ROM itself does the scanning, not the emulator. Try <b>PRINT 3301</b>. ESC = the STOP key.' } },
+  { el: '#playerbar',
+    title: { ja: 'ジョグシャトル（巻戻し・早送り）', en: 'Jog-shuttle (rewind / fast-forward)' },
+    body: {
+      ja: 'ビデオデッキ風の<b>ジョグシャトル</b>。上の<b>シャトル</b>は中央=停止、左右に押すほど早戻し/早送り（現在を追い越すと実エミュを<b>最大×16</b>で爆走）、放すと現在位置から再生。下の細い<b>ジョグ</b>バーは任意の時点へジャンプ。決定論エミュ＋スナップショットだから完全に巻き戻せる。バッファ長は⟲で最大10分。',
+      en: 'A video-deck <b>jog-shuttle</b>. The top <b>shuttle</b> is centre-neutral: push to rewind/fast-forward (blast past "now" at up to <b>×16</b>), release to play from there. The thin <b>jog</b> bar jumps to any instant. Deterministic emulation + snapshots = a true rewind; buffer up to 10 min via ⟲.' } },
   { el: '#bkeys',
     title: { ja: 'キー配置ヘルプ', en: 'Keyboard help' },
     body: {
@@ -1701,11 +1706,11 @@ mountTourButton(document.querySelector('h1'), [
     body: {
       ja: '<b>N-BASIC (N80)</b>がPC-8001互換の起動（単一ROM）。<b>N88-BASIC</b>はPC-8801の上位モード — こちらは「PC-8801 BIOS一式」ボタンで n88.rom＋n88_0..3.rom＋disk.rom を選ぶと、FDDサブCPU（もう1個のZ80！）まで含めて起動する。<b>SB2</b>チェックでサウンドボードII(OPNA)が生える。',
       en: '<b>N-BASIC (N80)</b> is the PC-8001-compatible boot (a single ROM). <b>N88-BASIC</b> is the 8801\'s native mode — pick the whole BIOS set (n88.rom + n88_0..3.rom + disk.rom) via the "PC-8801 BIOS" button and it boots, FDD sub-CPU (a second Z80!) and all. The <b>SB2</b> box grows a Sound Board II (OPNA).' } },
-  { el: '#dip1',
-    title: { ja: 'DIPSW', en: 'DIP switches' },
+  { el: '#grp-dip',
+    title: { ja: 'DIPSW（bitチェックボックス）', en: 'DIP switches (bit checkboxes)' },
     body: {
-      ja: '実機の背面ディップスイッチ。ROMが port <b>30h/31h</b> を読んで端子幅・ボーレートなどの設定を知る。16進2桁で自由に変えてリセットしてみて（FF＝全部ON）。',
-      en: 'The rear DIP switches. The ROM reads ports <b>30h/31h</b> to learn terminal width, baud rate and so on. Two hex digits — change them and reset (FF = all on).' } },
+      ja: '実機の背面ディップスイッチ（ROMが port <b>30h/31h</b> を読む）。16進が分かりにくいので<b>bit毎のチェックボックス</b>にした（hexと双方向同期）。プリセット「<b>N88 V2</b>（DB/79・標準）」「<b>N</b>」でワンクリック。✻付きは意味の判るbit。システムメニューの中にあるよ。',
+      en: 'The rear DIP switches (the ROM reads ports <b>30h/31h</b>). Hex is opaque, so they are <b>per-bit checkboxes</b> (two-way synced with the hex). Presets: <b>N88 V2</b> (DB/79, standard) and <b>N</b>. ✻ marks bits with a known meaning. It lives in the System menu.' } },
   { el: '#fdisk',
     title: { ja: '.d88 ディスクイメージ', en: '.d88 disk images' },
     body: {
@@ -1729,8 +1734,8 @@ mountTourButton(document.querySelector('h1'), [
   { el: '#bice',
     title: { ja: '🔬 ICE — 回路の中に入る', en: '🔬 ICE — get inside the circuit' },
     body: {
-      ja: '別窓で本格デバッガが開く: 条件付きブレーク・ウォッチポイント・<b>時間旅行</b>（実行の巻き戻しと分岐ツリー）・プロファイラ・マクロアセンブラ・逆アセン（ROMの解析済みラベル付き）。実機時代は本体より高かった機材が、ボタン1個。<b>ICE側にも専用ツアーがある</b>から続きはそっちで。',
-      en: 'Opens the full debugger in its own window: conditional breaks, watchpoints, <b>time travel</b> (rewind + branching tree), profiler, macro assembler, disassembly with analyzed ROM labels. This used to cost more than the computer. <b>The ICE has its own tour</b> — continue there.' } },
+      ja: 'ツールメニューから本格デバッガが別窓で開く: 条件付きブレーク・ウォッチ・<b>時間旅行</b>（巻き戻し＋分岐ツリー）・プロファイラ・マクロアセンブラ・逆アセン（ラベル付き）。パネルは<b>tmux式に列で自由配置</b>（ヘッダでドラッグ移動・仕切りで幅・下端で高さ・⧉で別ウィンドウ）。実機時代は本体より高かった機材がボタン1個。<b>ICE側にも専用ツアーがある</b>よ。',
+      en: 'The Tools menu opens the full debugger in its own window: conditional breaks, watchpoints, <b>time travel</b> (rewind + branching tree), profiler, macro assembler, labelled disassembly. Panels tile <b>tmux-style in columns</b> (drag headers to move, gutters for width, edges for height, ⧉ to pop into their own window). <b>The ICE has its own tour.</b>' } },
 ], { storageKey: 'tour-machine' });
 </script>
 </body>
