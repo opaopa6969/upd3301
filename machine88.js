@@ -131,6 +131,9 @@ export class Pc8801Machine {
     // through OPN register 0x0E (pad 1) / 0x0F (pad 2). Active-low bits:
     // b0=up b1=down b2=left b3=right b4=trig1 b5=trig2. Idle = 0xff (nothing).
     this.joy = new Uint8Array([0xff, 0xff]);
+    // diagnostic: per-port read counter for the keyboard matrix (0x00-0x0F), so
+    // we can SEE which rows a game actually polls instead of guessing the layout.
+    this._kbReads = new Uint32Array(16);
     // 30h/31h DIP reads. N88 V2 mode: 30h bit0=1 (N88), upper bits pulled
     // high; 31h bit7=0 (V2), bit6=1 (H). All-FF here *looks* harmless but
     // means "V1 + every terminal option on" — the boot ROM then wanders off
@@ -255,7 +258,7 @@ export class Pc8801Machine {
 
   // ---- I/O ----------------------------------------------------------------
   in(port) {
-    if (port <= 0x0f) return this.keys[port]; // keyboard matrix
+    if (port <= 0x0f) { if (this._kbReads) this._kbReads[port]++; return this.keys[port]; } // keyboard matrix
     if (port === 0x30) return this.dipsw[0];
     if (port === 0x31) return this.dipsw[1];
     if (port === 0x32) return this._port32; // readable on mkII SR and later

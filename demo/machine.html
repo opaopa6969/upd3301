@@ -350,6 +350,15 @@ $('bpng').onclick = () => {
         for (let c = 0; c < 12; c++) { cs.push(hx(crtc.cells[r * crtc.cols + c])); as.push(hx(crtc.attrs[r * crtc.cols + c])); }
         console.log(`[row ${r}] cells ${cs.join(' ')} | attrs ${as.join(' ')}`);
       }
+      // keyboard-port read histogram since the LAST PNG press: which matrix rows
+      // does this game actually scan? Rows with 0 reads are never polled → any
+      // key we mapped there is dead. (Then zero it so the next press is a fresh
+      // window; leave the machine a moment on the target screen before pressing.)
+      if (machine._kbReads) {
+        const h = [...machine._kbReads].map((n, i) => `${i.toString(16)}:${n}`).join(' ');
+        console.log(`[kbscan] reads/port(0..f): ${h}`);
+        machine._kbReads.fill(0);
+      }
     } catch (e) { console.log('[diag] ' + e.message); }
   }
   const a = document.createElement('a'); a.download = `upd3301-raw-f${machine.frame}.png`; a.href = c.toDataURL('image/png'); a.click();
@@ -813,6 +822,8 @@ function pressKey(k, down) { for (const c of cellsOf(k)) down ? machine.keyDown(
 const KEYJOY = { ArrowUp: 0, ArrowDown: 1, ArrowLeft: 2, ArrowRight: 3, z: 4, x: 5 };
 function joyBitFor(e) { const k = e.key.length === 1 ? e.key.toLowerCase() : e.key; return KEYJOY[k]; }
 let kbdJoy = 0xff; // keyboard-mirrored pad bits (active low), combined with a real pad each frame
+window.addEventListener('gamepadconnected', (e) => console.log(`[gamepad] connected: "${e.gamepad.id}" mapping=${e.gamepad.mapping} axes=${e.gamepad.axes.length} buttons=${e.gamepad.buttons.length}`));
+window.addEventListener('gamepaddisconnected', (e) => console.log(`[gamepad] disconnected: "${e.gamepad.id}"`));
 // Read a physical gamepad (Gamepad API) into a PC-8801 pad byte (active low).
 // D-pad or left stick → directions; buttons 0/1 → trig1/trig2. null if no pad.
 function pollGamepad() {
