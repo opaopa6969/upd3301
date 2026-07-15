@@ -52,6 +52,11 @@
   <button id="mn80" class="on">N-BASIC (N80)</button>
   <button id="mn88">N88-BASIC</button>
   <label style="color:#778;font-size:12px" title="サウンドボードII (OPNA/YM2608) を有効にする">SB2 <input type="checkbox" id="sb2" style="vertical-align:middle"></label>
+  <label style="color:#778;font-size:12px" title="エミュレーション速度。倍速・早送り（実CPUが追いつく範囲まで）">速度 <select id="speed" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
+    <option value="0.25">×0.25</option><option value="0.5">×0.5</option>
+    <option value="1" selected>×1</option><option value="2">×2</option>
+    <option value="4">×4</option><option value="8">×8</option><option value="16">×16</option>
+  </select></label>
   <label style="color:#778;font-size:12px">DIPSW1 <input id="dip1" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:34px;text-align:center"></label>
   <label style="color:#778;font-size:12px">DIPSW2 <input id="dip2" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:34px;text-align:center"></label>
   <span id="dipnote" style="color:#667;font-size:11px"></span>
@@ -470,6 +475,16 @@ $('bclean').onclick = () => {
 };
 updateCleanBtn();
 
+// ---- emulation speed (fast-forward / slow-mo) -----------------------------
+// Scales the emulated time fed to machine.update(): >1 fast-forwards, <1 slows.
+// The catch-up loop inside update() runs more/fewer stepFrames per real frame;
+// the CPU only reaches the target speed as far as it can compute in real time
+// (×2-×4 easily; ×16 caps out on a busy scene). Both video AND music speed up
+// together (they share the emulation clock), so fast-forward chipmunks the tune
+// — funny, and handy for skipping disk loads.
+let speedMul = 1;
+$('speed').onchange = (e) => { speedMul = parseFloat(e.target.value) || 1; };
+
 // ---- video capture: record the live screen (+ sound) to a WebM ------------
 // canvas.captureStream taps the CRT canvas as it's drawn each frame; the audio
 // graph is tapped via a MediaStreamDestination so the recording carries the
@@ -633,7 +648,9 @@ function loop(now) {
   last = now;
   const t0 = performance.now();
   if (machine) {
-    machine.update(dt);
+    // scale emulated time by the speed multiplier; cap the per-frame slice so a
+    // huge multiplier (or a long hitch) can't lock the main thread catching up.
+    machine.update(Math.min(dt * speedMul, 0.5));
     // Both machines emit a GRB-indexed frame (0..7 per dot) that the shared
     // phosphor pipeline below consumes verbatim. The 8001 exposes it via its
     // text system (machine.sys), the 8801 via render({indexed:true}) which
@@ -691,7 +708,7 @@ function loop(now) {
       ctx.putImageData(img, 0, 0);
     }
     workMs = workMs * 0.9 + (performance.now() - t0) * 0.1;
-    guts.textContent = `${is88 ? 'PC-8801/N88' : 'PC-8001/N80'}${cleanF ? ' [clean]' : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
+    guts.textContent = `${is88 ? 'PC-8801/N88' : 'PC-8001/N80'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
       + `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz`;
   }
   requestAnimationFrame(loop);
