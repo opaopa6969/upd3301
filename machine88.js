@@ -127,6 +127,10 @@ export class Pc8801Machine {
     this._pioLast = -1;
     this._pioPoll = 0;
     this.keys = new Uint8Array(16).fill(0xff);
+    // Joystick: PC-8801 wires the pads to the OPN (YM2203) I/O port A/B, read
+    // through OPN register 0x0E (pad 1) / 0x0F (pad 2). Active-low bits:
+    // b0=up b1=down b2=left b3=right b4=trig1 b5=trig2. Idle = 0xff (nothing).
+    this.joy = new Uint8Array([0xff, 0xff]);
     // 30h/31h DIP reads. N88 V2 mode: 30h bit0=1 (N88), upper bits pulled
     // high; 31h bit7=0 (V2), bit6=1 (H). All-FF here *looks* harmless but
     // means "V1 + every terminal option on" — the boot ROM then wanders off
@@ -269,7 +273,14 @@ export class Pc8801Machine {
     if (port === 0x51) return this.crtc.readStatus();
     if (port >= 0x60 && port <= 0x68) return this.dmac.readPort(port - 0x60);
     if (port === 0x44) return this.opn.readStatus(); // OPN status (timer flags)
-    if (port === 0x45) return this.opn.reg[this.opn.addr];
+    if (port === 0x45) {
+      // OPN I/O port A/B carry the joystick pad state on the PC-8801. When the
+      // game selects reg 0x0E/0x0F and reads, hand back the live pad, not the
+      // last register write (an input port reflects pins, not stored data).
+      if (this.opn.addr === 0x0e) return this.joy[0];
+      if (this.opn.addr === 0x0f) return this.joy[1];
+      return this.opn.reg[this.opn.addr];
+    }
     if (this.opna) { // Sound Board II (OPNA) at A8h-ABh
       // YM chips are write-only for registers; a read of the DATA port returns
       // the STATUS byte (busy + timer flags), which is exactly what the SB2
@@ -526,6 +537,9 @@ export class Pc8801Machine {
 
   keyDown(row, bit) { this.keys[row] &= ~(1 << bit); return this; }
   keyUp(row, bit) { this.keys[row] |= 1 << bit; return this; }
+  // Joystick (active-low): bit 0=up 1=down 2=left 3=right 4=trig1 5=trig2.
+  joyDown(bit, pad = 0) { this.joy[pad] &= ~(1 << bit); return this; }
+  joyUp(bit, pad = 0) { this.joy[pad] |= 1 << bit; return this; }
 
   // ---- time travel ---------------------------------------------------------
   // Deterministic machine + full state copy = rewindable execution, sub
@@ -539,7 +553,7 @@ export class Pc8801Machine {
       tvram: this.tvram.slice(),
       gvram: this.gvram.map((p) => p.slice()),
       palette: this.palette.slice(),
-      keys: this.keys.slice(),
+      keys: this.keys.slice(), joy: this.joy.slice(),
       dipsw: [...this.dipsw],
       crtc: snapObj(this.crtc),
       dmac: snapObj(this.dmac),
@@ -589,6 +603,7 @@ export class Pc8801Machine {
     this.palette.set(s.palette);
     for (let r = 0; r < 64; r++) this.rowPal.set(this.palette, r * 24); // restored frames: uniform (raster rebuilt on next stepFrame)
     this.keys.set(s.keys);
+    if (s.joy) this.joy.set(s.joy);
     this.dipsw = [...s.dipsw];
     restoreObj(this.crtc, s.crtc);
     restoreObj(this.dmac, s.dmac);

@@ -780,10 +780,57 @@ const KEY = {
   // row 9: bit0 STOP（上の Escape がこれ）, bit1-5 F1-F5, bit6 SPACE, bit7 ESC
   F1: [9, 1], F2: [9, 2], F3: [9, 3], F4: [9, 4], F5: [9, 5],
 };
+// PC-8801 keyboard matrix — DIFFERENT from the PC-8001 above on the special
+// rows. Rows 2-7 (letters/digits/symbols) are identical, so we clone KEY and
+// override only the special/function rows. Confirmed against real Ys II: ↑[8,1]
+// and →[8,2] work with this row-8 layout (the user reported those two directions
+// moving), which pins row 8. Row 9 on the 8801 is SPACE ESC TAB ↓ BS INS CR ←
+// (NOT the PC-8001's STOP/F1-F5/SPACE/ESC), so ↓/← and the CR decision key live
+// here — that is why the menu cursor was stuck at the top before.
+const KEY88 = {
+  ...KEY,
+  // row 8: HOME ↑ → DEL GRPH KANA SHIFT STOP/CTRL  (same as 8001 through bit6)
+  Home: [8, 0], ArrowUp: [8, 1], ArrowRight: [8, 2], Delete: [8, 3],
+  Alt: [8, 4], AltGraph: [8, 4], KanaMode: [8, 5], HiraganaKatakana: [8, 5],
+  Shift: [8, 6], Control: [8, 7],
+  // row 9: SPACE ESC TAB ↓ BS INS CR ←
+  ' ': [9, 0], Escape: [9, 1], Tab: [9, 2], ArrowDown: [9, 3],
+  Backspace: [9, 4], Insert: [9, 5], Enter: [9, 6], ArrowLeft: [9, 7],
+  // row 10: F1-F5 (+ ROLL/HELP unmapped)
+  F1: [10, 0], F2: [10, 1], F3: [10, 2], F4: [10, 3], F5: [10, 4],
+};
+function activeKeymap() { return (machine && !machine.n80mode) ? KEY88 : KEY; }
+// Mirror directional keys + Z/X onto the joystick (OPN port A) so games that
+// poll the pad instead of the keyboard (many PC-8801 action games, incl. Ys II)
+// still respond to the keyboard. joy bit: 0=up 1=down 2=left 3=right 4/5=trig.
+const KEYJOY = { ArrowUp: 0, ArrowDown: 1, ArrowLeft: 2, ArrowRight: 3, z: 4, x: 5 };
+function joyBitFor(e) { const k = e.key.length === 1 ? e.key.toLowerCase() : e.key; return KEYJOY[k]; }
+let kbdJoy = 0xff; // keyboard-mirrored pad bits (active low), combined with a real pad each frame
+// Read a physical gamepad (Gamepad API) into a PC-8801 pad byte (active low).
+// D-pad or left stick → directions; buttons 0/1 → trig1/trig2. null if no pad.
+function pollGamepad() {
+  if (!navigator.getGamepads) return null;
+  const pads = navigator.getGamepads();
+  let gp = null;
+  for (const p of pads) if (p && p.connected) { gp = p; break; }
+  if (!gp) return null;
+  let b = 0xff;
+  const ax = gp.axes, bt = gp.buttons;
+  const down = (bit) => { b &= ~(1 << bit); };
+  const btn = (i) => bt[i] && bt[i].pressed;
+  if ((ax[1] ?? 0) < -0.5 || btn(12)) down(0); // up
+  if ((ax[1] ?? 0) > 0.5 || btn(13)) down(1);   // down
+  if ((ax[0] ?? 0) < -0.5 || btn(14)) down(2); // left
+  if ((ax[0] ?? 0) > 0.5 || btn(15)) down(3);   // right
+  if (btn(0) || btn(2)) down(4);                 // trig1 (A/X)
+  if (btn(1) || btn(3)) down(5);                 // trig2 (B/Y)
+  return b;
+}
 function matrixKey(e) {
-  if (KEY[e.key] !== undefined) return KEY[e.key];
+  const map = activeKeymap();
+  if (map[e.key] !== undefined) return map[e.key];
   const lower = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  return KEY[lower];
+  return map[lower];
 }
 // Keys are handled at the WINDOW so they work no matter which control was last
 // clicked (the player bar / buttons steal focus from the canvas). Skipped while
@@ -798,12 +845,16 @@ window.addEventListener('keydown', (e) => {
   if (bootMode === 'n88') ensureAudio(); // a keypress is a user gesture → unblock autoplay
   if (frozen()) resumePlay(); // any game key un-freezes
   if (e.shiftKey) machine.keyDown(8, 6); else machine.keyUp(8, 6);
+  const jb = joyBitFor(e);
+  if (jb !== undefined) { kbdJoy &= ~(1 << jb); machine.joyDown(jb); e.preventDefault(); }
   if (k) { machine.keyDown(k[0], k[1]); e.preventDefault(); }
 });
 window.addEventListener('keyup', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
   const k = matrixKey(e);
   if (!e.shiftKey) machine.keyUp(8, 6);
+  const jb = joyBitFor(e);
+  if (jb !== undefined) { kbdJoy |= (1 << jb); machine.joyUp(jb); e.preventDefault(); }
   if (k) { machine.keyUp(k[0], k[1]); e.preventDefault(); }
 });
 
@@ -829,6 +880,9 @@ function loop(now) {
   last = now;
   const t0 = performance.now();
   if (machine) {
+    // fold a physical gamepad into the pad register (keyboard bits still apply)
+    const pad = pollGamepad();
+    if (pad !== null) machine.joy[0] = kbdJoy & pad;
     if (scrubIndex !== null) {
       // frozen at a scrubbed snapshot (state already restored by the scrub handler)
     } else if (rewinding && history.length > 1) {
