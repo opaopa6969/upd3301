@@ -31,7 +31,7 @@ const KNOBS = [
   ['hSize', 'H-SIZE', 0.7, 1.15, 0.01, 1],
   ['vSize', 'V-SIZE', 0.7, 1.15, 0.01, 1],
   ['bright', 'BRIGHT', 0.4, 3, 0.05, 1.2],
-  ['pitch', 'PITCH', 2, 9, 1, 3],
+  ['pitch', 'PITCH', 3, 9, 1, 3], // min 3: a triad needs 3 output px for R·G·B; below that they can't resolve and the mask aliases into a dirty moiré
   ['conv', 'CONV', 0, 0.02, 0.001, 0.004],
   ['barrel', 'BARREL', -0.12, 0.25, 0.01, 0.06],
   ['contrast', 'CONTRAST', 0.5, 1.8, 0.05, 1],
