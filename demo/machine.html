@@ -34,13 +34,20 @@
 <div id="stage"><canvas id="crt" tabindex="0" width="640" height="400"></canvas></div>
 <div id="playerbar" style="max-width:664px;margin:8px 0 4px;display:flex;align-items:center;gap:10px;font-size:12px;color:#9ab">
   <button id="bpause" title="一時停止 / 再開" style="min-width:70px">⏸ 停止</button>
-  <div id="track" title="中央60%=シーク（過去↔現在を非破壊プレビュー、現在に戻れる）。左右20%=長押しで早戻し／早送り（深いほど速い）" style="position:relative;flex:1;height:18px;background:#141419;border:1px solid #334;border-radius:4px;cursor:pointer;overflow:hidden;touch-action:none">
-    <div style="position:absolute;left:0;top:0;bottom:0;width:20%;background:rgba(120,160,255,.06);border-right:1px dashed #2b3550;pointer-events:none;display:flex;align-items:center;justify-content:center;color:#456;font-size:10px">◀◀</div>
-    <div style="position:absolute;right:0;top:0;bottom:0;width:20%;background:rgba(120,160,255,.06);border-left:1px dashed #2b3550;pointer-events:none;display:flex;align-items:center;justify-content:center;color:#456;font-size:10px">▶▶</div>
-    <div id="trackfill" style="position:absolute;left:20%;top:0;bottom:0;width:0%;background:linear-gradient(#1e3226,#152018);background-image:repeating-linear-gradient(90deg,rgba(140,255,221,.18) 0 1px,transparent 1px 4px);pointer-events:none"></div>
-    <div id="playhead" style="position:absolute;top:-1px;bottom:-1px;width:2px;background:#8fd;left:80%;box-shadow:0 0 4px #8fd;pointer-events:none"></div>
+  <div style="flex:1;display:flex;flex-direction:column;gap:3px">
+    <!-- SHUTTLE: center-neutral speed control (spring-returns to ⏸ on release) -->
+    <div id="shuttle" title="ジョグシャトル: 中央=停止。中央から左へ=早戻し／右へ=早送り、端ほど高速・中央付近はコマ送り。放すと中央(停止)へ戻り現在のコマで止まる。実際に遊ぶ時は ▶再開" style="position:relative;height:20px;background:linear-gradient(#15151b,#0e0e12);border:1px solid #334;border-radius:10px;cursor:ew-resize;overflow:hidden;touch-action:none">
+      <div style="position:absolute;left:50%;top:2px;bottom:2px;width:2px;margin-left:-1px;background:#2c3550;pointer-events:none"></div>
+      <div id="shuttleknob" style="position:absolute;top:2px;bottom:2px;left:50%;width:16px;margin-left:-8px;background:linear-gradient(#9fe,#3b8);border-radius:8px;box-shadow:0 0 6px #8fd;transition:left .08s ease-out;pointer-events:none"></div>
+      <span id="shuttlelabel" style="position:absolute;right:8px;top:3px;font-size:10px;color:#8fd;font-variant-numeric:tabular-nums;pointer-events:none">⏸</span>
+    </div>
+    <!-- POSITION: absolute jog seek within the buffer -->
+    <div id="track" title="バッファ内の再生位置。クリック／ドラッグでその時点へジャンプ（ジョグ）。目盛=snapshot点" style="position:relative;height:8px;background:#141419;border:1px solid #334;border-radius:4px;cursor:pointer;overflow:hidden;touch-action:none">
+      <div id="trackfill" style="position:absolute;left:0;top:0;bottom:0;width:0%;background:linear-gradient(#1e3226,#152018);background-image:repeating-linear-gradient(90deg,rgba(140,255,221,.18) 0 1px,transparent 1px 4px);pointer-events:none"></div>
+      <div id="playhead" style="position:absolute;top:-1px;bottom:-1px;width:2px;background:#8fd;left:100%;box-shadow:0 0 4px #8fd;pointer-events:none"></div>
+    </div>
   </div>
-  <span id="playinfo" style="min-width:172px;text-align:right;font-variant-numeric:tabular-nums;color:#adf">frame 0 · 0:00.0</span>
+  <span id="playinfo" style="min-width:150px;text-align:right;font-variant-numeric:tabular-nums;color:#adf">frame 0 · 0:00.0</span>
 </div>
 <div class="row">
   <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
@@ -674,10 +681,9 @@ let rewindSecs = Math.max(5, Math.min(600, parseInt(localStorage.getItem('upd330
 let REWIND_MAX = Math.round(rewindSecs * 60 / REWIND_EVERY);
 let history = [], lastSnapFrame = -1, rewinding = false;
 let paused = false, scrubIndex = null; // scrubIndex != null → frozen at a past snapshot
-let shuttleVel = 0; // signed snapshot-indices/frame while a track edge-zone is held
 const canSnap = () => machine && typeof machine.snapshot === 'function';
 const frozen = () => paused || scrubIndex !== null;
-function resetRewind() { history = []; lastSnapFrame = -1; rewinding = false; paused = false; scrubIndex = null; shuttleVel = 0; }
+function resetRewind() { history = []; lastSnapFrame = -1; rewinding = false; paused = false; scrubIndex = null; previewIdx = null; shuttleX = 0; }
 function setRewindSecs(s) {
   rewindSecs = Math.max(5, Math.min(600, s | 0));
   REWIND_MAX = Math.round(rewindSecs * 60 / REWIND_EVERY);
@@ -692,76 +698,82 @@ for (const [d, u] of [['mousedown', 1], ['touchstart', 1], ['mouseup', 0], ['mou
   $('brewind').addEventListener(d, (e) => { if (d.startsWith('touch')) e.preventDefault(); pressRewind(!!u); });
 }
 
-// ---- player bar: pause / resume + scrub through the snapshot ring ----------
-// Scrubbing itself is NON-DESTRUCTIVE: while you DRAG you can slide past↔present
-// freely (nothing is discarded). resumePlay plays forward FROM wherever the
-// playhead currently sits — release/再開 in the past → play from there (the future
-// beyond re-generates); want to keep the buffered future → slide back to the
-// present before releasing. This is the media-player behaviour the user expects.
+// ---- player bar: JOG-SHUTTLE (VCR style) -----------------------------------
+// SHUTTLE (top): a centre-neutral speed control. Centre = pause/hold; push toward
+// an edge to play that direction, faster the further you push (slow near centre =
+// jog / frame-step). It spring-returns to the centre (pause) on release, holding
+// the current frame — exactly like the shuttle ring on a video deck. To actually
+// PLAY (live), press ▶再開. JOG bar (bottom): absolute seek — click/drag to jump
+// to any buffered instant. Reviewing is non-destructive; 再開 continues forward
+// from wherever the playhead sits (slide back to the present to keep the future).
+const MAX_SHUTTLE_X = 16;      // shuttle speed multiplier at full deflection
+let previewIdx = null;         // float position in history while reviewing; null = live
+let shuttleX = 0, shuttling = false, jogging = false;
+const knob = () => $('shuttleknob');
+function restoreIdx(f) {
+  const n = history.length; if (n < 1) return;
+  scrubIndex = Math.max(0, Math.min(n - 1, Math.round(f)));
+  if (history[scrubIndex]) machine.restore(history[scrubIndex].snap); // deterministic preview
+}
 function resumePlay() {
   if (scrubIndex !== null) {
     history.length = scrubIndex + 1; // continue forward from the previewed point
     lastSnapFrame = history.length ? history[history.length - 1].frame : -1;
     scrubIndex = null;
   }
-  paused = false; shuttleVel = 0;
+  previewIdx = null; shuttleX = 0; paused = false; recentreKnob();
 }
 $('bpause').onclick = () => { if (frozen()) resumePlay(); else paused = true; canvas.focus(); };
-// Track layout: outer 20% edges are variable-speed SHUTTLE zones (hold to rewind
-// on the left / fast-forward on the right, faster the deeper you push); the middle
-// 60% is a direct seek across the whole buffer.
-const SHUTTLE_EDGE = 0.2, MAX_SHUTTLE = 6; // snapshot-indices per frame at full push
-let scrubbing = false, shuttleAcc = 0, resumeAfterScrub = false;
-function seekToFrac(f) {
-  if (!machine || !canSnap() || history.length < 1) return;
-  const n = history.length;
-  scrubIndex = Math.round(Math.max(0, Math.min(1, f)) * (n - 1));
-  if (history[scrubIndex]) machine.restore(history[scrubIndex].snap); // deterministic preview
+function recentreKnob() { const k = knob(); if (k) { k.style.transition = 'left .08s ease-out'; k.style.left = '50%'; } }
+// SHUTTLE: pointer position → signed speed multiplier (power curve, dead zone)
+function shuttleFromX(clientX) {
+  if (!machine || !canSnap() || history.length < 1) { shuttleX = 0; return; }
+  const r = $('shuttle').getBoundingClientRect();
+  let d = Math.max(-1, Math.min(1, (clientX - r.left) / r.width * 2 - 1)); // -1..+1 from centre
+  const DEAD = 0.06;
+  const mag = Math.abs(d) < DEAD ? 0 : (Math.abs(d) - DEAD) / (1 - DEAD);
+  shuttleX = Math.sign(d) * Math.pow(mag, 2) * MAX_SHUTTLE_X; // fine near centre, fast at edges
+  const k = knob(); if (k) { k.style.transition = 'none'; k.style.left = ((d * 0.5 + 0.5) * 100) + '%'; }
+  if (shuttleX !== 0 && previewIdx === null) previewIdx = history.length - 1; // enter review at the present
 }
-function onTrackPointer(clientX) {
+function shuttleRelease() { shuttling = false; shuttleX = 0; recentreKnob(); } // spring back to pause (hold frame)
+$('shuttle').addEventListener('pointerdown', (e) => { shuttling = true; try { $('shuttle').setPointerCapture(e.pointerId); } catch {} shuttleFromX(e.clientX); });
+$('shuttle').addEventListener('pointermove', (e) => { if (shuttling) shuttleFromX(e.clientX); });
+$('shuttle').addEventListener('pointerup', shuttleRelease);
+$('shuttle').addEventListener('pointercancel', shuttleRelease);
+// advance the preview by the shuttle speed each loop frame (called from the loop)
+function applyShuttle(dt) {
+  if (shuttleX === 0 || history.length < 2) return;
+  if (previewIdx === null) previewIdx = history.length - 1;
+  const fps = machine ? (machine.frameHz || 60) : 60;
+  previewIdx += shuttleX * (fps / REWIND_EVERY) * dt; // ×real-time in index units
+  previewIdx = Math.max(0, Math.min(history.length - 1, previewIdx)); // clamp (no recorded future beyond present)
+  restoreIdx(previewIdx);
+}
+// JOG bar: absolute seek within the buffer (which is right-aligned = present at right)
+function jogFromX(clientX) {
   if (!machine || !canSnap() || history.length < 1) return;
+  const n = history.length, bufFrac = Math.min(1, n / REWIND_MAX), bufStart = 1 - bufFrac;
   const r = $('track').getBoundingClientRect();
   const frac = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
-  if (frac < SHUTTLE_EDGE) shuttleVel = -Math.pow((SHUTTLE_EDGE - frac) / SHUTTLE_EDGE, 1.6) * MAX_SHUTTLE;
-  else if (frac > 1 - SHUTTLE_EDGE) shuttleVel = Math.pow((frac - (1 - SHUTTLE_EDGE)) / SHUTTLE_EDGE, 1.6) * MAX_SHUTTLE;
-  else { shuttleVel = 0; if (scrubIndex === null) scrubIndex = history.length - 1; seekToFrac((frac - SHUTTLE_EDGE) / (1 - 2 * SHUTTLE_EDGE)); }
+  previewIdx = Math.max(0, Math.min(1, (frac - bufStart) / (bufFrac || 1))) * (n - 1);
+  restoreIdx(previewIdx);
 }
-// advance the shuttle each frame while an edge zone is held (called from the loop)
-function applyShuttle() {
-  if (!scrubbing || shuttleVel === 0 || history.length < 2) return;
-  if (scrubIndex === null) scrubIndex = history.length - 1;
-  shuttleAcc += shuttleVel;
-  const step = Math.trunc(shuttleAcc);
-  if (!step) return;
-  shuttleAcc -= step;
-  const n = history.length, next = scrubIndex + step;
-  if (next >= n - 1 && shuttleVel > 0) { resumePlay(); scrubbing = false; return; } // shuttled forward past the present → go live
-  scrubIndex = Math.max(0, Math.min(n - 1, next));
-  if (history[scrubIndex]) machine.restore(history[scrubIndex].snap);
-}
-$('track').addEventListener('pointerdown', (e) => {
-  if (!scrubbing) resumeAfterScrub = (scrubIndex === null && !paused); // were we live-playing? then play on release
-  scrubbing = true; shuttleAcc = 0;
-  try { $('track').setPointerCapture(e.pointerId); } catch {}
-  onTrackPointer(e.clientX);
-});
-$('track').addEventListener('pointermove', (e) => { if (scrubbing) onTrackPointer(e.clientX); });
-function endScrub() {
-  scrubbing = false; shuttleVel = 0;
-  if (resumeAfterScrub && scrubIndex !== null) resumePlay(); // release → play from the previewed point
-}
-$('track').addEventListener('pointerup', endScrub);
-$('track').addEventListener('pointercancel', endScrub);
+$('track').addEventListener('pointerdown', (e) => { jogging = true; try { $('track').setPointerCapture(e.pointerId); } catch {} jogFromX(e.clientX); });
+$('track').addEventListener('pointermove', (e) => { if (jogging) jogFromX(e.clientX); });
+$('track').addEventListener('pointerup', () => { jogging = false; });
+$('track').addEventListener('pointercancel', () => { jogging = false; });
 function mmss(s) { const m = s / 60 | 0, sec = s - m * 60; return `${m}:${sec.toFixed(1).padStart(4, '0')}`; }
 function updatePlayerBar() {
   const n = history.length;
   const bufFrac = Math.min(1, n / REWIND_MAX);
-  const SEEK0 = SHUTTLE_EDGE, SEEKW = 1 - 2 * SHUTTLE_EDGE; // buffer maps to the middle 60%
-  // buffer sits at the RIGHT of the seek zone (present at its right edge)
-  $('trackfill').style.left = ((SEEK0 + (1 - bufFrac) * SEEKW) * 100).toFixed(1) + '%';
-  $('trackfill').style.width = (bufFrac * SEEKW * 100).toFixed(1) + '%';
+  // buffer is right-aligned (present at the right edge of the jog bar)
+  $('trackfill').style.left = ((1 - bufFrac) * 100).toFixed(1) + '%';
+  $('trackfill').style.width = (bufFrac * 100).toFixed(1) + '%';
   const playFrac = (scrubIndex !== null && n > 1) ? scrubIndex / (n - 1) : 1; // 0=oldest 1=present
-  $('playhead').style.left = ((SEEK0 + playFrac * SEEKW) * 100).toFixed(1) + '%';
+  $('playhead').style.left = (((1 - bufFrac) + playFrac * bufFrac) * 100).toFixed(1) + '%';
+  const lbl = $('shuttlelabel');
+  if (lbl) lbl.textContent = shuttleX === 0 ? '⏸' : (shuttleX > 0 ? '▶' : '◀') + Math.abs(shuttleX).toFixed(1) + '×';
   $('bpause').textContent = frozen() ? '▶ 再開' : '⏸ 停止';
   $('bpause').classList.toggle('on', frozen());
   const fr = machine ? machine.frame : 0;
@@ -1238,7 +1250,7 @@ function loop(now) {
     const frameBefore = machine.frame; // stepFrames executed this tick (drift metric)
     // combine keyboard + gamepad into the live matrix / joystick each frame
     applyPad();
-    applyShuttle(); // edge-zone hold jogs the preview (may go live if it reaches the present)
+    applyShuttle(dt); // shuttle knob jogs the preview at its speed (spring-returns to pause)
     if (scrubIndex !== null) {
       // frozen at a scrubbed snapshot (state already restored by the scrub handler)
     } else if (rewinding && history.length > 1) {
