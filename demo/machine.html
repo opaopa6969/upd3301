@@ -75,6 +75,7 @@
     <option value="1" selected>×1</option><option value="2">×2</option>
     <option value="4">×4</option><option value="8">×8</option><option value="16">×16</option>
   </select></label>
+  <label style="color:#778;font-size:12px" title="CPUの実効速度。実機はテキストDMAでバスを取られ数割遅い（既定70%）。音楽はOPNクロック基準で不変なので、上げると『映像が音楽に追いつかず先に曲が終わる』ズレを詰められる。実機相当の目安は70〜85%">CPU <input type="range" id="cpupct" min="70" max="100" value="70" style="vertical-align:middle;width:96px"><span id="cpupctval" style="font-variant-numeric:tabular-nums;min-width:34px;display:inline-block">70%</span></label>
   <label style="color:#778;font-size:12px">DIPSW1 <input id="dip1" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:34px;text-align:center"></label>
   <label style="color:#778;font-size:12px">DIPSW2 <input id="dip2" value="FF" size="2" style="background:#223;color:#cde;border:1px solid #446;border-radius:3px;width:34px;text-align:center"></label>
   <span id="dipnote" style="color:#667;font-size:11px"></span>
@@ -575,6 +576,21 @@ updateCleanBtn();
 // — funny, and handy for skipping disk loads.
 let speedMul = 1;
 $('speed').onchange = (e) => { speedMul = parseFloat(e.target.value) || 1; };
+// CPU effective-speed knob (1 - dmaSteal). Higher = the CPU does more cycles per
+// frame, so CPU-bound game logic (Ys II opening scroll) speeds up while the music
+// tempo — anchored to the OPN clock — stays put. The lever for "music finishes
+// before the video". Persisted; re-applied to each freshly booted machine.
+let cpuThrottlePct = parseInt(localStorage.getItem('upd3301-cpupct') || '70', 10) || 70;
+function applyCpuThrottle() { if (machine && machine.setDmaSteal) machine.setDmaSteal(1 - cpuThrottlePct / 100); }
+{
+  const sl = $('cpupct'); if (sl) { sl.value = String(cpuThrottlePct); $('cpupctval').textContent = cpuThrottlePct + '%'; }
+}
+$('cpupct').oninput = (e) => {
+  cpuThrottlePct = parseInt(e.target.value, 10) || 70;
+  $('cpupctval').textContent = cpuThrottlePct + '%';
+  try { localStorage.setItem('upd3301-cpupct', String(cpuThrottlePct)); } catch {}
+  applyCpuThrottle();
+};
 
 // compositing toggles (see machine88.render). Txt-mask defaults ON (confirmed
 // correct on real games — displayed text, incl. black, occludes graphics);
@@ -711,6 +727,7 @@ function boot() {
       mode: 'n88', sb2,
     });
     machine.dipsw = [dipOf('dip1', 0xdb), dipOf('dip2', 0x79)];
+    applyCpuThrottle(); // re-apply the CPU-speed knob to the fresh machine
     mountDisks(machine);
     // give the OPNA its drum PCM (async; FM works immediately, drums as soon
     // as the ROM lands). No-op on a plain (non-SB2) machine.

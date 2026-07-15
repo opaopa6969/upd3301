@@ -163,6 +163,7 @@ export class Pc8801Machine {
 
     this.frameHz = frameHz; // vertical refresh the emulation is pacing to
     this.clockHz = clockHz;
+    this.dmaSteal = dmaSteal;
     this.frameT = Math.round(clockHz / frameHz * (1 - dmaSteal));
     // the sub board has its own bus — no DMA steal there. Per T-state of
     // main CPU progress, the sub runs this many:
@@ -504,6 +505,19 @@ export class Pc8801Machine {
 
   insertDisk(unit, disk) { this.sub?.insertDisk(unit, disk); return this; }
   ejectDisk(unit) { this.sub?.ejectDisk(unit); return this; }
+
+  // Live-tune the CPU's bus-steal fraction. The music tempo is anchored to the
+  // OPN's own clock (via _opnClkPerCpu), so it stays put; only the CPU's cycles
+  // per frame change. Lower steal = faster CPU-bound game logic (e.g. Ys II's
+  // opening scroll) without touching the music — the knob for "video lags the
+  // music" desync. Recomputes the frameT-derived ratios.
+  setDmaSteal(v) {
+    this.dmaSteal = Math.max(0, Math.min(0.6, v));
+    this.frameT = Math.round(this.clockHz / this.frameHz * (1 - this.dmaSteal));
+    this._opnClkPerCpu = (this.clockHz / this.frameHz) / this.frameT;
+    this.subRatio = (this.clockHz / this.frameHz) / this.frameT;
+    return this;
+  }
 
   update(dt) {
     this._acc = (this._acc ?? 0) + dt;
