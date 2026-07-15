@@ -18,8 +18,14 @@
   .conn.run { background:#143; color:#7fa; }
   .conn.pause { background:#431; color:#fa7; }
   .conn.bad { background:#413; color:#f7a; }
-  #grid { display:grid; grid-template-columns: minmax(430px, 1fr) minmax(430px, 1fr); gap:10px; align-items:start; }
-  @media (max-width: 940px) { #grid { grid-template-columns: 1fr; } }
+  /* IDE-style workspace: panels flow into as many columns as the window fits
+     (masonry-ish via dense auto-flow) instead of two tall stacks. The two source
+     column wrappers use display:contents so their panels become direct grid items
+     without restructuring the HTML. */
+  #grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); grid-auto-flow: row dense; gap:10px; align-items:start; }
+  #grid > .gridcol { display:contents; }
+  #panel-dis { grid-row: span 2; } /* the disassembly is the focus → give it height */
+  .panel.hidden { display:none; }
   #dis { font-size:12px; line-height:1.5; min-height:26em; color:#9db; font-family:inherit; white-space:pre; overflow-x:auto; }
   .disline { cursor:pointer; min-height:1.2em; }
   .disline:hover { background:#1c2430; }
@@ -81,17 +87,22 @@
   <span style="width:12px"></span>
   <span class="lbl" style="color:#778;font-size:12px">構文:</span>
   <button id="bsyntax">Zilog</button>
+  <span style="width:12px"></span>
+  <span id="viewmenu" style="position:relative;display:inline-block">
+    <button id="bview" title="表示するパネルを選ぶ（多機能なので使う物だけ出せる）">🗂 表示パネル ▾</button>
+    <div id="viewlist" style="display:none;position:absolute;top:100%;left:0;margin-top:4px;min-width:220px;max-height:70vh;overflow:auto;background:#191922;border:1px solid #3a3a4c;border-radius:8px;box-shadow:0 8px 26px #000a;padding:6px;z-index:40"></div>
+  </span>
 </div>
 
 <div id="grid">
-  <div style="display:flex;flex-direction:column;gap:10px">
+  <div class="gridcol">
     <div class="panel">
       <h2>レジスタ（pause中にクリックで編集）</h2>
       <div id="regs"></div>
       <div id="reginfo"></div>
       <div id="regshadow"></div>
     </div>
-    <div class="panel">
+    <div class="panel" id="panel-dis">
       <h2>逆アセンブル（▶=PC ●=BP、行クリックでラベル付け）</h2>
       <div id="dis"></div>
       <div class="row" style="margin-bottom:0">
@@ -145,7 +156,7 @@
     </div>
   </div>
 
-  <div style="display:flex;flex-direction:column;gap:10px">
+  <div class="gridcol">
     <div class="panel">
       <h2>メモリ</h2>
       <div class="row" style="margin-top:0">
@@ -272,6 +283,30 @@ start:  LD B,8
 <script type="module">
 import { applyI18n, t, lang } from './i18n.js';
 applyI18n();
+
+// ---- View menu: show/hide panels so the many ICE views can be decluttered ---
+(() => {
+  const grid = document.getElementById('grid'), list = document.getElementById('viewlist'), btn = document.getElementById('bview');
+  if (!grid || !list || !btn) return;
+  const key = (p) => (p.querySelector('h2')?.textContent || p.id || '').slice(0, 28);
+  let hidden; try { hidden = new Set(JSON.parse(localStorage.getItem('ice-hidden') || '[]')); } catch { hidden = new Set(); }
+  const save = () => { try { localStorage.setItem('ice-hidden', JSON.stringify([...hidden])); } catch {} };
+  for (const p of grid.querySelectorAll('.panel')) {
+    if (p.id === 'fdcbox') continue; // tab-controlled, not user-hideable here
+    const k = key(p);
+    if (hidden.has(k)) p.classList.add('hidden');
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 5px;border-radius:5px;cursor:pointer;color:#bcd;font-size:12px';
+    row.onmouseenter = () => { row.style.background = '#20202b'; };
+    row.onmouseleave = () => { row.style.background = ''; };
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !hidden.has(k);
+    cb.onchange = () => { if (cb.checked) { hidden.delete(k); p.classList.remove('hidden'); } else { hidden.add(k); p.classList.add('hidden'); } save(); };
+    const nm = document.createElement('span'); nm.textContent = p.querySelector('h2')?.textContent || k;
+    row.append(cb, nm); list.appendChild(row);
+  }
+  btn.onclick = (e) => { e.stopPropagation(); list.style.display = list.style.display === 'none' ? 'block' : 'none'; };
+  document.addEventListener('click', (e) => { if (!document.getElementById('viewmenu').contains(e.target)) list.style.display = 'none'; });
+})();
 
 // ---- guided tour (ESC / ✕ / outside-click exits any time) ------------------
 import { mountTourButton, showModal } from './tour.js';
