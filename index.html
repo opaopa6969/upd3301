@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>upd3301 — NEC PC-8001/8801 をブラウザで動かす純JSエミュレータ</title>
+<style>
+  :root { color-scheme: dark; --bg:#0d0d11; --fg:#cdd; --dim:#889; --accent:#8fd; --accent2:#5c6; --card:#16161c; --border:#2a2a34; }
+  * { box-sizing: border-box; }
+  body { background:var(--bg); color:var(--fg); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; margin:0; line-height:1.6; }
+  .wrap { max-width:960px; margin:0 auto; padding:32px 20px 80px; }
+  header { text-align:center; padding:48px 0 24px; }
+  h1 { font-size:34px; margin:0 0 6px; color:var(--accent); letter-spacing:1px; }
+  h1 .n { color:var(--fg); }
+  .tag { color:var(--dim); font-size:15px; margin:0 auto; max-width:620px; }
+  .cta { margin:26px 0 8px; display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
+  a.btn { display:inline-block; background:#1c2b22; color:#bfe; border:1px solid var(--accent2); border-radius:8px; padding:12px 22px; text-decoration:none; font-size:15px; font-weight:bold; transition:.15s; }
+  a.btn:hover { background:#26402f; transform:translateY(-1px); }
+  a.btn.alt { background:#1c2230; border-color:#468; color:#bce; }
+  a.btn.alt:hover { background:#243048; }
+  h2 { font-size:20px; color:var(--accent); border-bottom:1px solid var(--border); padding-bottom:8px; margin:44px 0 18px; }
+  h3 { font-size:15px; color:var(--accent2); margin:20px 0 6px; }
+  p, li { font-size:14px; }
+  a { color:#7cf; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:14px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:16px 18px; }
+  .card h3 { margin-top:0; }
+  .card p { color:var(--dim); margin:6px 0 0; font-size:13px; }
+  .feat { list-style:none; padding:0; margin:0; display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:8px 22px; }
+  .feat li { padding-left:22px; position:relative; }
+  .feat li::before { content:"▸"; color:var(--accent2); position:absolute; left:0; }
+  .feat b { color:var(--fg); }
+  code, .mono { font-family:inherit; background:#1e1e26; padding:1px 6px; border-radius:4px; color:#adf; font-size:12px; }
+  .rom-note { background:#20180f; border:1px solid #6a4; border-left-width:4px; border-radius:6px; padding:12px 16px; color:#dda; font-size:13px; }
+  table { border-collapse:collapse; width:100%; margin:12px 0; font-size:12px; }
+  .tscroll { overflow-x:auto; }
+  th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); white-space:nowrap; }
+  th { color:var(--accent); font-weight:normal; border-bottom-color:#3a4; }
+  td.file { color:#bfe; }
+  td.crc { color:#fc8; }
+  td.sha { color:var(--dim); font-size:11px; }
+  .grp { color:var(--accent2); font-weight:bold; padding-top:14px; }
+  footer { text-align:center; color:var(--dim); font-size:12px; margin-top:56px; border-top:1px solid var(--border); padding-top:22px; }
+  .small { color:var(--dim); font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>upd3301<span class="n"> / PC-8801 emulator</span></h1>
+  <p class="tag">NEC μPD3301 CRTC を起点に、<b>PC-8001 / PC-8801</b> をまるごとブラウザで動かす純JavaScriptエミュレータ。依存ゼロ・決定論・ヘッドレステスト可能。Z80×2、μPD765 FDD、YM2203/YM2608(OPNA) まで。</p>
+  <div class="cta">
+    <a class="btn" href="demo/machine.html">▶ PC-8801 を起動する</a>
+    <a class="btn alt" href="demo/index.html">μPD3301 テキストデモ</a>
+    <a class="btn alt" href="https://github.com/opaopa6969/upd3301" target="_blank" rel="noopener">GitHub</a>
+  </div>
+  <p class="small">ROMは同梱していません（後述のBYO-ROM）。ブラウザ内だけで動き、データはどこにも送信されません。</p>
+</header>
+
+<h2>何ができる</h2>
+<ul class="feat">
+  <li><b>PC-8801 (N88-BASIC)</b> をディスクから起動（FDDサブCPU＝2個目のZ80まで実装）</li>
+  <li><b>PC-8001 (N-BASIC)</b> 起動、μPD3301＋μPD8257 DMA の実挙動</li>
+  <li><b>サウンド</b>: YM2203(OPN) FM3+SSG3、<b>サウンドボードII (YM2608/OPNA)</b> FM6＋リズム</li>
+  <li><b>クリーン表示 / CRTシミュレーション</b>（蛍光体残光・管面・走査線）切替</li>
+  <li><b>速度コントロール</b> ×0.25〜×16（早送り／スロー）</li>
+  <li><b>巻き戻し</b>（決定論スナップショットで時間を遡る）</li>
+  <li><b>WebM録画</b>（画面＋音声）</li>
+  <li><b>保存済みディスク選択</b>（IndexedDBに一度入れれば次回から自動起動）</li>
+  <li><b>ICE / IDE</b> デバッガ、逆アセンブラ、Z80アセンブラ内蔵</li>
+  <li><b>決定論</b>: 同seed＋同入力→同出力。`node --test` で全数検証</li>
+</ul>
+
+<h2>デモ一覧</h2>
+<div class="grid">
+  <a class="card" href="demo/machine.html" style="text-decoration:none;color:inherit"><h3>PC-8801 マシン ▶</h3><p>本体。ROM一式＋ディスクで実ゲームが動く。SB2・速度・巻き戻し・録画つき。</p></a>
+  <a class="card" href="demo/index.html" style="text-decoration:none;color:inherit"><h3>μPD3301 デモ</h3><p>CRTCがテキストを描く仕組みを可視化。プロジェクトの原点。</p></a>
+  <a class="card" href="demo/opn-scope.html" style="text-decoration:none;color:inherit"><h3>OPN スコープ</h3><p>YM2203/2608 のレジスタ列を再生してFM/SSG波形を観察。</p></a>
+  <a class="card" href="demo/ide.html" style="text-decoration:none;color:inherit"><h3>IDE / アセンブラ</h3><p>Z80アセンブラ＋逆アセンブラ＋実行環境。</p></a>
+  <a class="card" href="demo/ice.html" style="text-decoration:none;color:inherit"><h3>ICE デバッガ</h3><p>ブレークポイント・ステップ実行・メモリ観察。</p></a>
+  <a class="card" href="demo/rhythm.html" style="text-decoration:none;color:inherit"><h3>ドラムマシン</h3><p>FDDのヘッドシーク音を楽器にする実験。</p></a>
+</div>
+
+<h2>使い方（BYO-ROM）</h2>
+<p>著作権上、NECのROMは同梱できません。実機から吸い出した自分のROMを用意してください。<a href="demo/machine.html">PC-8801デモ</a>で:</p>
+<ol>
+  <li><b>「PC-8801 BIOS一式(n88)」</b>ボタンで <code>n88.rom</code> + <code>n88_0..3.rom</code> + <code>disk.rom</code>（計6ファイル）をまとめて選ぶ → 自動でN88モードへ</li>
+  <li><b>ディスク(.d88)</b> を選ぶ（ドライブ0にマウント）</li>
+  <li><b>リセット</b> → ブータブルなゲームディスクなら起動</li>
+</ol>
+<p class="small">一度読み込めばブラウザのIndexedDBに保存され、次回から自動起動します。ローカルに <code>roms/&lt;機種&gt;/</code> を置いて <code>manifest.json</code> に <span class="mono">"n88": "&lt;dir&gt;"</span> を書けば、サーバから自動ロードもできます。</p>
+
+<h2>ROM ハッシュ表（自分の吸出しの照合用）</h2>
+<div class="rom-note">
+  ここに載っているのは <b>ハッシュ値だけ</b>（ROM本体ではありません）。手元のダンプが正しいか照合に使えます。<br>
+  照合コマンド例: <code>crc32 n88.rom</code> ／ <code>sha1sum n88.rom</code>（サイズも一致するか確認）。<br>
+  基準は <b>PC-8801MC</b> の一式です（機種違いでもN88-BASICのバージョンが同じなら一致することがあります）。
+</div>
+<div class="tscroll">
+<table>
+  <thead><tr><th>ファイル</th><th>用途</th><th>サイズ</th><th>CRC32</th><th>SHA-1</th></tr></thead>
+  <tbody>
+    <tr><td class="grp" colspan="5">PC-8801 N88 BIOS一式</td></tr>
+    <tr><td class="file">n88.rom</td><td>N88-BASIC本体</td><td>32,768</td><td class="crc">356D5719</td><td class="sha">5d9ba80d593a5119f52aae1ccd61a1457b4a89a1</td></tr>
+    <tr><td class="file">n88_0.rom</td><td>拡張バンク0</td><td>8,192</td><td class="crc">A72697D7</td><td class="sha">5aedbc5916d67ef28767a2b942864765eea81bb8</td></tr>
+    <tr><td class="file">n88_1.rom</td><td>拡張バンク1</td><td>8,192</td><td class="crc">7AD5D943</td><td class="sha">4ae4d37409ff99411a623da9f6a44192170a854e</td></tr>
+    <tr><td class="file">n88_2.rom</td><td>拡張バンク2</td><td>8,192</td><td class="crc">1D6277B6</td><td class="sha">dd9c3e50169b75bb707ef648f20d352e6a8bcfe4</td></tr>
+    <tr><td class="file">n88_3.rom</td><td>拡張バンク3</td><td>8,192</td><td class="crc">692CBCD8</td><td class="sha">af452aed79b072c4d17985830b7c5dca64d4b412</td></tr>
+    <tr><td class="file">disk.rom</td><td>FDDサブCPU (μPD765)</td><td>8,192</td><td class="crc">A222ECF0</td><td class="sha">79e9c0786a14142f7a83690bf41fb4f60c5c1004</td></tr>
+    <tr><td class="file">n80.rom</td><td>N-BASIC(N80) ※任意</td><td>32,768</td><td class="crc">8A2A1E17</td><td class="sha">06dae1db384aa29d81c5b6ed587877e7128fcb35</td></tr>
+    <tr><td class="grp" colspan="5">漢字ROM（漢字表示用・実装予定）</td></tr>
+    <tr><td class="file">kanji1.rom</td><td>第1水準漢字</td><td>131,072</td><td class="crc">6178BD43</td><td class="sha">82e11a177af6a5091dd67f50a2f4bafda84d6556</td></tr>
+    <tr><td class="file">kanji2.rom</td><td>第2水準漢字</td><td>131,072</td><td class="crc">376EB677</td><td class="sha">bcf96584e2ba362218b813be51ea21573d1a2a78</td></tr>
+    <tr><td class="grp" colspan="5">PC-8001</td></tr>
+    <tr><td class="file">N80_2.ROM</td><td>PC-8001mkII N-BASIC</td><td>32,768</td><td class="crc">03CCE7B6</td><td class="sha">c12d34e42021110930fed45a8af98db52136f1fb</td></tr>
+  </tbody>
+</table>
+</div>
+<p class="small">※ CRC32/SHA-1 が一致しなくても、機種・BASICバージョン違いで別ハッシュの正規ROMがあります。サイズが合っていればまず起動は試せます。</p>
+
+<h2>技術メモ</h2>
+<ul class="feat">
+  <li><b>純JS・依存ゼロ</b>: レジスタin → サンプル/ピクセルout</li>
+  <li><b>決定論</b>: <code>Math.random</code>不使用、状態はすべてスナップショット可能</li>
+  <li><b>2個のZ80</b>: 本体CPU＋FDDサブCPUが8255ペアでハンドシェイク</li>
+  <li><b>OPN/OPNA</b>: LOG-SIN→EXP の本物の信号経路、ボード出力段まで再現</li>
+  <li><b>ヘッドレステスト</b>: <code>node --test</code>（250+テスト）</li>
+</ul>
+
+<footer>
+  upd3301 — μPD3301 memorial project ・ MIT-ish / BYO-ROM ・
+  <a href="https://github.com/opaopa6969/upd3301" target="_blank" rel="noopener">github.com/opaopa6969/upd3301</a><br>
+  <span class="small">3301! 3301! 🍺</span>
+</footer>
+
+</div>
+</body>
+</html>
