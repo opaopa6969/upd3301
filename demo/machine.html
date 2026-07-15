@@ -340,6 +340,13 @@ $('bpng').onclick = () => {
       for (let r = 0; r < crtc.rows; r++) { let n = 0; for (let c = 0; c < crtc.cols; c++) if ((crtc.cells[r * crtc.cols + c] || 0) > 0x20) n++; fill.push(n); }
       console.log(`[dma2] addr=${(d2.addr || 0).toString(16)} count=${d2.count} base=${(d2.baseAddr || 0).toString(16)} baseCount=${d2.baseCount} autoload=${machine.dmac.autoload} ve=${crtc.ve}`);
       console.log(`[textrows] nonblank/row(0..${crtc.rows - 1}): ${fill.join(',')}`);
+      // sample cells + per-cell colour/attr for a top/mid/bottom row (first 12 cols)
+      const hx = (v) => (v || 0).toString(16).padStart(2, '0');
+      for (const r of [0, (crtc.rows >> 1), crtc.rows - 1]) {
+        const cs = [], as = [];
+        for (let c = 0; c < 12; c++) { cs.push(hx(crtc.cells[r * crtc.cols + c])); as.push(hx(crtc.attrs[r * crtc.cols + c])); }
+        console.log(`[row ${r}] cells ${cs.join(' ')} | attrs ${as.join(' ')}`);
+      }
     } catch (e) { console.log('[diag] ' + e.message); }
   }
   const a = document.createElement('a'); a.download = `upd3301-raw-f${machine.frame}.png`; a.href = c.toDataURL('image/png'); a.click();
