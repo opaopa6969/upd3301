@@ -69,6 +69,14 @@ export class Pc8801Machine {
     // and boots from them instead of the sub-system.
     this.ram = new Uint8Array(0x10000).fill(0xff);
     this.gvram = [new Uint8Array(GVRAM_SIZE), new Uint8Array(GVRAM_SIZE), new Uint8Array(GVRAM_SIZE)];
+    // Dedicated 4 KB TEXT VRAM (mkII SR V2). It is PHYSICALLY separate from main
+    // RAM: the CRTC's DMA always reads this, while the CPU sees it at 0xF000-
+    // 0xFFFF only when port32 bit4 == 0 (bit4 == 1 swaps in main RAM there as a
+    // scratch area). Ys II fills the top/bottom mask into tvram, then uses main
+    // RAM at 0xF000 as scroll scratch — without the split we were rendering the
+    // scratch (full-screen magenta semigraphics) as the text plane. (M88:
+    // pc88.cpp ConnectRd(GetTVRAM(),0xf000,0x1000); memory.cpp UpdateF0.)
+    this.tvram = new Uint8Array(0x1000);
 
     // bank state
     this.romEnabled = true; // port 31h bit1 = 0 → ROM at 0000-7FFF
@@ -139,7 +147,10 @@ export class Pc8801Machine {
     // shows on the right rows. 64 rows max × 8 entries × 3 guns.
     this.rowPal = new Uint8Array(64 * 24);
     this._crtcRow = 0;
-    this.dmac = new Upd8257({ readMemory: (a) => this.ram[a & 0xffff] });
+    // the CRTC pulls text via DMA channel 2 from 0xF000+; in V2 that is the
+    // dedicated tvram, NOT main RAM (so a game scratching main-RAM 0xF000 can't
+    // corrupt the displayed text). Other addresses read main RAM as before.
+    this.dmac = new Upd8257({ readMemory: (a) => { a &= 0xffff; return (this._tvramOn && a >= 0xf000) ? this.tvram[a - 0xf000] : this.ram[a]; } });
     this.width80 = true;
 
     this.frameHz = frameHz; // vertical refresh the emulation is pacing to
@@ -175,8 +186,13 @@ export class Pc8801Machine {
     if (a >= 0xc000 && this.gvramWindow >= 0) {
       return this.gvram[this.gvramWindow][a - 0xc000];
     }
+    if (a >= 0xf000 && this._tvramOn && (this._port32 & 0x10) === 0) return this.tvram[a - 0xf000];
     return this.ram[a];
   }
+
+  // V2 (mkII SR) dedicated text VRAM is active: N88 mode with the V2 DIP bit set
+  // (port31 read bit6). Priority at 0xF000 is GVRAM window > tvram > main RAM.
+  get _tvramOn() { return !this.n80mode && (this.dipsw[1] & 0x40) !== 0; }
 
   // the ALU window is open when 32h b6 (extended VRAM) and 35h b7 (VRAM, not
   // main RAM) are both set — otherwise C000-FFFF is plain RAM or one plane
@@ -228,6 +244,7 @@ export class Pc8801Machine {
       this.gvram[this.gvramWindow][a - 0xc000] = v;
       return;
     }
+    if (a >= 0xf000 && this._tvramOn && (this._port32 & 0x10) === 0) { this.tvram[a - 0xf000] = v; return; }
     this.ram[a] = v; // RAM is always writable underneath the ROM
   }
 
@@ -512,6 +529,7 @@ export class Pc8801Machine {
     const s = {
       cpu: this.cpu.getState(),
       ram: this.ram.slice(),
+      tvram: this.tvram.slice(),
       gvram: this.gvram.map((p) => p.slice()),
       palette: this.palette.slice(),
       keys: this.keys.slice(),
@@ -559,6 +577,7 @@ export class Pc8801Machine {
   restore(s) {
     this.cpu.setState(s.cpu);
     this.ram.set(s.ram);
+    if (s.tvram) this.tvram.set(s.tvram);
     s.gvram.forEach((p, i) => this.gvram[i].set(p));
     this.palette.set(s.palette);
     for (let r = 0; r < 64; r++) this.rowPal.set(this.palette, r * 24); // restored frames: uniform (raster rebuilt on next stepFrame)
