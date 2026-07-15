@@ -9,11 +9,10 @@ import { Pc8801Machine } from './machine88.js';
 const main = () => new Uint8Array(0x8000).fill(0xff);
 // a 128 KB ROM whose byte i is a known function of i, so reads are checkable
 const synthRom = () => { const r = new Uint8Array(0x20000); for (let i = 0; i < r.length; i++) r[i] = (i * 7 + 3) & 0xff; return r; };
-// the split-glyph addressing the driver uses (see machine88.in): a glyph is
-// [16 left bytes, 16 right bytes]; addr = wordBase + line; 0xE8=left, 0xE9=right.
-const kanjiByte = (addr, port, len) => (((addr & 0xfff0) << 1) | ((port & 1) << 4) | (addr & 0x0f)) & (len - 1);
+// the driver walks consecutive word addresses; 0xE8 = even byte, 0xE9 = odd.
+const kanjiByte = (addr, port, len) => ((addr << 1) | (port & 1)) & (len - 1);
 
-test('kanji1: address latch + split-glyph read (left=0xE8, right=0xE9)', () => {
+test('kanji1: address latch (0xE8/0xE9) + data read = rom[(addr<<1)|(port&1)]', () => {
   const rom = synthRom();
   const m = new Pc8801Machine({ main: main(), kanji: rom });
   for (const addr of [0x0000, 0x1234, 0x7fff, 0xffff, 0x0905]) {
@@ -24,16 +23,15 @@ test('kanji1: address latch + split-glyph read (left=0xE8, right=0xE9)', () => {
   }
 });
 
-test('kanji1: left/right halves are 16 bytes apart (split, not interleaved)', () => {
+test('kanji1: consecutive addresses yield consecutive ROM bytes (the glyph in order)', () => {
   const rom = synthRom();
   const m = new Pc8801Machine({ main: main(), kanji: rom });
-  // for a glyph-aligned base, row L left = rom[base*2 + L], right = rom[base*2 + 16 + L]
-  const wordBase = 0x0900; // glyph byte base 0x1200
-  for (let L = 0; L < 16; L++) {
-    m.out(0xe8, (wordBase + L) & 0xff); m.out(0xe9, ((wordBase + L) >> 8) & 0xff);
-    assert.equal(m.in(0xe8), rom[wordBase * 2 + L], `left row ${L}`);
-    assert.equal(m.in(0xe9), rom[wordBase * 2 + 16 + L], `right row ${L}`);
+  const base = 0x0900; const got = [];
+  for (let w = 0; w < 16; w++) { // 16 words = 32 bytes = one glyph
+    m.out(0xe8, (base + w) & 0xff); m.out(0xe9, ((base + w) >> 8) & 0xff);
+    got.push(m.in(0xe8), m.in(0xe9));
   }
+  for (let i = 0; i < 32; i++) assert.equal(got[i], rom[base * 2 + i], `byte ${i} is consecutive`);
 });
 
 test('kanji2: level-2 ROM on its own ports (0xEC/0xED), independent address', () => {
