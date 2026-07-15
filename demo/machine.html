@@ -119,11 +119,11 @@ let machine = null, romBytes = null;
 // + n88_0..3.rom (4×8KB extension banks, concatenated at 2000h stride into a
 // 32KB `ext`) + disk.rom (2KB FDD sub-CPU ROM). n80.rom is optional (its own
 // N-mode). rom88 holds those assembled images; sb2 gates the Sound Board II.
-const rom88 = { main: null, ext: null, sub: null, n80: null };
+const rom88 = { main: null, ext: null, sub: null, n80: null, kanji: null };
 let sb2 = false;
 // IndexedDB roles for the 8801 set — romstore.js is role-keyed and role-agnostic,
 // so these live alongside the 8001's 'rom'/'font'/'disk' with no schema change.
-const R88 = { main: 'n88main', ext: ['n88ext0', 'n88ext1', 'n88ext2', 'n88ext3'], sub: 'n88sub', n80: 'n88n80' };
+const R88 = { main: 'n88main', ext: ['n88ext0', 'n88ext1', 'n88ext2', 'n88ext3'], sub: 'n88sub', n80: 'n88n80', kanji: 'n88kanji' };
 const has88Set = () => !!(rom88.main && rom88.ext && rom88.sub);
 Object.defineProperty(window, '__machine', { get: () => machine }); // live handle for the ICE window (demo/ice.html)
 
@@ -165,11 +165,13 @@ async function autoLoad88(dir) {
     for (let i = 0; i < 4; i++) ext.set((await fetchRom(`${dir}/n88_${i}.rom`)).subarray(0, 0x2000), i * 0x2000);
     rom88.main = main; rom88.sub = sub; rom88.ext = ext;
     try { rom88.n80 = await fetchRom(`${dir}/n80.rom`); } catch { /* n80 optional */ }
+    try { rom88.kanji = await fetchRom(`${dir}/kanji1.rom`); } catch { /* kanji optional */ }
     try { // remember for offline / next visit (same roles as the file picker)
       await putRom(R88.main, 'n88.rom', main);
       await putRom(R88.sub, 'disk.rom', sub);
       for (let i = 0; i < 4; i++) await putRom(R88.ext[i], `n88_${i}.rom`, ext.subarray(i * 0x2000, (i + 1) * 0x2000));
       if (rom88.n80) await putRom(R88.n80, 'n80.rom', rom88.n80);
+      if (rom88.kanji) await putRom(R88.kanji, 'kanji1.rom', rom88.kanji);
     } catch { /* IndexedDB optional */ }
     return has88Set();
   } catch { return false; }
@@ -250,6 +252,7 @@ function classify88(name) {
   if (/^n88\.rom$/.test(b)) return { role: 'main' };
   if (/^disk\.rom$/.test(b)) return { role: 'sub' };
   if (/^n80\.rom$/.test(b)) return { role: 'n80' };
+  if (/^kanji1?\.rom$/.test(b)) return { role: 'kanji' };
   return null;
 }
 async function assemble88(files) {
@@ -263,6 +266,7 @@ async function assemble88(files) {
     else if (c.role === 'sub') { rom88.sub = bytes; await putRom(R88.sub, f.name, bytes); gotSub = true; }
     else if (c.role === 'n80') { rom88.n80 = bytes; await putRom(R88.n80, f.name, bytes); gotN80 = true; }
     else if (c.role === 'ext') { banks[c.bank] = bytes; await putRom(R88.ext[c.bank], f.name, bytes); }
+    else if (c.role === 'kanji') { rom88.kanji = bytes; await putRom(R88.kanji, f.name, bytes); }
   }
   if (banks.some((b) => b)) {
     const ext = new Uint8Array(0x8000);
@@ -413,6 +417,8 @@ async function restore88Set() {
   if (sub) rom88.sub = sub.bytes;
   const n80 = await getRom(R88.n80);
   if (n80) rom88.n80 = n80.bytes;
+  const kanji = await getRom(R88.kanji);
+  if (kanji) rom88.kanji = kanji.bytes;
   const banks = await Promise.all(R88.ext.map((r) => getRom(r)));
   if (banks.some((b) => b)) {
     const ext = new Uint8Array(0x8000);
@@ -488,10 +494,15 @@ updateCleanBtn();
 let speedMul = 1;
 $('speed').onchange = (e) => { speedMul = parseFloat(e.target.value) || 1; };
 
-// experimental compositing toggles (see machine88.render) — off = plain/safe
-let txtOpaque = false, clipActive = false;
-$('txtopaque').onchange = (e) => { txtOpaque = e.target.checked; };
-$('clipactive').onchange = (e) => { clipActive = e.target.checked; };
+// compositing toggles (see machine88.render). Txt-mask defaults ON (confirmed
+// correct on real games — displayed text, incl. black, occludes graphics);
+// edge-clip stays opt-in. Both persist.
+let txtOpaque = localStorage.getItem('upd3301-txtmask') !== '0';
+let clipActive = localStorage.getItem('upd3301-clip') === '1';
+$('txtopaque').checked = txtOpaque;
+$('clipactive').checked = clipActive;
+$('txtopaque').onchange = (e) => { txtOpaque = e.target.checked; localStorage.setItem('upd3301-txtmask', txtOpaque ? '1' : '0'); };
+$('clipactive').onchange = (e) => { clipActive = e.target.checked; localStorage.setItem('upd3301-clip', clipActive ? '1' : '0'); };
 const renderOpts = () => ({ textOpaque: txtOpaque, clipActive });
 
 // ---- rewind (deterministic time-travel) -----------------------------------
@@ -567,7 +578,7 @@ function boot() {
     // n80.rom for its N-mode. The class reads DIP 30h/31h internally, so we
     // just hand it the switch bytes (DB/79 = N88 V2). sb2 grows an OPNA.
     machine = new Pc8801Machine({
-      main: rom88.main, ext: rom88.ext, sub: rom88.sub, n80: rom88.n80,
+      main: rom88.main, ext: rom88.ext, sub: rom88.sub, n80: rom88.n80, kanji: rom88.kanji,
       mode: 'n88', sb2,
     });
     machine.dipsw = [dipOf('dip1', 0xdb), dipOf('dip2', 0x79)];

@@ -36,11 +36,24 @@ export class Pc8801Machine {
   constructor({
     main, ext = null, n80 = null, sub = null, mode = 'n88',
     frameHz = 60, clockHz = 3_993_600, dmaSteal = 0.3, sb2 = false,
+    kanji = null, kanji2 = null,
   } = {}) {
     if (!main || main.length < 0x8000) throw new Error('need a 32KB N88 main ROM');
     this.romMain = main;
     this.romExt = ext; // 4 x 8KB banks (6000-7FFF)
     this.romN80 = n80;
+
+    // Kanji ROM (第1/第2水準, 128 KB each). PC-8801 games read a 16×16 glyph
+    // through I/O ports (0xE8/0xE9 for level-1, 0xEC/0xED for level-2) and blit
+    // it into GVRAM themselves — the text screen has no hardware kanji mode. So
+    // implementing the READ ports is all it takes for kanji to appear (in the
+    // graphics layer we already render). Without it those reads returned 0xFF →
+    // the game blitted an all-ones 16×16 block = the "white box" per kanji.
+    // Address model (QUASI88/xmil): a 16-bit word address; byte = rom[addr*2 +
+    // (port&1)]. The game computes the address (incl. the row), so we just index.
+    this.kanjiRom = kanji ? (kanji instanceof Uint8Array ? kanji : Uint8Array.from(kanji)) : null;
+    this.kanji2Rom = kanji2 ? (kanji2 instanceof Uint8Array ? kanji2 : Uint8Array.from(kanji2)) : null;
+    this.kanjiAddr = 0; this.kanji2Addr = 0;
 
     // disk sub-system: a second Z80 running disk.rom, reached only through
     // the crossed 8255 pair at FCh-FFh. Without a sub ROM the ports float
@@ -241,6 +254,16 @@ export class Pc8801Machine {
       if (port === 0xaa || port === 0xab) return this.opna.readStatus(); // bank1 status (ADPCM flags: stubbed)
     }
     if (port === 0xe2 || port === 0xe3) return 0xff; // EMM
+    // Kanji ROM data: byte = rom[(addr<<1) | (port&1)]. 0xE8/0xE9 = level-1,
+    // 0xEC/0xED = level-2. No ROM loaded → 0xFF (the game then draws white boxes).
+    if (port === 0xe8 || port === 0xe9) {
+      if (!this.kanjiRom) return 0xff;
+      return this.kanjiRom[((this.kanjiAddr << 1) | (port & 1)) & (this.kanjiRom.length - 1)];
+    }
+    if (port === 0xec || port === 0xed) {
+      if (!this.kanji2Rom) return 0xff;
+      return this.kanji2Rom[((this.kanji2Addr << 1) | (port & 1)) & (this.kanji2Rom.length - 1)];
+    }
     // FCh-FFh: the main half of the 8255 pair to the disk sub-system. With
     // no sub board the inputs float high and the boot ROM's BC×D timeout
     // loop expires into BASIC; with one, the two ROMs do the real handshake.
@@ -299,6 +322,10 @@ export class Pc8801Machine {
         this._port71 = v;
         this.extMapped = (v & 1) === 0;
         return;
+      case 0xe8: this.kanjiAddr = (this.kanjiAddr & 0xff00) | v; return;  // kanji1 addr low
+      case 0xe9: this.kanjiAddr = (this.kanjiAddr & 0x00ff) | (v << 8); return; // kanji1 addr high
+      case 0xec: this.kanji2Addr = (this.kanji2Addr & 0xff00) | v; return; // kanji2 addr low
+      case 0xed: this.kanji2Addr = (this.kanji2Addr & 0x00ff) | (v << 8); return; // kanji2 addr high
       case 0xe4: this.intLevels = (v & 8) ? 7 : (v & 7); return; // 8214 threshold
       case 0xe6: // per-source enable; disabling a source drops its pending flag
         this.intMaskBits = v;
