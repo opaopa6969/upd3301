@@ -550,16 +550,8 @@ async function loadSavedDisk(role) {
   const rec = await getRom(role);
   if (!rec) return;
   try {
-    const imgs = parseD88All(rec.bytes);
-    await putRom('disk', rec.name, rec.bytes); // becomes the last-used / auto-boot disk
-    ingestDisks(rec.name, imgs, rec.bytes);
-    mountDrives(machine);
-    const s = summarize(imgs[0]);
-    const extra = imgs.length > 1 ? `  (計${imgs.length}枚をプールに追加)` : '';
-    $('dipnote').textContent = `${rec.name}: ${s.name || '(no label)'} ${s.media} ${s.tracks}trk` + extra +
-      '  — ' + (bootMode === 'n88' && has88Set()
-        ? t('ドライブに割当済み（ドライブ1/2で入替可・リセットで起動）')
-        : t('起動にはN88モード＋PC-8801 BIOS一式が必要'));
+    await putRom('disk', rec.name, rec.bytes); // last-used / auto-boot disk
+    playDisk(rec.name, parseD88All(rec.bytes), rec.bytes); // load → assign drives → boot
   } catch (err) { $('dipnote').textContent = 'saved disk: ' + err.message; }
 }
 $('savedisk').onchange = (e) => { if (e.target.value) loadSavedDisk(e.target.value); };
@@ -603,17 +595,34 @@ async function useFolder(dir) {
   if (has88Set() && bootMode !== 'n88') switchMode('n88'); // BIOS now present → boot N88 so disks run
   renderDiskList();
 }
+// "play this disk": make it THE game — reset the pool to it, assign the drives,
+// and (on an 8801 with BIOS) reset so it actually boots. Picking from the browser
+// means "I want to play this", so a click should just start it.
+function playDisk(name, imgs, bytes) {
+  diskPool = []; driveAssign = [-1, -1]; sessionFiles = []; disks = [];
+  ingestDisks(name, imgs, bytes); // auto-fills drive1(→unit0)/drive2(→unit1)
+  refreshDriveSelectors();
+  const bootable = machine instanceof Pc8801Machine && bootMode === 'n88' && has88Set();
+  if (bootable) boot(); else mountDrives(machine); // boot() rebuilds + mounts + starts the disk
+  const s = summarize(imgs[0]);
+  $('dipnote').textContent = `${name}: ${s.name || '(no label)'} ${s.media} ${s.tracks}trk` + (imgs.length > 1 ? `  (計${imgs.length}枚)` : '') +
+    '  — ' + (bootable ? t('起動しました') : t('起動にはN88モード＋PC-8801 BIOS一式が必要'));
+}
 async function loadFolderDisk(item) {
   try {
     const file = await item.handle.getFile();
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const imgs = parseD88All(bytes);
-    await putRom('disk', item.name, bytes);
-    ingestDisks(item.name, imgs, bytes); mountDrives(machine);
-    const s = summarize(imgs[0]);
-    $('dipnote').textContent = `${item.name}: ${s.name || '(no label)'} ${s.media} ${s.tracks}trk` + (imgs.length > 1 ? `  (計${imgs.length}枚)` : '') +
-      '  — ' + (bootMode === 'n88' && has88Set() ? t('ドライブに割当済み（リセットで起動）') : t('起動にはN88モード＋PC-8801 BIOS一式が必要'));
+    await putRom('disk', item.name, bytes); // remember as last-used (auto-boot next visit)
+    playDisk(item.name, parseD88All(bytes), bytes);
   } catch (err) { $('dipnote').textContent = 'folder disk: ' + err.message; }
+}
+async function saveFolderDiskToLibrary(item) {
+  try {
+    const bytes = new Uint8Array(await (await item.handle.getFile()).arrayBuffer());
+    await putRom('disk:' + item.name, item.name, bytes); // into the saved-disk library
+    refreshDiskList(); await openDiskBrowser(true); // reload the idb list so it shows as 💾
+    $('dipnote').textContent = `💾 「${item.name}」を保存済みに追加した`;
+  } catch (err) { $('dipnote').textContent = 'save: ' + err.message; }
 }
 function ensureDiskBrowser() {
   if ($('diskbrowser')) return;
@@ -647,7 +656,7 @@ async function renderDiskList() {
   const q = ($('diskfilter').value || '').toLowerCase();
   const kb = (n) => (n / 1024 < 1024 ? (n / 1024 | 0) + 'KB' : (n / 1048576).toFixed(1) + 'MB');
   const items = [
-    ...folderDisks.map((i) => ({ label: i.path, icon: '📁', load: () => loadFolderDisk(i), del: null })),
+    ...folderDisks.map((i) => ({ label: i.path, icon: '📁', load: () => loadFolderDisk(i), save: () => saveFolderDiskToLibrary(i), del: null })),
     ..._idbItems.map((i) => ({ label: i.name, icon: '💾', sub: kb(i.size), load: () => loadSavedDisk(i.role), del: async () => { if (confirm(`「${i.name}」を保存済みから削除？`)) { try { await deleteRom(i.role); } catch {} await openDiskBrowser(true); refreshDiskList(); } } })),
   ];
   const shown = items.filter((i) => i.label.toLowerCase().includes(q));
@@ -660,6 +669,7 @@ async function renderDiskList() {
     row.onmouseenter = () => { row.style.background = '#20202b'; };
     row.onmouseleave = () => { row.style.background = ''; };
     row.innerHTML = `<span style="flex:1;color:#cde;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${i.icon} ${i.label}</span>${i.sub ? `<span style="color:#778;font-size:12px">${i.sub}</span>` : ''}`;
+    if (i.save) { const sv = document.createElement('button'); sv.textContent = '💾'; sv.title = 'この1本を保存済みライブラリに入れる（フォルダ無しでも選べる）'; sv.style.cssText = 'padding:2px 6px;font-size:12px'; sv.onclick = (e) => { e.stopPropagation(); i.save(); }; row.appendChild(sv); }
     if (i.del) { const del = document.createElement('button'); del.textContent = '🗑'; del.style.cssText = 'padding:2px 6px;font-size:12px'; del.onclick = (e) => { e.stopPropagation(); i.del(); }; row.appendChild(del); }
     row.onclick = () => { i.load(); $('diskbrowser').style.display = 'none'; };
     list.appendChild(row);
