@@ -25,6 +25,7 @@ export class Pc8001Machine {
     this.romTop = Math.min(0x8000, rom.length);
     this.sys.memory.set(rom.subarray(0, this.romTop), 0);
     this.keys = new Uint8Array(12).fill(0xff); // matrix rows, active low
+    this.frameHz = frameHz; // vertical refresh the emulation paces to
     this.frameT = Math.round(clockHz / frameHz * (1 - dmaSteal));
     this.tInFrame = 0;
     this.frame = 0;
@@ -141,7 +142,7 @@ export class Pc8001Machine {
 
   update(dt) {
     this._acc = (this._acc ?? 0) + dt;
-    const period = 1 / 60;
+    const period = 1 / this.frameHz; // pace to the machine's own refresh (default 60)
     while (this._acc >= period) {
       this._acc -= period;
       this.stepFrame();

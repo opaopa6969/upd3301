@@ -123,6 +123,8 @@ export class Pc8801Machine {
     this.dmac = new Upd8257({ readMemory: (a) => this.ram[a & 0xffff] });
     this.width80 = true;
 
+    this.frameHz = frameHz; // vertical refresh the emulation is pacing to
+    this.clockHz = clockHz;
     this.frameT = Math.round(clockHz / frameHz * (1 - dmaSteal));
     // the sub board has its own bus — no DMA steal there. Per T-state of
     // main CPU progress, the sub runs this many:
@@ -405,7 +407,10 @@ export class Pc8801Machine {
 
   update(dt) {
     this._acc = (this._acc ?? 0) + dt;
-    const period = 1 / 60;
+    // pace to the machine's OWN refresh, not a hard-coded 60 — so constructing
+    // with the real PC-8801 vertical rate makes the emulation (and the music
+    // tempo that rides its clock) run at true speed. Default 60 → unchanged.
+    const period = 1 / this.frameHz;
     while (this._acc >= period) { this._acc -= period; this.stepFrame(); }
     return this;
   }
