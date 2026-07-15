@@ -468,6 +468,7 @@ for (const id of ['dip1', 'dip2']) $(id).onchange = () => boot();
 let diskPool = [];               // { name, disk }
 let driveAssign = [-1, -1];      // pool index per drive (unit 0/1), -1 = empty
 let disks = [];                  // kept: the most-recently-loaded file's images
+let sessionFiles = [];           // raw .d88 bytes ingested this session (for resume)
 
 function addToPool(fileName, imgs) {
   const start = diskPool.length;
@@ -497,14 +498,16 @@ function mountDrives(m) {
   }
 }
 const mountDisks = mountDrives; // (kept name for boot()/restoreFromStore call sites)
-$('drive0').onchange = (e) => { driveAssign[0] = parseInt(e.target.value, 10); mountDrives(machine); };
-$('drive1').onchange = (e) => { driveAssign[1] = parseInt(e.target.value, 10); mountDrives(machine); };
+$('drive0').onchange = (e) => { driveAssign[0] = parseInt(e.target.value, 10); mountDrives(machine); if (typeof saveSessionMeta === 'function') saveSessionMeta(); };
+$('drive1').onchange = (e) => { driveAssign[1] = parseInt(e.target.value, 10); mountDrives(machine); if (typeof saveSessionMeta === 'function') saveSessionMeta(); };
 
 // load a .d88 file: add its image(s) to the pool, auto-fill any empty drives
 // (image0→drive1, image1→drive2) so single/two-disk games "just work".
-function ingestDisks(fileName, imgs) {
+// `bytes` (the raw .d88) is remembered so a session can be resumed after a reload.
+function ingestDisks(fileName, imgs, bytes) {
   const start = addToPool(fileName, imgs);
   for (const u of [0, 1]) if (driveAssign[u] < 0 && diskPool[start + u]) driveAssign[u] = start + u;
+  if (bytes) { sessionFiles.push({ name: fileName, bytes: bytes.slice ? bytes.slice() : new Uint8Array(bytes) }); if (typeof saveSessionMeta === 'function') saveSessionMeta(); }
   disks = imgs;
   refreshDriveSelectors();
 }
@@ -517,7 +520,7 @@ $('fdisk').onchange = async (e) => {
     await putRom('disk', f.name, diskBytes);            // 'disk' = last-used (auto-boot)
     await putRom('disk:' + f.name, f.name, diskBytes);  // named slot for the library
     refreshStore(); refreshDiskList();
-    ingestDisks(f.name, imgs);
+    ingestDisks(f.name, imgs, diskBytes);
     mountDrives(machine);
     const s = summarize(imgs[0]);
     const extra = imgs.length > 1 ? `  (計${imgs.length}枚をプールに追加)` : '';
@@ -549,7 +552,7 @@ async function loadSavedDisk(role) {
   try {
     const imgs = parseD88All(rec.bytes);
     await putRom('disk', rec.name, rec.bytes); // becomes the last-used / auto-boot disk
-    ingestDisks(rec.name, imgs);
+    ingestDisks(rec.name, imgs, rec.bytes);
     mountDrives(machine);
     const s = summarize(imgs[0]);
     const extra = imgs.length > 1 ? `  (計${imgs.length}枚をプールに追加)` : '';
@@ -606,7 +609,7 @@ async function loadFolderDisk(item) {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const imgs = parseD88All(bytes);
     await putRom('disk', item.name, bytes);
-    ingestDisks(item.name, imgs); mountDrives(machine);
+    ingestDisks(item.name, imgs, bytes); mountDrives(machine);
     const s = summarize(imgs[0]);
     $('dipnote').textContent = `${item.name}: ${s.name || '(no label)'} ${s.media} ${s.tracks}trk` + (imgs.length > 1 ? `  (計${imgs.length}枚)` : '') +
       '  — ' + (bootMode === 'n88' && has88Set() ? t('ドライブに割当済み（リセットで起動）') : t('起動にはN88モード＋PC-8801 BIOS一式が必要'));
@@ -681,6 +684,48 @@ async function openDiskBrowser(keepOpen) {
   renderDiskList();
 }
 $('bdiskbrowse').onclick = () => openDiskBrowser(false);
+// ---- session auto-save & resume: survive an accidental reset / mode-switch /
+// reload. A deterministic snapshot + the mounted disks + boot config are stashed
+// in IndexedDB every few seconds and on tab-hide; next visit offers to resume. --
+const _ssdb = () => new Promise((res, rej) => { const r = indexedDB.open('upd3301-sess', 1); r.onupgradeneeded = () => r.result.createObjectStore('s'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+async function _ssput(k, v) { try { const db = await _ssdb(); db.transaction('s', 'readwrite').objectStore('s').put(v, k); } catch {} }
+async function _ssget(k) { try { const db = await _ssdb(); return await new Promise((res) => { const rq = db.transaction('s', 'readonly').objectStore('s').get(k); rq.onsuccess = () => res(rq.result || null); rq.onerror = () => res(null); }); } catch { return null; } }
+function clearSession() { _ssput('meta', null); _ssput('snap', null); }
+function saveSessionMeta() { if (!(machine instanceof Pc8801Machine) || !sessionFiles.length) return; _ssput('meta', { bootMode, sb2: $('sb2').checked, dipsw: [dipOf('dip1', 0xdb), dipOf('dip2', 0x79)], driveAssign: driveAssign.slice(), files: sessionFiles.map((f) => ({ name: f.name, bytes: f.bytes })) }); }
+function saveSessionSnap() { if (!machine || !canSnap() || frozen() || machine.frame < 60 || !(machine instanceof Pc8801Machine) || !sessionFiles.length) return; try { _ssput('snap', { snap: machine.snapshot(), frame: machine.frame, savedAt: Date.now() }); } catch {} }
+setInterval(saveSessionSnap, 8000);
+window.addEventListener('pagehide', saveSessionSnap);
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveSessionSnap(); });
+async function resumeSession(meta, snapRec) {
+  try {
+    $('sb2').checked = !!meta.sb2;
+    $('dip1').value = (meta.dipsw[0] & 0xff).toString(16).toUpperCase().padStart(2, '0');
+    $('dip2').value = (meta.dipsw[1] & 0xff).toString(16).toUpperCase().padStart(2, '0');
+    if (typeof syncDipUI === 'function') syncDipUI();
+    bootMode = meta.bootMode;
+    diskPool = []; sessionFiles = []; driveAssign = [-1, -1]; disks = [];
+    boot(); // rebuild the machine (ROMs + mode + dipsw + sb2)
+    for (const f of (meta.files || [])) { try { ingestDisks(f.name, parseD88All(f.bytes), f.bytes); } catch {} }
+    driveAssign = (meta.driveAssign || [-1, -1]).slice();
+    refreshDriveSelectors(); mountDrives(machine);
+    machine.restore(snapRec.snap); // jump back to exactly where you were
+    resetRewind();
+    $('dipnote').textContent = `▶ 前回の続きから再開（frame ${snapRec.frame}）`;
+  } catch (e) { $('dipnote').textContent = '再開に失敗: ' + e.message; }
+}
+async function offerResume() {
+  const meta = await _ssget('meta'), snapRec = await _ssget('snap');
+  if (!meta || !snapRec || !meta.files || !meta.files.length) return;
+  const bar = document.createElement('div');
+  bar.style.cssText = 'background:#152a1e;border:1px solid #4a8;border-radius:8px;padding:8px 12px;margin:6px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px';
+  bar.innerHTML = `<span style="color:#8fd">💾 前回の続きがあります（frame ${snapRec.frame} · ${mmss(snapRec.frame / 60)}・${meta.files.map((f) => f.name).join(', ').slice(0, 40)}）</span>`;
+  const go = document.createElement('button'); go.textContent = '▶ 再開'; go.className = 'on';
+  const del = document.createElement('button'); del.textContent = '🗑 破棄';
+  go.onclick = async () => { bar.remove(); await resumeSession(meta, snapRec); };
+  del.onclick = () => { bar.remove(); clearSession(); };
+  bar.append(go, del);
+  const anchor = $('menubar-mount'); anchor ? anchor.after(bar) : document.body.prepend(bar);
+}
 // ---- persisted ROMs (this browser's IndexedDB) ----------------------------
 // "upload once": the boot ROM / font / disk you pick are kept locally so a
 // return visit auto-boots without re-picking. Bytes stay in your browser.
@@ -706,7 +751,7 @@ async function restoreFromStore() {
     const font = await getRom('font');
     if (font) applyFontRom(cgrom, font.bytes);
     const disk = await getRom('disk');
-    if (disk) { try { ingestDisks(disk.name || 'disk', parseD88All(disk.bytes)); } catch {} }
+    if (disk) { try { ingestDisks(disk.name || 'disk', parseD88All(disk.bytes), disk.bytes); } catch {} }
     const have88 = await restore88Set();
     const rom = await getRom('rom');
     if (rom) romBytes = rom.bytes;
@@ -1207,7 +1252,7 @@ canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); 
   if ($('dipnote')) st.appendChild($('dipnote'));
   $('menubar-mount').after(st);
 }
-autoLoad();
+autoLoad().then(() => { try { offerResume(); } catch {} }); // after boot, offer to resume a saved session
 refreshDiskList();
 
 // PC-8001 keyboard matrix
