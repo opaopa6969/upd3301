@@ -123,6 +123,7 @@ export class Upd765 {
   // ---- commands -----------------------------------------------------------
   _start() {
     const op = this.cmd[0] & 0x1f;
+    if (globalThis.__fdcCmd) globalThis.__fdcCmd(op, [...this.cmd]);
     this.us = this.cmd.length > 1 ? this.cmd[1] & 3 : this.us;
     this.hd = this.cmd.length > 1 ? (this.cmd[1] >> 2) & 1 : this.hd;
 
@@ -224,6 +225,7 @@ export class Upd765 {
     if (sec && sk && sec.deleted !== wantDeleted) {
       sec = findSector(d.disk, d.cyl, this.hd, r + 1, n); // skip to next
     }
+    if (globalThis.__fdcLog) globalThis.__fdcLog('RD', { c, h, r, n, cyl: d.cyl, hd: this.hd, found: !!sec, size: sec ? 128 << sec.n : 0 });
     if (!sec) return this._rwError(0x04, c, h, r, n); // ST1 ND
     this._multi = { c, h, r, n, eot, deleted: wantDeleted, sec };
     this.execBuf = sec.data;
@@ -269,18 +271,20 @@ export class Upd765 {
 
   _execDone() {
     const m = this._multi;
-    if (m && !m.format && m.r < m.eot) {
-      // multi-sector: continue with R+1 if it exists
+    // μPD765 multi-sector rule: after each sector, if the just-read R equals the
+    // command's EOT → normal end. Otherwise step to R+1 and keep going; if R+1
+    // isn't on the track → abnormal End-of-Cylinder (ST0 AT + ST1 EN). Copy
+    // protections exploit this: they read with R far ABOVE EOT (e.g. R=87,
+    // EOT=16) and verify that the read comes back with EN set. The old
+    // `m.r < m.eot` gate returned NORMAL status for R>EOT, so those checks failed
+    // (the disk booted straight to N88-BASIC — e.g. 軽井沢誘拐案内).
+    if (m && !m.format && !this.execWrite) {
+      if (m.r === m.eot) { this._endRw(0, 0, 0); return; } // reached EOT → normal
       const d = this.drives[this.us];
       const next = findSector(d.disk, d.cyl, this.hd, m.r + 1, m.n);
-      if (next && !this.execWrite) {
-        m.r++;
-        m.sec = next;
-        this.execBuf = next.data;
-        this.execPos = 0;
-        this.int = true;
-        return;
-      }
+      if (next) { m.r++; m.sec = next; this.execBuf = next.data; this.execPos = 0; this.int = true; return; }
+      this._endRw(ST0_AT, 0x80, 0); // ran off the track before EOT → EN (End of Cylinder)
+      return;
     }
     this._endRw(0, 0, 0);
   }
