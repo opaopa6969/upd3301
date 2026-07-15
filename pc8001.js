@@ -115,7 +115,14 @@ export function renderScreen(screen, {
   const height = rows * linesPerChar;
   const pixels = out && out.length === width * height ? out : new Uint8Array(width * height);
   pixels.fill(0);
-  if (!screen.displayEnabled) return { width, height, pixels, schemaVersion: SCHEMA_VERSION };
+  // `ink` = 1 wherever a character dot is actually drawn, INDEPENDENT of colour.
+  // A black-on-graphics character (fg = 0) writes pixel 0 — indistinguishable
+  // from "no character" if you only look at the colour. The ink mask lets the
+  // 8801 compositor make displayed text OPAQUE over the graphics plane (so a
+  // game can mask its off-screen scratch by writing black/reverse-space text),
+  // which colour alone can't express. Callers that don't composite ignore it.
+  const ink = new Uint8Array(width * height);
+  if (!screen.displayEnabled) return { width, height, pixels, ink, schemaVersion: SCHEMA_VERSION };
 
   const colorRow = new Uint8Array(cols);
   const funcRow = new Uint8Array(cols);
@@ -171,13 +178,14 @@ export function renderScreen(screen, {
         for (let bit = 7; bit >= 0; bit--) {
           const on = (tile >> bit) & 1;
           const v = on ? fg : 0;
-          pixels[py * width + px++] = v;
-          if (dotW === 2) pixels[py * width + px++] = v;
+          const p = py * width + px;
+          pixels[p] = v; ink[p] = on; px++;
+          if (dotW === 2) { pixels[p + 1] = v; ink[p + 1] = on; px++; }
         }
       }
     }
   }
-  return { width, height, pixels, schemaVersion: SCHEMA_VERSION };
+  return { width, height, pixels, ink, schemaVersion: SCHEMA_VERSION };
 }
 
 // A whole PC-8001-ish text subsystem: 64KB memory + μPD8257 + μPD3301,

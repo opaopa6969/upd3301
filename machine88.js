@@ -545,6 +545,7 @@ export class Pc8801Machine {
     const text = renderScreen(this.crtc.getScreen(), {
       cgrom, colorMode: !this.mono, width80: this.width80,
     });
+    const ink = text.ink; // per-pixel "a character dot is drawn here" (see below)
     const W = 640, H = 200;
     const [B, R, G] = this.gvram;
     if (indexed) {
@@ -558,8 +559,10 @@ export class Pc8801Machine {
             const mask = 0x80 >> (x & 7);
             idx = ((G[byte] & mask) ? 4 : 0) | ((R[byte] & mask) ? 2 : 0) | ((B[byte] & mask) ? 1 : 0);
           }
-          const t = i < text.pixels.length ? text.pixels[i] : 0;
-          if (t) idx = t;
+          // text occludes graphics wherever a character DOT is inked — even a
+          // black (idx 0) dot, so a game can mask its off-screen graphics with
+          // black/reverse-space text (colour-only compositing couldn't).
+          if (i < ink.length && ink[i]) idx = text.pixels[i];
           pixels[i] = idx & 7;
         }
       }
@@ -575,9 +578,9 @@ export class Pc8801Machine {
           const mask = 0x80 >> (x & 7);
           idx = ((G[byte] & mask) ? 4 : 0) | ((R[byte] & mask) ? 2 : 0) | ((B[byte] & mask) ? 1 : 0);
         }
-        // text overlays graphics (non-zero text pixel wins)
-        const t = i < text.pixels.length ? text.pixels[i] : 0;
-        if (t) idx = t;
+        // text occludes graphics wherever a character dot is inked (opaque,
+        // incl. black) — the off-screen-scratch mask games rely on.
+        if (i < ink.length && ink[i]) idx = text.pixels[i];
         const p = idx * 3;
         rgb[i * 3] = this.palette[p] * 36; // 0..7 → 0..252
         rgb[i * 3 + 1] = this.palette[p + 1] * 36;
