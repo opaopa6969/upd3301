@@ -22,11 +22,11 @@
      (masonry-ish via dense auto-flow) instead of two tall stacks. The two source
      column wrappers use display:contents so their panels become direct grid items
      without restructuring the HTML. */
-  /* free-form workspace: panels flow (flex-wrap) and each is resized freely by
-     dragging its corner; dockgrid.js handles reorder/resize/pop-out. */
-  #grid { display:flex; flex-wrap:wrap; align-items:flex-start; gap:10px; }
+  /* tmux-style column tiling — dockgrid.js (.dock-grid/.dock-col) owns the layout:
+     panels live in resizable columns, drag headers to move between columns, drag
+     gutters to rebalance widths, drag bottom edges to set heights. */
   #grid > .gridcol { display:contents; }
-  #panel-dis { width: 560px; height: 520px; } /* the disassembly is the focus → bigger default */
+  #panel-dis { height: 560px; } /* disassembly taller by default (width = its column) */
   .panel.hidden { display:none !important; }
   #dis { font-size:12px; line-height:1.5; min-height:26em; color:#9db; font-family:inherit; white-space:pre; overflow-x:auto; }
   .disline { cursor:pointer; min-height:1.2em; }
@@ -285,9 +285,10 @@ start:  LD B,8
 <script type="module">
 import { applyI18n, t, lang } from './i18n.js';
 applyI18n();
-// ---- rearrangeable / resizable panels (drag header to reorder, bottom edge to resize)
-import { makeDockable } from './dockgrid.js';
-makeDockable(document.getElementById('grid'), { storageKey: 'ice-dock' });
+// ---- tmux-style tiling: panels in resizable columns, drag headers to move, drag
+// gutters to rebalance widths, drag bottom edges for heights, ⧉ to pop out.
+import { makeTiling } from './dockgrid.js';
+makeTiling(document.getElementById('grid'), { storageKey: 'ice-dock', cols: 3 });
 
 // ---- View menu: show/hide panels so the many ICE views can be decluttered ---
 (() => {
