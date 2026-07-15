@@ -44,6 +44,8 @@
   <button id="bpng" title="CRTシミュレーションを通さない生の描画出力(640×200・フルパレット)をPNG保存（バグ切り分け用）">PNG(raw)</button>
   <button id="brec" title="画面＋音声をWebM動画に録画（もう一度押すと停止して保存）">● 録画</button>
   <button id="bclean" title="CRTシミュレーション(残光/管面/インターレース/走査線)を通さず、エミュの生描画をフルパレットでそのまま表示。崩れ無し・色正確・軽い。もう一度押すとCRT表示に戻る">🟢 クリーン表示</button>
+  <label style="color:#778;font-size:12px" title="表示中のテキストドット(黒でも)でグラフィックをマスクする実験。Ys等の画面外バッファ隠し用"><input type="checkbox" id="txtopaque"> Txtマスク</label>
+  <label style="color:#778;font-size:12px" title="μPD3301の実表示エリア(cols×rows)の外を黒でクリップ。画面端の非表示バッファ隠し用"><input type="checkbox" id="clipactive"> 端クリップ</label>
   <button id="bfull">⛶ 全画面</button>
   <button id="bice">🔬 ICE</button>
   <button id="bide">🛠 IDE</button>
@@ -300,7 +302,7 @@ $('bpng').onclick = () => {
   if (!machine) return;
   const is88 = machine instanceof Pc8801Machine;
   let f;
-  try { f = is88 ? machine.render({ cgrom }) : machine.sys.render({ cgrom }); } catch (e) { return; }
+  try { f = is88 ? machine.render({ cgrom, ...renderOpts() }) : machine.sys.render({ cgrom }); } catch (e) { return; }
   if (!f || !f.rgb) return;
   const { width: W, height: H, rgb } = f;
   const c = document.createElement('canvas'); c.width = W; c.height = H;
@@ -485,6 +487,12 @@ updateCleanBtn();
 // — funny, and handy for skipping disk loads.
 let speedMul = 1;
 $('speed').onchange = (e) => { speedMul = parseFloat(e.target.value) || 1; };
+
+// experimental compositing toggles (see machine88.render) — off = plain/safe
+let txtOpaque = false, clipActive = false;
+$('txtopaque').onchange = (e) => { txtOpaque = e.target.checked; };
+$('clipactive').onchange = (e) => { clipActive = e.target.checked; };
+const renderOpts = () => ({ textOpaque: txtOpaque, clipActive });
 
 // ---- rewind (deterministic time-travel) -----------------------------------
 // The machine is deterministic with a full snapshot()/restore(), so we can
@@ -695,7 +703,7 @@ function loop(now) {
     // steady. Falls back to the CRT path if this machine has no rgb render.
     let cleanF = null;
     if (cleanDisplay) {
-      try { const f = is88 ? machine.render({ cgrom }) : machine.sys.render({ cgrom }); if (f && f.rgb && f.width) cleanF = f; } catch { cleanF = null; }
+      try { const f = is88 ? machine.render({ cgrom, ...renderOpts() }) : machine.sys.render({ cgrom }); if (f && f.rgb && f.width) cleanF = f; } catch { cleanF = null; }
     }
     if (cleanF) {
       const W = cleanF.width, H = cleanF.height, rgb = cleanF.rgb;
@@ -712,7 +720,7 @@ function loop(now) {
       }
       ctx.putImageData(img, 0, 0);
     } else {
-      const frame = is88 ? machine.render({ cgrom, indexed: true }) : machine.sys.render({ cgrom });
+      const frame = is88 ? machine.render({ cgrom, indexed: true, ...renderOpts() }) : machine.sys.render({ cgrom });
       if (!frame.width || !frame.height) { requestAnimationFrame(loop); return; }
       const W = frame.width, H = frame.height;
       fitTo(W, H);

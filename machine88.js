@@ -541,51 +541,50 @@ export class Pc8801Machine {
   // the 8001. Caveat: the analog 512-colour palette collapses to its 8
   // primaries through the phosphor's GRB guns. The rgb path is untouched, so
   // offline colour capture (the Ys arrangement grabs) keeps full palette depth.
-  render({ cgrom, out = null, indexed = false } = {}) {
-    const text = renderScreen(this.crtc.getScreen(), {
+  // Compositing options (both default to the plain, always-safe behaviour):
+  //   textOpaque — a DISPLAYED text dot occludes graphics even when its colour
+  //     is black (uses the `ink` mask). Off: only a non-black text pixel wins
+  //     (colour-only). This is the "hide the off-screen scratch with black
+  //     text" behaviour; it is a hypothesis about the hardware, so it is opt-in.
+  //   clipActive — blank everything outside the μPD3301 active window
+  //     (cols·8 × rows·linesPerChar), i.e. show a black border instead of the
+  //     GVRAM that lies outside what the CRTC is actually scanning. The other
+  //     candidate for hiding edge scratch. No-op at a full 80×25 screen.
+  render({ cgrom, out = null, indexed = false, textOpaque = false, clipActive = false } = {}) {
+    const crtc = this.crtc;
+    const text = renderScreen(crtc.getScreen(), {
       cgrom, colorMode: !this.mono, width80: this.width80,
     });
-    const ink = text.ink; // per-pixel "a character dot is drawn here" (see below)
+    const ink = text.ink;
     const W = 640, H = 200;
     const [B, R, G] = this.gvram;
+    const activeW = clipActive ? Math.min(W, crtc.cols * 8) : W;
+    const activeH = clipActive ? Math.min(H, crtc.rows * (crtc.linesPerChar || 8)) : H;
+    // per-pixel composite → palette index 0..7
+    const composite = (x, y, i) => {
+      if (clipActive && (x >= activeW || y >= activeH)) return 0; // border
+      let idx = 0;
+      if (this.gvramOn) {
+        const byte = (y * 80) + (x >> 3);
+        const mask = 0x80 >> (x & 7);
+        idx = ((G[byte] & mask) ? 4 : 0) | ((R[byte] & mask) ? 2 : 0) | ((B[byte] & mask) ? 1 : 0);
+      }
+      if (textOpaque) { if (i < ink.length && ink[i]) idx = text.pixels[i]; }
+      else { const t = i < text.pixels.length ? text.pixels[i] : 0; if (t) idx = t; }
+      return idx & 7;
+    };
     if (indexed) {
       const pixels = out && out.length === W * H ? out : new Uint8Array(W * H);
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < W; x++) {
-          const i = y * W + x;
-          let idx = 0;
-          if (this.gvramOn) {
-            const byte = (y * 80) + (x >> 3);
-            const mask = 0x80 >> (x & 7);
-            idx = ((G[byte] & mask) ? 4 : 0) | ((R[byte] & mask) ? 2 : 0) | ((B[byte] & mask) ? 1 : 0);
-          }
-          // text occludes graphics wherever a character DOT is inked — even a
-          // black (idx 0) dot, so a game can mask its off-screen graphics with
-          // black/reverse-space text (colour-only compositing couldn't).
-          if (i < ink.length && ink[i]) idx = text.pixels[i];
-          pixels[i] = idx & 7;
-        }
-      }
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const i = y * W + x; pixels[i] = composite(x, y, i); }
       return { width: W, height: H, pixels, schemaVersion: SCHEMA_VERSION };
     }
     const rgb = out && out.length === W * H * 3 ? out : new Uint8Array(W * H * 3);
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const i = y * W + x;
-        let idx = 0;
-        if (this.gvramOn) {
-          const byte = (y * 80) + (x >> 3);
-          const mask = 0x80 >> (x & 7);
-          idx = ((G[byte] & mask) ? 4 : 0) | ((R[byte] & mask) ? 2 : 0) | ((B[byte] & mask) ? 1 : 0);
-        }
-        // text occludes graphics wherever a character dot is inked (opaque,
-        // incl. black) — the off-screen-scratch mask games rely on.
-        if (i < ink.length && ink[i]) idx = text.pixels[i];
-        const p = idx * 3;
-        rgb[i * 3] = this.palette[p] * 36; // 0..7 → 0..252
-        rgb[i * 3 + 1] = this.palette[p + 1] * 36;
-        rgb[i * 3 + 2] = this.palette[p + 2] * 36;
-      }
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      const p = composite(x, y, i) * 3;
+      rgb[i * 3] = this.palette[p] * 36; // 0..7 → 0..252
+      rgb[i * 3 + 1] = this.palette[p + 1] * 36;
+      rgb[i * 3 + 2] = this.palette[p + 2] * 36;
     }
     return { width: W, height: H, rgb, schemaVersion: SCHEMA_VERSION };
   }
