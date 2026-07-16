@@ -36,7 +36,7 @@ export class Pc8801Machine {
   constructor({
     main, ext = null, n80 = null, sub = null, mode = 'n88',
     frameHz = 60, clockHz = 3_993_600, dmaSteal = 0.3, sb2 = false,
-    kanji = null, kanji2 = null,
+    kanji = null, kanji2 = null, rtcDate = null,
   } = {}) {
     if (!main || main.length < 0x8000) throw new Error('need a 32KB N88 main ROM');
     this.romMain = main;
@@ -92,6 +92,25 @@ export class Pc8801Machine {
     // aliases 0x0001); without it the read returns 0 and the load aborts early.
     // (This is what stopped 軽井沢誘拐案内 after 6 disk reads.)
     this._txtwnd = 0;
+    // PCG (Programmable Character Generator, ports 00h-02h): redefines the
+    // 0x80-0xFF text glyphs. 02h/01h form a 14-bit address, 00h the data byte;
+    // a write with bit12 set stores into pcgRam[addr & 0x3ff] (glyph rows for
+    // codes 0x80-0xFF, 8 rows each). The renderer overlays this on the font.
+    this._pcgAdr = 0; this._pcgDat = 0;
+    this.pcgRam = new Uint8Array(0x400); this.pcgOn = false;
+    // Port latches with no observable effect on the machines we emulate (no
+    // N-BASIC/PC-8001 bank at 33h, no CD-BIOS at 99h, no dictionary ROM at
+    // f0h/f1h). Stored so a read-back returns what was written, matching M88.
+    this._port33 = 0; this._port99 = 0; this._portf0 = 0; this._portf1 = 0;
+    // μPD1990AC calendar/clock (ports 10h + 40h). Serial protocol: OUT 10h sets
+    // the command nibble + serial-in bit; OUT 40h clocks it (bit1=CSTB strobe,
+    // bit2=CCLK, both edge-triggered); IN 40h bit4 = serial-out. The reported
+    // date is fixed (deterministic; the browser frontend may inject a live one
+    // via the `rtcDate` option) so snapshots/replays stay reproducible.
+    this._rtcReg = new Uint8Array(6);
+    this._rtcScmd = 0; this._rtcCmd = 0; this._rtcPcmd = 0; this._rtcDin = 0;
+    this._rtcHold = false; this._rtcDout = false; this._rtcStrobe = 0;
+    this._rtcDate = rtcDate; // { year, mon(1-12), day, hour, min, sec, wday(0=Sun) } or null → fixed default
     // SR's GVRAM ALU: three planes written in ONE cycle, with logic ops and
     // a colour-compare read. It is why SR games scroll at all. 34h picks the
     // op per plane, 35h the mode/compare/enable, 32h b6 turns the window on.
@@ -279,6 +298,55 @@ export class Pc8801Machine {
     this.ram[a] = v; // RAM is always writable underneath the ROM
   }
 
+  // PCG glyph write (ports 00h-02h). bit12 of the address = write-enable; the
+  // stored byte is one 8-pixel scanline of a redefined 0x80-0xFF glyph. (bit13
+  // = "restore from font ROM"; approximated here — the renderer, which owns the
+  // font, is where a full restore would live. Visual overlay is browser-side.)
+  _pcgWrite() {
+    if (this._pcgAdr & 0x1000) {
+      this.pcgRam[this._pcgAdr & 0x3ff] = (this._pcgAdr & 0x2000) ? 0 : this._pcgDat;
+      this.pcgOn = true;
+    }
+  }
+
+  // ---- μPD1990AC calendar/clock (ports 10h + 40h) ------------------------
+  _rtcOut10(v) { this._rtcPcmd = v & 7; this._rtcDin = (v >> 3) & 1; }
+  _rtcOut40(v) { // bit1 = CSTB (latch command on rising), bit2 = CCLK (shift on rising)
+    const mod = this._rtcStrobe ^ v; this._rtcStrobe = v;
+    if (mod & v & 2) this._rtcCommand();
+    if (mod & v & 4) this._rtcShift();
+  }
+  _rtcIn40() { return this._rtcDout ? ((this._rtcReg[0] & 1) << 4) : 0; } // serial-out on bit4
+  _rtcCommand() {
+    const cmd = this._rtcPcmd === 7 ? (this._rtcScmd | 0x80) : this._rtcPcmd;
+    this._rtcCmd = cmd;
+    switch (cmd & 15) {
+      case 0: this._rtcHold = true;  this._rtcDout = false; break;               // register hold
+      case 1: this._rtcHold = false; this._rtcDout = true;  break;               // register shift (read out)
+      case 2: this._rtcHold = true;  this._rtcDout = true;  break;               // time set (read-only clock → ignore)
+      case 3: this._rtcGetTime(); this._rtcHold = true; this._rtcDout = false; break; // time read → load regs
+    }
+  }
+  _rtcShift() {
+    const r = this._rtcReg, din = this._rtcDin;
+    if (this._rtcHold) { if (this._rtcCmd & 0x80) this._rtcScmd = (this._rtcScmd >> 1) | (din << 3); return; }
+    if (this._rtcCmd & 0x80) {
+      r[0] = (r[0] >> 1) | (r[1] << 7); r[1] = (r[1] >> 1) | (r[2] << 7); r[2] = (r[2] >> 1) | (r[3] << 7);
+      r[3] = (r[3] >> 1) | (r[4] << 7); r[4] = (r[4] >> 1) | (r[5] << 7); r[5] = (r[5] >> 1) | (this._rtcScmd << 7);
+      this._rtcScmd = (this._rtcScmd >> 1) | (din << 3);
+    } else {
+      r[0] = (r[0] >> 1) | (r[1] << 7); r[1] = (r[1] >> 1) | (r[2] << 7); r[2] = (r[2] >> 1) | (r[3] << 7);
+      r[3] = (r[3] >> 1) | (r[4] << 7); r[4] = (r[4] >> 1) | (din << 7);
+    }
+  }
+  _rtcGetTime() {
+    const d = this._rtcDate || { year: 2024, mon: 1, day: 1, hour: 0, min: 0, sec: 0, wday: 1 };
+    const bcd = (n) => (((n / 10) | 0) << 4) | (n % 10);
+    const r = this._rtcReg;
+    r[5] = bcd(d.year % 100); r[4] = ((d.mon & 15) << 4) | (d.wday & 15);
+    r[3] = bcd(d.day); r[2] = bcd(d.hour); r[1] = bcd(d.min); r[0] = bcd(d.sec);
+  }
+
   // ---- I/O ----------------------------------------------------------------
   in(port) {
     if (port <= 0x0f) { if (this._kbReads) this._kbReads[port]++; return this.keys[port]; } // keyboard matrix
@@ -291,10 +359,14 @@ export class Pc8801Machine {
     // the WRONG bank on the way home.
     if (port === 0x70) return (this._txtwnd >> 8) & 0xff; // text window base
     if (port === 0x71) return this._port71;
+    if (port === 0x33) return this._port33;
+    if ((port === 0x46 || port === 0xac) && this.opna) return this.opna.readStatus(); // OPNA ext status
+    if ((port === 0x47 || port === 0xad) && this.opna) return this.opna.readStatus(); // OPNA ext data (status fallback)
     if (port === 0x40) {
       // d5 = VRTC (high during retrace), d1 = CMT carrier etc.
       const vrtc = this.tInFrame > this.frameT * 0.86;
-      return (vrtc ? 0x20 : 0x00) | 0x02;
+      return (vrtc ? 0x20 : 0x00) | 0x02 | this._rtcIn40(); // b5=VRTC, b4=RTC serial-out
+
     }
     if (port === 0x50) return this.crtc.readParam();
     if (port === 0x51) return this.crtc.readStatus();
@@ -393,6 +465,17 @@ export class Pc8801Machine {
       case 0x51: this.crtc.writeCommand(v); return;
       case 0x70: this._txtwnd = (v & 0xff) << 8; return; // text window base (see readMem)
       case 0x78: this._txtwnd = (this._txtwnd + 0x100) & 0xff00; return; // text window += one page
+      case 0x00: this._pcgDat = v; this._pcgWrite(); return;                          // PCG data
+      case 0x01: this._pcgAdr = (this._pcgAdr & 0xff00) | v; this._pcgWrite(); return; // PCG addr low
+      case 0x02: this._pcgAdr = (this._pcgAdr & 0x00ff) | (v << 8); this._pcgWrite(); return; // PCG addr high
+      case 0x33: this._port33 = v; return; // N-BASIC bank select (n80mode only) — no-op in N88
+      case 0x46: case 0xac: if (this.opna) this.opna.writeAddr1(v); return; // OPNA ext-reg index (mirrors AAh)
+      case 0x47: case 0xad: if (this.opna) this.opna.writeData1(v); return; // OPNA ext-reg data  (mirrors ABh)
+      case 0x10: this._rtcOut10(v); return; // μPD1990 command + serial-in
+      case 0x40: this._rtcOut40(v); return; // μPD1990 strobe/clock (bits 1,2); other bits (wait-state) not modelled
+      case 0x99: this._port99 = v; return; // CD-BIOS/EROM bank — no CD-ROM fitted, no effect
+      case 0xf0: this._portf0 = v; return; // dictionary ROM bank — no dict ROM fitted
+      case 0xf1: this._portf1 = v; return; // dictionary ROM bank — no dict ROM fitted
       case 0x71: // extension ROM select — bit0 = 0 maps the ext ROM at
         // 6000-7FFF; WHICH of the 4 banks comes from port 32h bits 0-1
         // (EROMSL). Getting this split wrong sends every cross-bank call
@@ -736,6 +819,7 @@ export class Pc8801Machine {
     const graphOff = (this._port53 & 2) !== 0;
     const text = (hideText || textOff) ? null : renderScreen(crtc.getScreen(), {
       cgrom, colorMode: !this.mono, width80: this.width80,
+      pcg: this.pcgOn ? { ram: this.pcgRam, on: true } : null, // PCG overlay (visual-unverified)
     });
     const ink = text ? text.ink : null;
     const W = 640, H = 200;

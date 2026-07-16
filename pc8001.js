@@ -107,6 +107,9 @@ export function renderScreen(screen, {
   colorMode = true,
   width80 = true,
   out = null,
+  pcg = null, // optional PCG overlay { ram: Uint8Array(0x400), on: bool }: redefines
+              // glyphs 0x80-0xFF (8 rows each). Opt-in — omit for stock font.
+              // NOTE: visual overlay is browser-side and currently unverified.
 } = {}) {
   const { cols, rows, linesPerChar, cells, attrPairs, attrsPerRow } = screen;
   const abpr = screen.attrBytesPerRow ?? attrsPerRow * 2;
@@ -162,6 +165,8 @@ export function renderScreen(screen, {
           const left = (code >> band) & 1;
           const right = (code >> (4 + band)) & 1;
           tile = (left ? 0xf0 : 0) | (right ? 0x0f : 0);
+        } else if (pcg && pcg.on && code >= 0x80 && line < 8) {
+          tile = pcg.ram[(code & 0x7f) * 8 + line]; // PCG-redefined glyph (visual-unverified)
         } else {
           tile = cgrom ? cgrom[code * 16 + line] : 0;
         }
