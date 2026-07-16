@@ -90,7 +90,7 @@ snapshots/replays stay reproducible; a live clock can be injected via the
 - **FGU (Functional Graphics Unit)** — a PC-8001 external 640×200 graphics board
   (FGU-8000/8200). The PC-8801 provides 640×200 GVRAM natively (which we do
   implement), so FGU only matters for PC-8001-mode software that targets it
-  specifically; not modelled.
+  specifically; not modelled — tracked in [issue #9](https://github.com/opaopa6969/upd3301/issues/9).
 
 ## How this was audited
 
