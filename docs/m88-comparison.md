@@ -34,10 +34,18 @@ Most titles now land on M88's `E6CD`/tvram state — the text-window fix (port 7
 was the big lever. `E6CD == 0xff` is **not** universally "stuck": several titles
 (Again/Eldrad/D-SIDE/Aggres) hold it at 0xff in M88 too.
 
-### Caveat: read counts aren't apples-to-apples yet
-Our probe counts `READ DATA` **commands** (FDC op 0x06); refdrv's `g_rdN` counts
-`FDC::ReadData` invocations, which may be per-sector. Treat raw read counts as a
-rough progress signal, not an equality test, until both count the same event.
+### Caveats when reading this table
+- **Read counts aren't apples-to-apples yet.** Our probe counts `READ DATA`
+  **commands** (FDC op 0x06); refdrv's `g_rdN` counts `FDC::ReadData`
+  invocations, which may be per-sector. Treat raw counts as a rough progress
+  signal, not an equality test, until both count the same event.
+- **Matching result headers ≠ matching payload.** A run of identical `C/H/R/N`
+  result bytes says the *addressing* agreed, not that the transferred sector
+  **data** did. When chasing a divergence, dump and diff the payload bytes per
+  read on both sides (hook the byte the FDC returns), not just the 7-byte result
+  header — otherwise the measuring instrument hides a data difference. *(Not the
+  cause for Dragon Buster — that was the two-disk harness artifact — but the
+  right discipline for the next one. Credit: codex.)*
 
 ## Known divergences (leads to chase)
 
