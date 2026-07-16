@@ -392,6 +392,7 @@ export class Pc8801Machine {
       case 0x50: this.crtc.writeParam(v); return;
       case 0x51: this.crtc.writeCommand(v); return;
       case 0x70: this._txtwnd = (v & 0xff) << 8; return; // text window base (see readMem)
+      case 0x78: this._txtwnd = (this._txtwnd + 0x100) & 0xff00; return; // text window += one page
       case 0x71: // extension ROM select — bit0 = 0 maps the ext ROM at
         // 6000-7FFF; WHICH of the 4 banks comes from port 32h bits 0-1
         // (EROMSL). Getting this split wrong sends every cross-bank call
