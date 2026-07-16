@@ -15,14 +15,14 @@ the text-window bug was found — see [io-ports](./io-ports.md) and the case not
 | Title | M88 E6CD / tvNZ | ours E6CD / tvNZ | note |
 |-------|-----------------|------------------|------|
 | 軽井沢誘拐案内 | 00 / 3540 | 00 / 3571 | ✔ boots to menu (was broken pre-text-window) |
-| Ys1 | 00 / 2678 | fc / 2678 | E6CD differs at f250 — verify |
+| Ys1 | 00 / 2678 | fc / 2678 | post-boot phase → #2 (resolved) |
 | Hydlide | 00 / 2683 | 00 / 2684 | ✔ matches |
 | Xanadu | f9 / 2673 | f9 / 2673 | ✔ matches |
 | Romancia | 66 / 2678 | 66 / 2678 | ✔ matches |
 | Thexder | 00 / 3416 | 00 / 3416 | ✔ matches |
-| Dragon Buster | 00 / 3193 | 00 / 3193 | **⚠ read-retry loop** (see below) |
-| Abyss2 | 00 / 3193 | 01 / 3194 | E6CD differs — verify |
-| 177 | 24 / 2679 | 24 / 3523 | E6CD matches, tvNZ differs |
+| Dragon Buster | 00 / 3193 | 00 / 3193 | 2-disk game → #1 (resolved, not a bug) |
+| Abyss2 | 00 / 3193 | 01 / 3194 | post-boot phase → #2 (resolved) |
+| 177 | 24 / 2679 | 24 / 3523 | post-boot phase → #3 (resolved) |
 | Again | ff / 2903 | ff / 3423 | E6CD matches (ff is this title's normal state) |
 | Eldrad | ff / 3221 | ff / 3221 | matches |
 | D-SIDE | ff / 3220 | ff / 3216 | matches |
