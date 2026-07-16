@@ -132,6 +132,20 @@ import { Pc8801Machine } from '../machine88.js';
 import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 import { parseD88All, summarize } from '../d88.js';
+import { unzip, DISK_TAPE_RE } from '../zip.js';
+
+// Expand an uploaded file into loadable disk images. A .zip (PK magic) is
+// unpacked and its .d88/.t88/… members returned, biggest-first (the game is
+// usually the largest); a plain .d88 passes straight through. Tape images
+// (.t88/.cas) surface too but the loaders that consume them are pending (see
+// issue #11). Returns [{ name, bytes, isDisk }].
+async function expandDiskFile(fileName, bytes) {
+  const isZip = bytes.length > 3 && bytes[0] === 0x50 && bytes[1] === 0x4b; // "PK"
+  if (!isZip) return [{ name: fileName, bytes, isDisk: /\.(d88|88d|d8u|hdm|tfd|xdf)$/i.test(fileName) || true }];
+  const members = (await unzip(bytes)).filter((e) => DISK_TAPE_RE.test(e.name))
+    .sort((a, b) => b.bytes.length - a.bytes.length);
+  return members.map((m) => ({ name: m.name, bytes: m.bytes, isDisk: /\.(d88|88d|d8u|hdm|tfd|xdf)$/i.test(m.name) }));
+}
 import { putRom, getRom, listRoms, clearRoms, deleteRom } from './romstore.js';
 
 // OPNA rhythm ROM (the six ADPCM-A drums) — fetched + decoded once, then
@@ -515,23 +529,42 @@ $('fdisk').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
   try {
-    const diskBytes = new Uint8Array(await f.arrayBuffer());
-    const imgs = parseD88All(diskBytes);
-    await putRom('disk', f.name, diskBytes);            // 'disk' = last-used (auto-boot)
-    await putRom('disk:' + f.name, f.name, diskBytes);  // named slot for the library
+    const fileBytes = new Uint8Array(await f.arrayBuffer());
+    // .zip → its disk members; plain .d88 → itself. Each stored member is d88
+    // bytes, so the library / auto-boot / restore paths stay parseD88All-native.
+    const parts = await expandDiskFile(f.name, fileBytes);
+    const diskParts = parts.filter((p) => p.isDisk);
+    if (!diskParts.length) {
+      const tape = parts.filter((p) => !p.isDisk).map((p) => p.name);
+      $('dipnote').textContent = tape.length
+        ? `${f.name}: テープ画像（${tape.join(', ')}）— カセット対応は準備中（issue #11）`
+        : `${f.name}: 中にディスク画像が見つからなかった（zip内 .d88 など無し／壊れファイル？）`;
+      return;
+    }
+    let total = 0, first = null, firstName = null;
+    for (const p of diskParts) {
+      const imgs = parseD88All(p.bytes);
+      await putRom('disk:' + p.name, p.name, p.bytes);   // library slot (extracted d88)
+      ingestDisks(p.name, imgs, p.bytes);
+      total += imgs.length;
+      if (!first) { first = summarize(imgs[0]); firstName = p.name; }
+    }
+    await putRom('disk', firstName, diskParts[0].bytes); // last-used / auto-boot = first member
     refreshStore(); refreshDiskList();
-    ingestDisks(f.name, imgs, diskBytes);
     mountDrives(machine);
-    const s = summarize(imgs[0]);
-    const extra = imgs.length > 1 ? `  (計${imgs.length}枚をプールに追加)` : '';
+    const s = first;
+    const fromZip = diskParts.length > 1 || parts.length !== 1 || (fileBytes[0] === 0x50 && fileBytes[1] === 0x4b);
+    const extra = fromZip
+      ? `  (${f.name}: ${diskParts.length}ファイル・計${total}枚をプールへ。ドライブ1/2で選択)`
+      : (total > 1 ? `  (計${total}枚をプールに追加)` : '');
     $('dipnote').textContent =
-      `${f.name}: ${s.name || '(no label)'} ${s.media} ${s.tracks}trk ${(s.bytes / 1024) | 0}KB` +
+      `${firstName}: ${s.name || '(no label)'} ${s.media} ${s.tracks}trk ${(s.bytes / 1024) | 0}KB` +
       (s.writeProtect ? ' [WP]' : '') + extra +
       '  — ' + (bootMode === 'n88' && has88Set()
         ? t('ドライブに割当済み（ドライブ1/2セレクタで入替できる。リセットで起動）')
         : t('起動にはFDDサブCPUが必要（N88モード＋PC-8801 BIOS一式）'));
   } catch (err) {
-    $('dipnote').textContent = 'D88: ' + err.message;
+    $('dipnote').textContent = 'ディスク: ' + err.message;
   }
 };
 // Saved-disk library: every uploaded .d88 is kept in IndexedDB under a
@@ -612,16 +645,24 @@ async function loadFolderDisk(item) {
   try {
     const file = await item.handle.getFile();
     const bytes = new Uint8Array(await file.arrayBuffer());
-    await putRom('disk', item.name, bytes); // remember as last-used (auto-boot next visit)
-    playDisk(item.name, parseD88All(bytes), bytes);
+    const parts = (await expandDiskFile(item.name, bytes)).filter((p) => p.isDisk); // unzip if needed
+    if (!parts.length) { $('dipnote').textContent = `${item.name}: ディスク画像なし（テープ? issue #11 / 壊れファイル?）`; return; }
+    await putRom('disk', parts[0].name, parts[0].bytes); // last-used = first disk (d88 bytes)
+    playDisk(parts[0].name, parseD88All(parts[0].bytes), parts[0].bytes); // resets pool + plays first
+    for (let i = 1; i < parts.length; i++) ingestDisks(parts[i].name, parseD88All(parts[i].bytes), parts[i].bytes);
+    if (parts.length > 1) refreshDriveSelectors();
   } catch (err) { $('dipnote').textContent = 'folder disk: ' + err.message; }
 }
 async function saveFolderDiskToLibrary(item) {
   try {
     const bytes = new Uint8Array(await (await item.handle.getFile()).arrayBuffer());
-    await putRom('disk:' + item.name, item.name, bytes); // into the saved-disk library
+    const parts = (await expandDiskFile(item.name, bytes)).filter((p) => p.isDisk); // store extracted d88(s)
+    if (!parts.length) { $('dipnote').textContent = `${item.name}: 保存できるディスク画像なし`; return; }
+    for (const p of parts) await putRom('disk:' + p.name, p.name, p.bytes);
     refreshDiskList(); await openDiskBrowser(true); // reload the idb list so it shows as 💾
-    $('dipnote').textContent = `💾 「${item.name}」を保存済みに追加した`;
+    $('dipnote').textContent = parts.length > 1
+      ? `💾 「${item.name}」から ${parts.length} 枚を保存済みに追加した`
+      : `💾 「${parts[0].name}」を保存済みに追加した`;
   } catch (err) { $('dipnote').textContent = 'save: ' + err.message; }
 }
 function ensureDiskBrowser() {
