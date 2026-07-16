@@ -272,24 +272,33 @@ export class Upd765 {
   _execDone() {
     const m = this._multi;
     // On the PC-8801 disk sub-board the sub-CPU reads exactly the bytes it wants
-    // and then pulses TC (IN from port F8h → tc()), so a read normally ends via
-    // TC, not by the FDC running off the track. We serve the current sector's
+    // and then pulses TC (IN from port F8h → tc()). We serve the current sector's
     // bytes; when the host keeps reading past a sector boundary we auto-advance
-    // to R+1 (genuine multi-sector). If we can't advance we terminate NORMALLY —
-    // TC would have arrived here on real hardware. (Do NOT synthesize an
-    // End-of-Cylinder abnormal status: with TC-driven reads it never occurs, and
-    // forcing it broke single-sector protection reads where R>EOT, e.g. the
-    // C0/H82/R87 sector of 軽井沢誘拐案内.)
-    if (m && !m.format && m.r < m.eot) {
-      const d = this.drives[this.us];
-      const next = findSector(d.disk, d.cyl, this.hd, m.r + 1, m.n);
-      if (next && !this.execWrite) {
-        m.r++;
-        m.sec = next;
-        this.execBuf = next.data;
-        this.execPos = 0;
-        this.int = true;
-        return;
+    // to R+1 (genuine multi-sector read).
+    if (m && !m.format && !this.execWrite) {
+      if (m.r < m.eot) {
+        const d = this.drives[this.us];
+        const next = findSector(d.disk, d.cyl, this.hd, m.r + 1, m.n);
+        if (next) {
+          m.r++;
+          m.sec = next;
+          this.execBuf = next.data;
+          this.execPos = 0;
+          this.int = true;
+          return;
+        }
+      }
+      // Terminating on a fully-read sector: the µPD765 leaves the result ID
+      // pointing at the *next* sector — R←R+1, and when the last sector read was
+      // the EOT sector it wraps to (C+1, R=1) (end-of-cylinder). Termination stays
+      // NORMAL (no abnormal/EN status): this is just the post-command ID the disk
+      // loader reads back to chain to the next cluster (N88-DISK-BASIC FAT walk).
+      // Getting this wrong under-reads the file — 軽井沢誘拐案内 stops mid-load.
+      const sec = m.sec;
+      if (sec) {
+        if (sec.r === m.eot) { m.rc = (sec.c + 1) & 0xff; m.rr = 1; }
+        else { m.rc = sec.c; m.rr = (sec.r + 1) & 0xff; }
+        m.rAddr = true;
       }
     }
     this._endRw(0, 0, 0);
@@ -308,7 +317,11 @@ export class Upd765 {
       else xst1 |= 0x20;
     }
     if (sec?.deleted && !m.deleted) xst2 |= 0x40; // ST2 CM: hit deleted data
-    this._results([st0, xst1, xst2, sec?.c ?? m.c, sec?.h ?? m.h, sec?.r ?? m.r, sec?.n ?? m.n]);
+    // result ID: normally the last sector's own id, but a completed read leaves
+    // the "next sector" address (see _execDone) — m.rAddr overrides C/R then.
+    const rc = m.rAddr ? m.rc : (sec?.c ?? m.c);
+    const rr = m.rAddr ? m.rr : (sec?.r ?? m.r);
+    this._results([st0, xst1, xst2, rc, sec?.h ?? m.h, rr, sec?.n ?? m.n]);
   }
 
   _rwError(st1, c, h, r, n) {
