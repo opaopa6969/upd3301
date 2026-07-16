@@ -41,17 +41,17 @@ rough progress signal, not an equality test, until both count the same event.
 
 ## Known divergences (leads to chase)
 
-1. **Dragon Buster — diverges to cyl14/unit1 after read #8, then loops.**
-   The first **8 FDC results match M88 exactly** (C0R2, C0R4, C1R1, C0H1R16,
-   C2R1, C1H1R7, C2H1R1, C2H0R3) — so the disk transfer through read #8 is
-   faithful. From an apparently-equal state, M88 stays in cyl0–2 while ours
-   seeks **cyl14 h1 r4 on unit 1**, where the read returns `ST0=0x45` (abnormal
-   termination, US=1) and the title retries the SEEK→SENSE→READ forever
-   (~17,000× / 250 frames). Root cause is a byte or computation that differs
-   *after* read #8 despite matching results — a Karuizawa-class trace-diff
-   (arm both traces at read #8, find the first divergent instruction). The
-   `unit 1` target is suspicious (no disk there); worth checking whether the
-   drive-select / result-ID feeds a stale unit number. **Open.**
+1. **Dragon Buster — RESOLVED: 2-disk game, sweep only mounted one.**
+   `Dragonb.d88` contains **two images — "DISK A" and "DISK B"**. The title reads
+   DISK B from **drive 1 (unit 1)**; with only DISK A mounted, that read hits an
+   empty drive → `ST0=0x45` (`_rwError`, no disk on unit 1) and the title spins
+   SEEK→SENSE→READ forever. Mount both (DISK A→drive 0, DISK B→drive 1) and it's
+   fine: **reads drop 22265 → 21**, no loop. The real front-end
+   (`demo/machine.html` `ingestDisks`) already auto-assigns image0→drive0,
+   image1→drive1, so two-disk games "just work" in the UI — it was the
+   comparison *harness* that mounted a single image. No emulator bug. *(Credit:
+   codex flagged the two-drive hypothesis.)* **Fix applied to the sweep method
+   below.**
 2. **Ys1 / Abyss2 — `E6CD` differs at f250 — NOT A BUG (post-boot phase).**
    E6CD is `0` for ~200 frames in both (the title boots and reaches gameplay),
    then transitions to a title-specific value (Ys1→fc, Abyss2→1) at a slightly
@@ -68,8 +68,9 @@ rough progress signal, not an equality test, until both count the same event.
    bug. Known remaining gap: **block-IO (LDIR/CPIR…) undocumented flags are
    approximate** — audit if a title ever depends on them. *(Low priority.)*
 
-Net: after the sweep, the **only open behavioural divergence is Dragon Buster
-(#1)**; the rest either match M88 or differ only in post-boot timing phase.
+Net: after the sweep and follow-ups, **no open behavioural divergence remains** in
+this set. Titles match M88, differ only in post-boot timing phase, or (Dragon
+Buster) were a harness artifact. The text-window fix was the one real bug.
 
 ## How to reproduce / extend
 
@@ -80,6 +81,10 @@ m88ref/_m88m_build/M88M/refdrv <romDir> <disk.d88> 250   # prints final E6CD, tv
 
 # ours side: a Node harness — new Pc8801Machine → insertDisk → stepFrame ×250,
 # then read m.ram[0xe6cd], count non-zero m.tvram[], hook globalThis.__fdcCmd.
+# IMPORTANT: mount *every* image of a multi-disk .d88 —
+#   const d = parseD88All(bytes); d.forEach((img,u) => u<2 && m.insertDisk(u,img));
+# A two-disk title with only image 0 mounted will loop on an empty drive 1
+# (that was the Dragon Buster "divergence").
 ```
 See [`../m88ref/README.md`](../m88ref/README.md) for the full method and a
 paste-ready sub-agent prompt. Add rows/divergences here as they're found.
