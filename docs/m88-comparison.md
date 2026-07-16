@@ -52,15 +52,24 @@ rough progress signal, not an equality test, until both count the same event.
    (arm both traces at read #8, find the first divergent instruction). The
    `unit 1` target is suspicious (no disk there); worth checking whether the
    drive-select / result-ID feeds a stale unit number. **Open.**
-2. **Ys1 / Abyss2 — `E6CD` differs at f250** (fc/01 vs 00). Text-VRAM matches, so
-   the picture is likely right; the flag may be a timing phase or a real
-   keyboard-gate difference. Verify with a longer run and a screen dump.
-3. **177 — tvNZ higher than M88** (3523 vs 2679) with matching `E6CD`. Could be a
-   text-attribute or fill difference; visual check needed.
-4. **Undocumented Z80 flags (X/Y, bits 3/5).** At an identical CPU state during
-   軽井沢's load, ours and M88 agreed on every documented flag but differed on the
-   undocumented X/Y bits. Harmless for that title (it booted), but a real Z80
-   fidelity gap worth auditing — some protections test them via side channels.
+2. **Ys1 / Abyss2 — `E6CD` differs at f250 — NOT A BUG (post-boot phase).**
+   E6CD is `0` for ~200 frames in both (the title boots and reaches gameplay),
+   then transitions to a title-specific value (Ys1→fc, Abyss2→1) at a slightly
+   different frame than M88. The f250 snapshot just caught the two at different
+   points of *post-boot* execution — a timing/progress phase, not a fault.
+   *(Resolved.)*
+3. **177 — tvNZ higher than M88 — NOT A BUG (post-boot phase).** Same story:
+   E6CD `0` early, then `0x24`; the title runs. tvNZ differs because the two are
+   a few frames apart in gameplay. *(Resolved.)*
+4. **Undocumented Z80 flags (X/Y, bits 3/5) — implemented, not a systematic root.**
+   `z80.js` sets F3/F5 from the result on the common ALU ops (`_add/_sub/_inc/
+   _dec` and via the `SZP` table for AND/OR/XOR). The one observed X/Y mismatch
+   during 軽井沢's load was an operand difference on a harmless path, not a flag
+   bug. Known remaining gap: **block-IO (LDIR/CPIR…) undocumented flags are
+   approximate** — audit if a title ever depends on them. *(Low priority.)*
+
+Net: after the sweep, the **only open behavioural divergence is Dragon Buster
+(#1)**; the rest either match M88 or differ only in post-boot timing phase.
 
 ## How to reproduce / extend
 
