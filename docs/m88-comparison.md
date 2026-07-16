@@ -41,11 +41,17 @@ rough progress signal, not an equality test, until both count the same event.
 
 ## Known divergences (leads to chase)
 
-1. **Dragon Buster — read-retry loop.** Ours issues SEEK→SENSE→READ of
-   `cyl14 h1 r4` ~17,000× in 250 frames (M88 reads it a handful of times and
-   moves on). Symptom of a read whose data/status doesn't satisfy the title's
-   check — a protection/verify read, or an FDC result-byte/`ST` difference.
-   Not yet root-caused. *(candidate: ID/CRC status on that sector.)*
+1. **Dragon Buster — diverges to cyl14/unit1 after read #8, then loops.**
+   The first **8 FDC results match M88 exactly** (C0R2, C0R4, C1R1, C0H1R16,
+   C2R1, C1H1R7, C2H1R1, C2H0R3) — so the disk transfer through read #8 is
+   faithful. From an apparently-equal state, M88 stays in cyl0–2 while ours
+   seeks **cyl14 h1 r4 on unit 1**, where the read returns `ST0=0x45` (abnormal
+   termination, US=1) and the title retries the SEEK→SENSE→READ forever
+   (~17,000× / 250 frames). Root cause is a byte or computation that differs
+   *after* read #8 despite matching results — a Karuizawa-class trace-diff
+   (arm both traces at read #8, find the first divergent instruction). The
+   `unit 1` target is suspicious (no disk there); worth checking whether the
+   drive-select / result-ID feeds a stale unit number. **Open.**
 2. **Ys1 / Abyss2 — `E6CD` differs at f250** (fc/01 vs 00). Text-VRAM matches, so
    the picture is likely right; the flag may be a timing phase or a real
    keyboard-gate difference. Verify with a longer run and a screen dump.
