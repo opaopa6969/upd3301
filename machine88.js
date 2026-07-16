@@ -86,6 +86,12 @@ export class Pc8801Machine {
     this.extMapped = false; // port 71h bit0=0 → ext ROM at 6000-7FFF
     this._port71 = 0xff; // the raw latch (read back by the call dispatcher)
     this._port31 = 0;
+    // Text window (port 70h): a 1 KB window at 0x8000-0x83FF that maps to
+    // ram[txtwnd + offset] when (port31 & 6)==0. N88-DISK-BASIC's loader reads
+    // the just-loaded program back through this window (OUT 70h,00 → 0x8001
+    // aliases 0x0001); without it the read returns 0 and the load aborts early.
+    // (This is what stopped 軽井沢誘拐案内 after 6 disk reads.)
+    this._txtwnd = 0;
     // SR's GVRAM ALU: three planes written in ONE cycle, with logic ops and
     // a colour-compare read. It is why SR games scroll at all. 34h picks the
     // op per plane, 35h the mode/compare/enable, 32h b6 turns the window on.
@@ -202,6 +208,8 @@ export class Pc8801Machine {
       const rom = this.n80mode && this.romN80 ? this.romN80 : this.romMain;
       return rom[a] ?? 0xff;
     }
+    if (a >= 0x8000 && a < 0x8400 && !this.n80mode && (this._port31 & 6) === 0)
+      return this.ram[(this._txtwnd + (a & 0x3ff)) & 0xffff]; // text window (port 70h)
     if (a >= 0xc000 && this._aluOn()) return this._aluRead(a - 0xc000);
     if (a >= 0xc000 && this.gvramWindow >= 0) {
       return this.gvram[this.gvramWindow][a - 0xc000];
@@ -259,6 +267,9 @@ export class Pc8801Machine {
   writeMem(a, v) {
     a &= 0xffff;
     v &= 0xff;
+    if (a >= 0x8000 && a < 0x8400 && !this.n80mode && (this._port31 & 6) === 0) {
+      this.ram[(this._txtwnd + (a & 0x3ff)) & 0xffff] = v; return; // text window (port 70h)
+    }
     if (a >= 0xc000 && this._aluOn()) { this._aluWrite(a - 0xc000, v); return; }
     if (a >= 0xc000 && this.gvramWindow >= 0) {
       this.gvram[this.gvramWindow][a - 0xc000] = v;
@@ -278,6 +289,7 @@ export class Pc8801Machine {
     // current bank state in its stack frame so the return trampoline can
     // put it back. Returning a constant here means every OS call restores
     // the WRONG bank on the way home.
+    if (port === 0x70) return (this._txtwnd >> 8) & 0xff; // text window base
     if (port === 0x71) return this._port71;
     if (port === 0x40) {
       // d5 = VRTC (high during retrace), d1 = CMT carrier etc.
@@ -379,6 +391,7 @@ export class Pc8801Machine {
       case 0x5f: this.gvramWindow = -1; return; // main RAM back
       case 0x50: this.crtc.writeParam(v); return;
       case 0x51: this.crtc.writeCommand(v); return;
+      case 0x70: this._txtwnd = (v & 0xff) << 8; return; // text window base (see readMem)
       case 0x71: // extension ROM select — bit0 = 0 maps the ext ROM at
         // 6000-7FFF; WHICH of the 4 banks comes from port 32h bits 0-1
         // (EROMSL). Getting this split wrong sends every cross-bank call
