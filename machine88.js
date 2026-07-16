@@ -23,6 +23,7 @@ import { Upd3301 } from './index.js';
 import { Upd8257 } from './upd8257.js';
 import { renderScreen } from './pc8001.js';
 import { I8255, crossWire } from './i8255.js';
+import { loadTape } from './tape.js';
 import { Pc80s31 } from './pc80s31.js';
 import { snapObj, restoreObj } from './snap.js';
 import { Ym2203 } from './ym2203.js';
@@ -111,6 +112,14 @@ export class Pc8801Machine {
     this._rtcScmd = 0; this._rtcCmd = 0; this._rtcPcmd = 0; this._rtcDin = 0;
     this._rtcHold = false; this._rtcDout = false; this._rtcStrobe = 0;
     this._rtcDate = rtcDate; // { year, mon(1-12), day, hour, min, sec, wday(0=Sun) } or null → fixed default
+    // Cassette (CMT): motor on port 30h bit3, and the tape signal on port 40h.
+    // `this.tape` is a Tape (tape.js) or null. The 8251 USART at 20h/21h is wired
+    // up too. NOTE: measured against a real trace, PC-8001 N-BASIC does NOT read
+    // the USART for CLOAD — it polls IN 40h ~300×/frame and decodes the tape by
+    // *bit timing* (FSK: 1200/2400 Hz half-cycles on bit2). So finishing tape
+    // load needs an FSK waveform on 40h bit2, driven off the machine clock — see
+    // issue #11. The parser and ports below are the working foundation for that.
+    this.tape = null; this._cmtMotor = false;
     // SR's GVRAM ALU: three planes written in ONE cycle, with logic ops and
     // a colour-compare read. It is why SR games scroll at all. 34h picks the
     // op per plane, 35h the mode/compare/enable, 32h b6 turns the window on.
@@ -360,12 +369,15 @@ export class Pc8801Machine {
     if (port === 0x70) return (this._txtwnd >> 8) & 0xff; // text window base
     if (port === 0x71) return this._port71;
     if (port === 0x33) return this._port33;
+    if (port === 0x20) return this.tape ? this.tape.read() : 0xff;                  // 8251 RX data (tape)
+    if (port === 0x21) return 0x05 | (this.tape && this.tape.rxReady() ? 0x02 : 0); // 8251 status: TxRDY|TxEMPTY|RxRDY
     if ((port === 0x46 || port === 0xac) && this.opna) return this.opna.readStatus(); // OPNA ext status
     if ((port === 0x47 || port === 0xad) && this.opna) return this.opna.readStatus(); // OPNA ext data (status fallback)
     if (port === 0x40) {
       // d5 = VRTC (high during retrace), d1 = CMT carrier etc.
       const vrtc = this.tInFrame > this.frameT * 0.86;
-      return (vrtc ? 0x20 : 0x00) | 0x02 | this._rtcIn40(); // b5=VRTC, b4=RTC serial-out
+      const carrier = (this.tape && this.tape.carrier()) ? 0x04 : 0; // b2 = CMT carrier
+      return (vrtc ? 0x20 : 0x00) | 0x02 | this._rtcIn40() | carrier; // b5=VRTC, b4=RTC out, b2=CMT
 
     }
     if (port === 0x50) return this.crtc.readParam();
@@ -426,9 +438,13 @@ export class Pc8801Machine {
   out(port, v) {
     v &= 0xff;
     switch (port) {
-      case 0x30: // system: 40/80 col, 20/25 lines, mono
+      case 0x30: // system: 40/80 col, 20/25 lines, mono (b0); CMT motor (b3)
         this.width80 = (v & 1) !== 0;
+        this._cmtMotor = (v & 8) !== 0;
+        if (this.tape) this.tape.setMotor(this._cmtMotor);
         return;
+      case 0x20: return; // 8251 TX data (tape write — not modelled; load-only)
+      case 0x21: return; // 8251 mode/command word (async 8N1 for tape; nothing to configure)
       case 0x31: // graphics control. The bits are NOT what you'd guess:
         // b0 = 1 → 200-line (0 = 400-line), b1 = 64K-RAM mode,
         // b2 = N-BASIC select, b3 = VRAM displayed, b4 = 1 → COLOR (0 = mono),
@@ -613,6 +629,10 @@ export class Pc8801Machine {
   }
 
   insertDisk(unit, disk) { this.sub?.insertDisk(unit, disk); return this; }
+  // Load a cassette image (T88 / CAS bytes). N-BASIC `CLOAD`/`LOAD"CAS:"` then
+  // reads it through the 8251 (ports 20h/21h) with motor+carrier on 30h/40h.
+  insertTape(bytes) { this.tape = loadTape('tape', bytes); this.tape.setMotor(this._cmtMotor); return this; }
+  ejectTape() { this.tape = null; return this; }
   ejectDisk(unit) { this.sub?.ejectDisk(unit); return this; }
 
   // The effective bus-steal fraction for THIS frame. Auto mode derives it from
