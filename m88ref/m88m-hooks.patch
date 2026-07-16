@@ -1,0 +1,90 @@
+diff --git a/src/devices/Z80c.cpp b/src/devices/Z80c.cpp
+index 86c43a4..35da5e2 100644
+--- a/src/devices/Z80c.cpp
++++ b/src/devices/Z80c.cpp
+@@ -468,8 +468,11 @@ int Z80C::cbase;
+ // ---------------------------------------------------------------------------
+ //	1 ���ߎ��s
+ //	
++extern void* g_mainCpu;
++extern void (*g_pcHook)(unsigned pc);
+ inline void Z80C::SingleStep()
+ {
++	if (g_pcHook && (void*)this == g_mainCpu) g_pcHook(GetPC());
+ 	SingleStep(Fetch8());
+ }
+ 
+@@ -496,9 +499,11 @@ inline uint Z80C::Read8(uint addr)
+ 	}
+ }
+ 
++extern void (*g_e6cdHook)(unsigned pc, unsigned addr, unsigned val);
+ inline void Z80C::Write8(uint addr, uint data)
+ {
+ 	addr &= 0xffff;
++	if (g_e6cdHook && (addr == 0xe6cd || addr == 0xec88 || addr == 0xec89)) g_e6cdHook(GetPC(), addr, data);
+ 	MemoryPage& page = wrpages[addr >> pagebits];
+ #ifdef PTR_IDBIT
+ 	if (!(intpointer(page.ptr) & idbit))
+diff --git a/src/pc88/fdc.cpp b/src/pc88/fdc.cpp
+index e288b42..7cd1c44 100644
+--- a/src/pc88/fdc.cpp
++++ b/src/pc88/fdc.cpp
+@@ -20,6 +20,7 @@
+ #include "diag.h"
+ 
+ using namespace PC8801;
++extern unsigned g_fdcDataCount; extern void (*g_fdcResultHook)(unsigned,unsigned,unsigned,unsigned,unsigned,unsigned,unsigned);
+ 
+ // ---------------------------------------------------------------------------
+ //	�\�z/����
+@@ -265,8 +266,7 @@ uint IOCALL FDC::GetData(uint)
+ 
+ 		// E-Phase(�]����)
+ 		case execreadphase:
+-//			LOG1("ex= %d\n", scheduler->GetTime());
+-//			LOG0("*");
++			g_fdcDataCount++;
+ 			data = *bufptr++;
+ 			if (--count)
+ 			{
+@@ -409,6 +409,7 @@ void FDC::ShiftToResultPhase7()
+ 	buffer[4] = idr.h;
+ 	buffer[5] = idr.r;
+ 	buffer[6] = idr.n;
++	if (::g_fdcResultHook) ::g_fdcResultHook(buffer[0],buffer[1],buffer[2],buffer[3],buffer[4],buffer[5],buffer[6]);
+ 	Intr(true);
+ 	ShiftToResultPhase(7);
+ }
+@@ -608,8 +609,10 @@ void FDC::CmdScanEqual()
+ 
+ 
+ 
++extern void (*g_fdcReadHook)(unsigned c, unsigned h, unsigned r, unsigned n, unsigned eot);
+ void FDC::ReadData(bool deleted, bool scan)
+ {
++	if (g_fdcReadHook) g_fdcReadHook(idr.c, idr.h, idr.r, idr.n, eot);
+ 	LOG4("\tRead %.2x %.2x %.2x %.2x\n", idr.c, idr.h, idr.r, idr.n);
+ 	if (showstatus)
+ 		statusdisplay.Show(85, 0, "%s (%d) %.2x %.2x %.2x %.2x", scan ? "Scan" : "Read", hdu & 3, idr.c, idr.h, idr.r, idr.n);
+diff --git a/src/pc88/subsys.cpp b/src/pc88/subsys.cpp
+index 934f9e1..ea90c09 100644
+--- a/src/pc88/subsys.cpp
++++ b/src/pc88/subsys.cpp
+@@ -16,6 +16,7 @@
+ #include "diag.h"
+ 
+ using namespace PC8801;
++extern void (*g_mrdHook)(unsigned port, unsigned val);
+ 
+ // ---------------------------------------------------------------------------
+ //	�\�z�E�j��
+@@ -177,7 +178,7 @@ uint IOCALL SubSystem::M_Read0(uint)
+ {
+ 	idlecount = 0;
+ 	uint d = piom.Read0();
+-	LOG1(">%.2x ", d);
++	if (::g_mrdHook) ::g_mrdHook(0, d);
+ 	return d;
+ }
+ 

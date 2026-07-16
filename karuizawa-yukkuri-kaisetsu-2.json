@@ -1,0 +1,74 @@
+{
+  "title": "軽井沢誘拐案内の謎・第二部 ── 実機を改造して、真犯人を追い詰めるのだ",
+  "subtitle": "μPD765 / PC-8801 エミュ(upd3301) デバッグ捜査劇 Part 2",
+  "note": "第一部（karuizawa-yukkuri-kaisetsu.json）の続き。霊夢=捜査/解説役, ずんだもん=疑問をぶつける役。ずんだもんは語尾『〜のだ/〜なのだ』。inserts はスライド用の等幅テキスト（ヘックスダンプ/逆アセンブル/ログ）。スキーマはpipelineに合わせて適宜マッピングして。第一部の結末＝『プロテクトはシロ、でも起動しない』を受けて始まる。",
+  "characters": {
+    "reimu": { "name": "博麗霊夢", "role": "捜査・解説", "voice_hint": "落ち着き・ややぶっきらぼう・語尾『〜わ/〜のよ/〜ね』", "color": "#e8746f" },
+    "zundamon": { "name": "ずんだもん", "role": "素朴な疑問・リアクション", "voice_hint": "元気・好奇心・語尾『〜のだ/〜なのだ』", "color": "#7cc86a" }
+  },
+  "scenes": [
+    {
+      "id": "cut10",
+      "heading": "実機を、改造して、味方にするのだ",
+      "lines": [
+        { "speaker": "zundamon", "text": "霊夢〜、プロテクトはシロだったのに、まだ起動しないのだ。もう手がかりが尽きたのだ……。" },
+        { "speaker": "reimu", "text": "いいえ。最強の証人がまだいるわ。M88 ── この子が動くなら、M88に『正解』を吐かせればいい。GUI付きのWindowsアプリだけど、クロスプラットフォーム移植のソースを引っぱって、エミュレーションコアだけをg++で手ビルドしたの。画面出力は空スタブ、自前のヘッドレスdriverから起動。" },
+        { "speaker": "insert", "caption": "M88M (reference) — Karuizawa booted headless", "text": "16|              1   o r   2          ← ゲームのメニューが出た!\n# final E6CD=00   ← M88 はE6CDをクリアして入力を受け付ける" },
+        { "speaker": "zundamon", "text": "「1 or 2」なのだ! 実機リファレンスが手の中に来たのだ! これでうちのエミュと1命令ずつ突き合わせられるのだ!" },
+        { "speaker": "reimu", "text": "そういうこと。Z80コアにPCフック、FDCにread/resultフック、サブCPUのメモリ書き込みにもフック。両方を並べて、どこで道が分かれるかを炙り出すのよ。" }
+      ]
+    },
+    {
+      "id": "cut11",
+      "heading": "6926バイトまでは、双子だったのだ",
+      "lines": [
+        { "speaker": "reimu", "text": "まずディスク。読んでるセクタは完全に同じ ── cyl0、プロテクトのR87/R82、cyl18、cyl20。返すデータも1バイトも違わない。次にメインが受け取るバイト列を、起動から同じ250フレーム、1バイトずつ並べたの。" },
+        { "speaker": "insert", "caption": "byte-stream diff — main ← sub (8255 transfer)", "text": "M88 : 受信 12412 バイト … 最後まで流れる\nうち: 受信  6927 バイトで停止、以降 0xff を読み続けデッドロック\n先頭 6927 バイトは、1ビットの狂いもなく一致  ← 双子" },
+        { "speaker": "zundamon", "text": "6927バイト目でだけ、道が分かれるのだ……! ぞっとするほどキレイなのだ。" },
+        { "speaker": "reimu", "text": "その瞬間、サブは0xffを送ってた。最初はね、サブの送信バッファが壊れて0xffを送ってるんだと思ったの。でも ── それが早とちりだったのよ。" }
+      ]
+    },
+    {
+      "id": "cut12",
+      "heading": "握手は、ずっと正しく動いていたのだ",
+      "lines": [
+        { "speaker": "reimu", "text": "その0xffを、メインがどう受け取ってるか、両CPUの8255の信号線を命令単位で覗いたの。そしたら ── 拍子抜けするほど、綺麗だった。" },
+        { "speaker": "insert", "caption": "8255 handshake — byte-by-byte at the \"break\"", "text": "SUB データを送る A=ff HL=55fb → strobe(bit4)\nMAIN bit5=受信可 → bit6=ACK  ✓\nSUB ACK確認 → 次バイト A=ff HL=55fc … BC=5,4,3,2,1,0\n握手は完璧に成立。0xffも1バイトずつ、正しく転送されている。" },
+        { "speaker": "zundamon", "text": "えっ、握手は犯人じゃなかったのだ!? boostも、割り込み粒度も、相互タイムアウトも、ぜんぶシロ ── boost=1でもSLICE=1でも、同じ6回で止まるのだ。タイミングの事件じゃないのだ!" },
+        { "speaker": "reimu", "text": "そう。機構は全部、正しい。でもメインが出したディスク読み込み命令の数を数えたら ── うちは6回、M88は71回。うちは6927バイトで『もう要らない』と言う。握手じゃない。もっと上のレイヤーに、静かな犯人がいる。" }
+      ],
+      "verdict": { "label": "8255ハンドシェイク・boost・割り込み粒度 → 全員シロ", "kind": "clear" }
+    },
+    {
+      "id": "cut13",
+      "heading": "真犯人の正体 ── ゲームは自前のローダを注入していたのだ",
+      "lines": [
+        { "speaker": "reimu", "text": "メインがサブへ何を送ってるか、全部ログしたの。そしたら ── これ、コマンドじゃない。コードよ。メインが巨大なZ80コードを、サブCPUのRAM(0x7000番地)に流し込んでた。" },
+        { "speaker": "insert", "caption": "MAIN → SUB stream (f58-f83)", "text": "0c 70 00 ...  = 「サブRAM 0x7000 へコードをロード」\n... db fa e6 20 db fb 77 23 ... = サブ用の独自ディスク読みループ\n見つけた文字列: \"SW-LOADER VER 1.0  COPYRIGHT BY T.K\"" },
+        { "speaker": "zundamon", "text": "SW-LOADER……! ゲームが自分専用のローダを、サブCPUに憑依させてたのだ! これぞ『ザ・プロテクト』の世界なのだ!" },
+        { "speaker": "reimu", "text": "しかもこの注入コード、自己検証までしてた。読んだプロテクトデータの特定バイトを期待値と照合して、1つでも違えばJP 0x7300で自爆する。80年代のプロテクト職人、恐ろしい執念よ。" },
+        { "speaker": "insert", "caption": "uploaded loader — self-verify", "text": "LD HL,5435 ; CP 4Bh ; JP NZ,7300 (abort)\nLD HL,544b ; CP 4Eh ; JP NZ,7300\nLD HL,57ff ; CP FFh ; JP 7480" },
+        { "speaker": "zundamon", "text": "うちのエミュ、その自爆(0x7300)には飛んでないのだ? 検証は通ってるのだ?" },
+        { "speaker": "reimu", "text": "通ってた。自爆は0回。52377ステップ、注入ローダは正常に走りきってた。犯人はもっと奥にいる。" }
+      ]
+    },
+    {
+      "id": "cut14",
+      "heading": "FATの終端 ── そして、無実の証明なのだ",
+      "lines": [
+        { "speaker": "reimu", "text": "注入ローダが最後にやってたのは、N88-DISK-BASICのFATを歩くこと。file『S』の開始クラスタ0x52、そのFATエントリを読んで ── 0xC6。0xC0以上は『最終クラスタ』の印。だからローダは『file Sは1クラスタだけ』と判断して、読むのをやめた。" },
+        { "speaker": "insert", "caption": "the FAT terminal check (uploaded @7195)", "text": "LD A,(711a) ; CP C0h ; JR C,7170  ← <C0なら次クラスタへ続行\nLD A,FF ; RST18 ; JP 00c1          ← >=C0なら終了\n(711a) = FAT[cluster 0x52] = C6  → 終了と判断" },
+        { "speaker": "zundamon", "text": "それが犯人なのだ! FATの値がうちだけ違うのだ! ……なのだ?" },
+        { "speaker": "reimu", "text": "私もそう思った。だから、うちのサブが読んだcyl18の4096バイトを、ディスク実体と1バイトずつ照合したの。結果は ──" },
+        { "speaker": "insert", "caption": "verify: sub RAM vs raw disk (cyl18 h1)", "text": "read#5 stored 4096 bytes @0x6000 == disk track37  (first mismatch: NONE)\nFAT[0x52] (0x6d52) = c6  ← うちも、ディスクも、同じ\n→ うちのFDCは完璧。0xC6はディスクが本当に持ってる値。" },
+        { "speaker": "reimu", "text": "そしてトドメ。M88のサブRAMも直接ダンプした。ディレクトリも、FATも、1バイト残らず一致。M88のFAT[0x52]も ── 0xC6。" },
+        { "speaker": "insert", "caption": "M88 sub RAM (reference) — identical", "text": "M88 dir @6110: 53 20 ... 80 52   (file S, start cluster 0x52)\nM88 FAT @6d40: 3f c5 c2 40 ... c6 ...  ← うちと完全一致\nM88 FAT[0x52] = c6   ／   M88 FDC読み回数 = 71" },
+        { "speaker": "zundamon", "text": "……つまりFATも、ローダも、FDCも、ぜんぶ正しかったのだ! file Sは両者とも『1クラスタ』で合ってたのだ! じゃあ71回の読みは……?" },
+        { "speaker": "reimu", "text": "file Sが起動したあと。file Sは自分がゲーム本体を呼び込む『第二のローダ』だったの。M88はfile Sを起動して残り65回の読みでゲームを展開する。うちはfile Sの初期ロードまでは完璧にこなして ── そこから先、file Sを走らせる引き継ぎで、静かに詰まってた。" },
+        { "speaker": "insert", "caption": "the real frontier", "text": "SW-LOADER → file S ロード ✓（FDC・FAT・8255・注入コード 全部正しい）\nfile S 起動 → ゲーム本体ロード（M88は+65読み） ✗ うちは2回目の転送が永久ループ\n真犯人 → file S実行段の引き継ぎ（次のセッションの標的）" },
+        { "speaker": "zundamon", "text": "容疑者を20人以上シロにして、事件を『ゲーム自身が注入したローダの、その次の一手』まで追い詰めたのだ。派手なプロテクト劇の裏に、こんな入れ子構造があったなんて ── 意外な所に来たのだ。名探偵は、まだ諦めないのだ!" }
+      ],
+      "verdict": { "label": "FAT・ローダ・FDC・注入コード → 全員シロ／真犯人はfile S実行段の引き継ぎへ", "kind": "clear" }
+    }
+  ]
+}
