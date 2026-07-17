@@ -209,14 +209,14 @@ export function rgbaToAlpha(rgba, dotW, dotH, { gain = 1.0, autoLevels = true, e
       if (mag > eth) edge[y * dotW + x] = 1;
     }
   }
-  // per-dot flat colour: a gun turns on when it carries the dot's hue (adaptive
-  // threshold off the brightest gun), so a coloured region keeps its colour and
-  // only genuinely dark areas fall to black — no dithering, a flat cel.
+  // per-dot flat colour: a gun turns on when it's within `hueK` of the dot's
+  // BRIGHTEST gun, so the hue survives regardless of lightness (a pale colour
+  // keeps its colour instead of washing to white); below `fillDark` → black.
+  const hueK = 0.72;
   const dotCol = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
-    const o = i * 4, r = norm(rgba[o]), g = norm(rgba[o + 1]), b = norm(rgba[o + 2]);
-    const t = Math.max(fillDark, Math.max(r, g, b) * 0.5);
-    dotCol[i] = (r > t ? 2 : 0) | (g > t ? 4 : 0) | (b > t ? 1 : 0);
+    const o = i * 4, r = norm(rgba[o]), g = norm(rgba[o + 1]), b = norm(rgba[o + 2]), mx = Math.max(r, g, b);
+    dotCol[i] = mx < fillDark ? 0 : ((r >= mx * hueK ? 2 : 0) | (g >= mx * hueK ? 4 : 0) | (b >= mx * hueK ? 1 : 0));
   }
   const codes = new Uint8Array(cols * rows), colors = new Uint8Array(cols * rows);
   const counts = new Uint8Array(8);
@@ -266,12 +266,13 @@ export function rgbaToAdaptive(rgba, dotW, dotH, { maxPairs = 20, coherence = 0.
   let sumS = 0, sumMax = 0;
   for (let i = 0; i < n; i++) { const o = i * 4, r = norm(rgba[o]), g = norm(rgba[o + 1]), b = norm(rgba[o + 2]); const mx = Math.max(r, g, b); sumS += mx - Math.min(r, g, b); sumMax += mx; }
   const meanS = sumS / n, meanMax = sumMax / n;
-  // 色ノリ lever: push each cell's hue OUT from its own mean before snapping to
-  // the 8-cube, so mid-saturation colours land on a hue instead of washing to
-  // white/black. Washed-out frames (low meanS) get pushed harder — this is the
-  // adaptive part the user wanted, replacing a manual GAIN.
-  const satBoost = Math.max(1.5, Math.min(3.4, 2.0 + (0.22 - meanS) * 5.5));
-  const floor = 0.11;                 // below this a cell is genuinely dark → black
+  // 色ノリ lever: a gun turns on when it's within `hueK` of the cell's BRIGHTEST
+  // gun, so the HUE survives regardless of lightness — a pale colour keeps its
+  // colour instead of washing to white. Higher hueK = fewer guns = more
+  // saturated; washed-out frames (low meanS) get a higher hueK to pull colour
+  // out. This adaptive floor/hue is exactly the "GAINを自動で" the user wanted.
+  const hueK = Math.max(0.68, Math.min(0.9, 0.76 + (0.18 - meanS) * 0.8));
+  const floor = 0.12;                 // below this a cell is genuinely dark → black
   const eth = 0.13 + meanS * 0.12;
 
   // region-boundary map → dark outline dots
@@ -302,14 +303,7 @@ export function rgbaToAdaptive(rgba, dotW, dotH, { maxPairs = 20, coherence = 0.
   let bwMax = 1e-6; for (let cx = 1; cx < cols; cx++) if (bw[cx] > bwMax) bwMax = bw[cx];
 
   const codes = new Uint8Array(cN), colors = new Uint8Array(cN);
-  const quant = (r, g, b) => {
-    if (Math.max(r, g, b) < floor) return 0;                 // dark → black
-    const mean = (r + g + b) / 3;
-    const R = mean + (r - mean) * satBoost, G = mean + (g - mean) * satBoost, B = mean + (b - mean) * satBoost;
-    let c = (R > 0.5 ? 2 : 0) | (G > 0.5 ? 4 : 0) | (B > 0.5 ? 1 : 0);
-    if (c === 0) c = mean > 0.5 ? 7 : 0;                       // neutral → white/black by luma
-    return c;
-  };
+  const quant = (r, g, b) => { const mx = Math.max(r, g, b); if (mx < floor) return 0; const t = mx * hueK; return (r >= t ? 2 : 0) | (g >= t ? 4 : 0) | (b >= t ? 1 : 0); };
 
   for (let cy = 0; cy < rows; cy++) {
     const rn = [];
@@ -332,7 +326,7 @@ export function rgbaToAdaptive(rgba, dotW, dotH, { maxPairs = 20, coherence = 0.
     }
   }
   carryEmptyCellColors(codes, colors, cols, rows);
-  return { schemaVersion: SCHEMA_VERSION, cols, rows, codes, colors, meta: { satBoost, floor, eth } };
+  return { schemaVersion: SCHEMA_VERSION, cols, rows, codes, colors, meta: { hueK, floor, eth } };
 }
 
 // PC-98 style: outlines + interiors flat-filled with an adaptive 16-color
