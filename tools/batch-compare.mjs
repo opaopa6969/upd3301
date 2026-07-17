@@ -16,6 +16,20 @@
 // mistake that once made every title falsely "match" at E6CD=00). The fix is
 // load-bearing — keep `ext`.
 
+// TWO metric caveats learned the hard way, both fixable here:
+//   (1) BOOT SPEED. A fixed-frame E6CD/tvNZ snapshot is confounded because our
+//       emulator often boots FASTER than M88 — at 250f we're already on the
+//       title screen while M88 is mid-load, so the "divergence" is just a phase
+//       offset. Compare at a LATE frame (default 1500) where both have
+//       converged. At 250f the raw match rate reads ~86%; at 1500f converged
+//       it is ~99% (only ~2/353 genuinely diverge: Makaimura, GAZZEL).
+//   (2) DISPLAY MASK. tvramNZ counts raw text RAM even when the text plane is
+//       DISABLED (port 53h b0=1) — a graphics-only game (ﾄﾘﾄｰﾝ, tennis) leaves
+//       stale bytes there that are never shown, inflating tvNZ. We zero tvNZ
+//       when the text plane is off so it reflects what's on screen. (refdrv's
+//       side still counts raw, so such titles can still show a tvNZ delta —
+//       treat a text-off title's tvNZ as noise.)
+
 import { readFileSync, readdirSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -26,7 +40,7 @@ import { parseD88All } from '../d88.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROMDIR = process.argv[2] || '/mnt/c/var/emulator/エミュレーター本体/PC88/m88204';
 const DISKDIR = process.argv[3] || '/mnt/c/var/emulator/PC8801';
-const FRAMES = Number(process.argv[4] || 250);
+const FRAMES = Number(process.argv[4] || 1500); // late enough that both emulators have converged
 const REFDRV = resolve(HERE, '../m88ref/_m88m_build/M88M/refdrv');
 
 const rd = (p) => new Uint8Array(readFileSync(p));
@@ -41,7 +55,10 @@ function ours(path) {
     const imgs = parseD88All(rd(path));
     imgs.forEach((img, u) => { if (u < 2) m.insertDisk(u, img); }); // image0→drive0, image1→drive1
     for (let i = 0; i < FRAMES; i++) m.stepFrame();
-    let tvnz = 0; if (m.tvram) for (const b of m.tvram) if (b) tvnz++;
+    // count text RAM only when the text plane is actually displayed (port 53h
+    // b0=1 → text off), else a graphics-only game's stale bytes inflate tvNZ
+    const textOff = (m._port53 & 1) !== 0;
+    let tvnz = 0; if (m.tvram && !textOff) for (const b of m.tvram) if (b) tvnz++;
     return { e6cd: m.ram[0xe6cd], tvnz, nimg: imgs.length };
   } catch (e) { return { err: e.message }; }
 }

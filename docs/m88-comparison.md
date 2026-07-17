@@ -97,43 +97,55 @@ frame in each emulator, so "boots fine but E6CD differs" is the common,
 | blank/early (both tvNZ<200) | 1 | — | CHOPLIFT (needs keypress / more frames) |
 | refdrv error | 1 | — | M88 itself failed to run リトルコンピューターピープル |
 
-**→ 335/353 (95%) track M88** (exact + phase noise). The phase-noise bucket
-includes the already-resolved Ys1 / Abyss2 / Sorcerian cases, and duplicate
-copies of a title (Rayieza≡地球戦士ライーザ, Hajya≡覇者の封印) land on the
-*same* divergence — the metric is stable.
+**→ 335/353 (95%) track M88** at this raw 250f snapshot (exact + phase noise) —
+**but that undercounts.** The 48 "mismatches" are dominated by two *metric*
+artifacts (boot-speed and the display mask, see below); comparing at a
+**converged** frame collapses them to **2 genuine divergences → ~99%
+(≈351/353)**. The 250f snapshot is a fast first pass; the converged number is
+the real one.
 
-**Reading for the cycle-accuracy question:** if frame-level timing were the
-bottleneck, divergence would be broad and the phase-noise bucket would be
-real faults. Instead 95% track M88 at frame granularity — the frame-stepped
-core is sufficient for the bulk. The 16 leads are **title-specific**, not a
-systematic timing wall, so chasing them individually beats a cycle-exact
-rewrite (which also risks the working 95%).
+**Reading for the cycle-accuracy question:** ~99% of titles reach M88's exact
+state once boot-speed skew is removed — the frame-stepped core tracks M88
+almost everywhere. The two genuine misses are title-specific (a stall and a
+crash), **not** a systematic timing wall, so chase them individually rather
+than commit to a cycle-exact rewrite (which risks the working ~99%).
 
-**Real divergence leads.** Extending each to 3000 frames and instrumenting
-the frozen loop separates false leads (still animating — just phase noise the
-250f snapshot missed) from genuine stalls, and buckets the stalls by *what
-the CPU is polling* while frozen. The causes are **diverse and
-title-specific** — not one systematic timing wall — which is why individual
-chase beats a cycle-exact rewrite.
+### The 16 "leads" were mostly a metric artifact — real divergences: **2**
 
-*Downgraded — actually running (E6CD/tvNZ still changing at 3000f):*
-Stercru, starclsr, キャッスルエクセレント, ロリータシンドローム.
+Chasing the leads uncovered **two flaws in the fixed-250f metric itself**, and
+correcting them collapses 16 leads to **2 genuine divergences**:
 
-*Genuine stalls (frozen 250→3000f), by what they poll while stuck:*
+1. **Boot speed.** Our emulator often boots *faster* than M88, so at 250f we're
+   already on the title screen while M88 is mid-load. Comparing both at a
+   **converged** frame (1500f) instead shows the "frozen" titles reach the
+   **same** state — they were never diverging. Six leads dissolve this way:
+   Skyfox (both →ff/643), Snatcher (→98/1173), Rayieza (→00/3202), Deringer
+   (→e0/3653), Hajya (→00/3195), ROLLER (→32/2133). *(An earlier bit-3-of-40h
+   hypothesis for the "shared port-40h root" was tested and disproved — our
+   port 40h already matches M88's `In40 = port40 & 0x2a`; forcing b3 broke
+   auto-boot. Reverted.)*
+2. **Display mask.** `tvramNZ` counts raw text RAM even when the text plane is
+   **disabled** (port 53h b0=1). ﾄﾘﾄｰﾝ and tennis are graphics-only games that
+   turn the text plane off; the stale bytes left in text RAM inflate tvNZ to
+   4096 but are **never shown**. With text off these are *not* visual
+   divergences. (batch-compare now zeroes tvNZ when the text plane is off.)
 
-| Bucket | Titles | Frozen loop polls |
-|--------|--------|-------------------|
-| **port 40h (VRTC/timing bit)** ← shared | Skyfox, tennis | IN 40h ×1000s; main PC in a `DI; JP` vsync-wait (Skyfox 5504→85fd) |
-| **OPNA status (44h)** | Snatcher | IN 44h ×100s — waits on a sound-chip status flag |
-| **PPI/expansion (FEh/FCh)** | ﾄﾘﾄｰﾝ | IN FEh ×34000 — waits on an 8255/expansion bit |
-| **text-window/ext-ROM (70h/71h)** | Hajya(≡覇者の封印) | IN 71h/70h ×100s |
-| **keyboard scan** (may be legit key-wait) | Rayieza(≡地球戦士ライーザ), ROLLER | scans kbd rows; a naive SPACE/RETURN inject didn't wake them |
-| **memory/interrupt-wait** (no port IN) | Makaimura, Deringer, GAZZEL | tight RAM loop; a flag an IRQ should set never flips (GAZZEL runs off into 0018-0036) |
+Plus four that were simply still animating at 250f (Stercru, starclsr,
+キャッスルエクセレント, ロリータシンドローム).
 
-Best ROI first: **port 40h** is the only *shared* root (two titles), and
-**OPNA-status (44h)** likely touches other sound-heavy titles — both are
-plausible single fixes. The memory/interrupt-wait bucket is the hardest
-(needs the missing IRQ source identified per title).
+**What actually remains (ours converges to a genuinely different state than
+M88 at 1500f):**
+
+| Title | ours@1500 | M88@1500 | note |
+|-------|-----------|----------|------|
+| Makaimura | 07/1987 | 09/3126 | ours stalls at a less-complete screen (text on) |
+| GAZZEL | 00/2048 | b7/3077 | ours runs off into low memory (PC 0018-0036) — likely a crash |
+
+So at a **converged** comparison the real match rate is **~99% (≈351/353)**,
+not the 86% the raw 250f snapshot suggested. This is a strong answer to the
+cycle-accuracy question: the frame-stepped core tracks M88 almost everywhere;
+the two genuine misses are title-specific (a stall and a crash), not a timing
+wall — chase them individually, don't rewrite the core.
 
 **Harness gotcha (load-bearing):** our side must be built with the four N88
 extension ROMs (`n88_0..3.rom`) as `ext`, mapped at 6000-7FFF — that
