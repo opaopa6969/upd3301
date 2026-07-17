@@ -185,6 +185,62 @@ export function rgbaToLineArt(rgba, dotW, dotH, { edgeGain = 1.0, autoLevels = t
   return { schemaVersion: SCHEMA_VERSION, cols, rows, codes, colors };
 }
 
+// "α" mode — flat cel-shaded fills in the PC-8001 8-colour CELL format, after
+// the SQUARE ALPHA demo look: each region is painted SOLID with its dominant
+// 8-colour and the region boundaries are left dark (the black anime outline).
+// Unlike line-art (outlines only) this fills the interiors; unlike dither it
+// does not screen — flat colour, the hand-drawn semigraphic-anime aesthetic.
+// Cell-based (codes+colors), so it renders through the same μPD3301 path as the
+// dither/line modes. `edgeGain` thickens/thins the outline, `fillDark` is the
+// floor below which a gun stays off (raise it for a blacker, bolder look).
+export function rgbaToAlpha(rgba, dotW, dotH, { gain = 1.0, autoLevels = true, edgeGain = 1.0, fillDark = 0.28 } = {}) {
+  const cols = dotW >> 1, rows = dotH >> 2, n = dotW * dotH;
+  let lo = 0, scale = 1;
+  if (autoLevels) ({ lo, scale } = computeLevels(rgba, n));
+  const norm = (v) => Math.min(1, Math.max(0, (v - lo) * scale / 255 * gain));
+  // region-boundary map → the black outline (those dots are kept unlit)
+  const eth = 0.16 / Math.max(0.1, edgeGain);
+  const edge = new Uint8Array(n);
+  for (let y = 0; y < dotH - 1; y++) {
+    for (let x = 0; x < dotW - 1; x++) {
+      const o = (y * dotW + x) * 4, ox = o + 4, oy = o + dotW * 4;
+      let mag = 0;
+      for (let c = 0; c < 3; c++) mag = Math.max(mag, Math.abs(norm(rgba[o + c]) - norm(rgba[ox + c])), Math.abs(norm(rgba[o + c]) - norm(rgba[oy + c])));
+      if (mag > eth) edge[y * dotW + x] = 1;
+    }
+  }
+  // per-dot flat colour: a gun turns on when it carries the dot's hue (adaptive
+  // threshold off the brightest gun), so a coloured region keeps its colour and
+  // only genuinely dark areas fall to black — no dithering, a flat cel.
+  const dotCol = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const o = i * 4, r = norm(rgba[o]), g = norm(rgba[o + 1]), b = norm(rgba[o + 2]);
+    const t = Math.max(fillDark, Math.max(r, g, b) * 0.5);
+    dotCol[i] = (r > t ? 2 : 0) | (g > t ? 4 : 0) | (b > t ? 1 : 0);
+  }
+  const codes = new Uint8Array(cols * rows), colors = new Uint8Array(cols * rows);
+  const counts = new Uint8Array(8);
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      counts.fill(0); let code = 0;
+      for (let sub = 0; sub < 8; sub++) {
+        const dx = sub >> 2, dy = sub & 3, x = cx * 2 + dx, y = cy * 4 + dy, i = y * dotW + x;
+        if (edge[i]) continue;                    // outline → dark dot
+        code |= 1 << ((sub & 3) + (dx ? 4 : 0));   // filled dot
+        counts[dotCol[i]]++;
+      }
+      // dominant fill colour among the lit dots — weight black down a touch so a
+      // thin coloured area beats a near-tie with black rather than washing out.
+      let best = 0, bestW = -1;
+      for (let c = 0; c < 8; c++) { const w = counts[c] * (c === 0 ? 0.7 : 1); if (w > bestW) { bestW = w; best = c; } }
+      codes[cy * cols + cx] = code;
+      colors[cy * cols + cx] = code ? best : 0;
+    }
+  }
+  carryEmptyCellColors(codes, colors, cols, rows);
+  return { schemaVersion: SCHEMA_VERSION, cols, rows, codes, colors };
+}
+
 // PC-98 style: outlines + interiors flat-filled with an adaptive 16-color
 // palette picked from the 512 cube (the "16 colors out of the analog
 // palette" culture, one palette per picture). This mode ignores the μPD3301
