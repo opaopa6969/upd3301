@@ -84,6 +84,7 @@
   <button id="bice">🔬 ICE</button>
   <button id="bide">🛠 IDE</button>
   <button id="bpad" title="ゲームパッドの各ボタンを、どのエミュ入力（テンキー/カーソル/決定など）に割り当てるか設定。Ys等はテンキーで移動するのでパッドはキーボードのテンキーを叩く方式">🎮 パッド設定</button>
+  <button id="bsoftkb" title="ソフトウェアキーボードを表示（クリックで入力・ドラッグで移動）。SHIFT/GRPH/カナ/CTRLは off→単発→ロック で切替">⌨️ キーボード</button>
 </div>
 <div class="row" id="padcfg" style="display:none;background:#1a1a28;border:1px solid #446;border-radius:6px;padding:8px;flex-wrap:wrap;gap:6px 14px"></div>
 <div class="row" style="font-size:12px" id="romstore"></div>
@@ -785,6 +786,7 @@ async function openDiskBrowser(keepOpen) {
   renderDiskList();
 }
 $('bdiskbrowse').onclick = () => openDiskBrowser(false);
+$('bsoftkb').onclick = () => toggleSoftKb();
 // ---- session auto-save & resume: survive an accidental reset / mode-switch /
 // reload. A deterministic snapshot + the mounted disks + boot config are stashed
 // in IndexedDB every few seconds and on tab-hide; next visit offers to resume. --
@@ -1556,6 +1558,141 @@ window.addEventListener('keyup', (e) => {
   if (jb !== undefined) { kbdJoy |= (1 << jb); e.preventDefault(); }
   if (k) { kbSet(cellsOf(k), false); e.preventDefault(); }
 });
+
+// ===== Software keyboard (PC-8001 / PC-8801 layout, after the j80 emulator) =====
+// A floating, draggable on-screen keyboard. Clicking a key drives the SAME
+// kbMatrix the physical keyboard uses (via kbSet), so it works for any game and
+// adapts to the active machine (activeKeymap()/CODE88). Modifier keys
+// (SHIFT / GRPH / カナ / CTRL) cycle  off → 単発(oneshot) → ロック(lock) → off.
+// Key spec: { k:KEY/KEY88 name, c:CODE88 code (tenkey), m:modifier, u:upper legend,
+//             w:width×, sp:styled(green) }.
+const SK_MODCELL = { Shift: [8, 6], Control: [8, 7], Alt: [8, 4], KanaMode: [8, 5] };
+const skMod = { Shift: 0, Control: 0, Alt: 0, KanaMode: 0 }; // 0 off · 1 oneshot · 2 lock
+const SK = {
+  fn: [['f·1', { k: 'F1', sp: 1 }], ['f·2', { k: 'F2', sp: 1 }], ['f·3', { k: 'F3', sp: 1 }], ['f·4', { k: 'F4', sp: 1 }], ['f·5', { k: 'F5', sp: 1 }]],
+  rows: [
+    [['1', { k: '1', u: '!' }], ['2', { k: '2', u: '"' }], ['3', { k: '3', u: '#' }], ['4', { k: '4', u: '$' }], ['5', { k: '5', u: '%' }], ['6', { k: '6', u: '&' }], ['7', { k: '7', u: "'" }], ['8', { k: '8', u: '(' }], ['9', { k: '9', u: ')' }], ['0', { k: '0' }], ['−', { k: '-', u: '=' }], ['^', { k: '^' }], ['¥', { k: '\\', u: '|' }], ['STOP', { k: 'Escape', sp: 1, w: 1.4 }]],
+    [['ESC', { k: 'Escape', sp: 1, w: 1.4 }], ['Q', { k: 'q' }], ['W', { k: 'w' }], ['E', { k: 'e' }], ['R', { k: 'r' }], ['T', { k: 't' }], ['Y', { k: 'y' }], ['U', { k: 'u' }], ['I', { k: 'i' }], ['O', { k: 'o' }], ['P', { k: 'p' }], ['@', { k: '@' }], ['[', { k: '[' }], ['RETURN', { k: 'Enter', sp: 1, w: 1.6 }]],
+    [['CTRL', { m: 'Control', w: 1.6 }], ['A', { k: 'a' }], ['S', { k: 's' }], ['D', { k: 'd' }], ['F', { k: 'f' }], ['G', { k: 'g' }], ['H', { k: 'h' }], ['J', { k: 'j' }], ['K', { k: 'k' }], ['L', { k: 'l' }], [';', { k: ';', u: '+' }], [':', { k: ':', u: '*' }], [']', { k: ']' }], ['カナ', { m: 'KanaMode', sp: 1, w: 1.2 }]],
+    [['SHIFT', { m: 'Shift', w: 2 }], ['Z', { k: 'z' }], ['X', { k: 'x' }], ['C', { k: 'c' }], ['V', { k: 'v' }], ['B', { k: 'b' }], ['N', { k: 'n' }], ['M', { k: 'm' }], [',', { k: ',', u: '<' }], ['.', { k: '.', u: '>' }], ['/', { k: '/', u: '?' }], ['SHIFT', { m: 'Shift', w: 2 }]],
+    [['GRPH', { m: 'Alt', sp: 1, w: 1.6 }], ['space', { k: ' ', w: 9 }]],
+  ],
+  cursor: [['HOME CLR', { k: 'Home', sp: 1 }], ['↑', { k: 'ArrowUp' }], ['↓', { k: 'ArrowDown' }], ['←', { k: 'ArrowLeft' }], ['→', { k: 'ArrowRight' }], ['INS DEL', { k: 'Backspace', sp: 1 }]],
+  tenkey: [
+    [['7', { c: 'Numpad7', k: '7' }], ['8', { c: 'Numpad8', k: '8' }], ['9', { c: 'Numpad9', k: '9' }], ['*', { c: 'NumpadMultiply', k: ':' }]],
+    [['4', { c: 'Numpad4', k: '4' }], ['5', { c: 'Numpad5', k: '5' }], ['6', { c: 'Numpad6', k: '6' }], ['+', { c: 'NumpadAdd', k: ';' }]],
+    [['1', { c: 'Numpad1', k: '1' }], ['2', { c: 'Numpad2', k: '2' }], ['3', { c: 'Numpad3', k: '3' }], ['=', { c: 'NumpadEqual', k: '-' }]],
+    [['0', { c: 'Numpad0', k: '0' }], [',', { c: 'NumpadComma', k: ',' }], ['.', { c: 'NumpadDecimal', k: '.' }], ['RET', { c: 'NumpadEnter', k: 'Enter', sp: 1 }]],
+  ],
+};
+// resolve a key spec to matrix cells for the ACTIVE machine (null = unmapped)
+function skCells(sp) {
+  const map = activeKeymap();
+  const norm = (v) => v == null ? null : (Array.isArray(v[0]) ? v.map((c) => c.slice()) : [v.slice()]);
+  if (sp.c && map === KEY88 && CODE88[sp.c]) return norm(CODE88[sp.c]);
+  if (sp.k != null) {
+    if (map[sp.k] !== undefined) return norm(map[sp.k]);
+    // PC-8001 (KEY) has no ↓/← — synthesize from SHIFT + ↑/→
+    if (sp.k === 'ArrowDown' && map['ArrowUp'] !== undefined) return norm(map['ArrowUp']).concat([SK_MODCELL.Shift.slice()]);
+    if (sp.k === 'ArrowLeft' && map['ArrowRight'] !== undefined) return norm(map['ArrowRight']).concat([SK_MODCELL.Shift.slice()]);
+  }
+  return null;
+}
+function skCycleMod(name) {
+  const s = skMod[name] = (skMod[name] + 1) % 3;
+  kbSet([SK_MODCELL[name]], s === 2); // lock → hold the bit down; off/oneshot → release
+  renderSkMods();
+}
+function skPressKey(sp, btn) {
+  const cells = skCells(sp);
+  if (!cells) return;
+  if (bootMode === 'n88') ensureAudio();
+  if (frozen()) resumePlay();
+  const oneshots = Object.keys(skMod).filter((m) => skMod[m] === 1);
+  const modCells = oneshots.map((m) => SK_MODCELL[m]);
+  kbSet(modCells, true); kbSet(cells, true);
+  if (btn) btn.classList.add('skdown');
+  setTimeout(() => {
+    kbSet(cells, false); kbSet(modCells, false);
+    if (btn) btn.classList.remove('skdown');
+    if (oneshots.length) { for (const m of oneshots) skMod[m] = 0; renderSkMods(); }
+  }, 90);
+}
+let _skModBtns = {};
+function renderSkMods() {
+  for (const [name, els] of Object.entries(_skModBtns)) {
+    const s = skMod[name];
+    for (const el of els) {
+      el.classList.toggle('skmod1', s === 1);
+      el.classList.toggle('skmod2', s === 2);
+      el.dataset.st = s === 1 ? '単発' : s === 2 ? 'ロック' : '';
+    }
+  }
+}
+function buildSoftKb() {
+  if ($('softkb')) return $('softkb');
+  const style = document.createElement('style');
+  style.textContent = `
+    #softkb{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:120;background:#3c4a3a;border:2px solid #222;border-radius:8px;box-shadow:0 10px 34px #000b;user-select:none;font:12px/1 ui-monospace,monospace;color:#111;max-width:97vw;overflow:auto}
+    #softkb .skhead{display:flex;align-items:center;gap:8px;background:#000a;color:#cde;padding:4px 8px;cursor:move;font-size:12px}
+    #softkb .skhead b{color:#8fd}
+    #softkb .skhead .sp{flex:1}
+    #softkb .skbody{display:flex;gap:10px;padding:8px}
+    #softkb .skcol{display:flex;flex-direction:column;gap:4px}
+    #softkb .skrow{display:flex;gap:4px;justify-content:flex-start}
+    #softkb button.sk{min-width:26px;height:34px;padding:0 2px;border:1px solid #0006;border-radius:4px;background:#e8e8e0;color:#111;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;font:inherit;line-height:1.05}
+    #softkb button.sk:hover{background:#fff}
+    #softkb button.sk.sp{background:#7d8f5c;color:#fff;font-size:11px}
+    #softkb button.sk.skdown{background:#5cf;transform:translateY(1px)}
+    #softkb button.sk .u{font-size:9px;color:#888;height:9px}
+    #softkb button.sk.sp .u{color:#dfe}
+    #softkb button.sk.skmod1{outline:2px solid #fd4;background:#c9b45c;color:#111}
+    #softkb button.sk.skmod2{outline:2px solid #f84;background:#e0743a;color:#fff}
+    #softkb button.sk .st{font-size:8px;height:8px;color:#111}
+    #softkb button.sk.skmod1 .st::after{content:'単発'}
+    #softkb button.sk.skmod2 .st::after{content:'ロック'}
+  `;
+  document.head.appendChild(style);
+  const ov = document.createElement('div'); ov.id = 'softkb'; ov.style.display = 'none';
+  const mk = (label, opt) => {
+    const b = document.createElement('button'); b.className = 'sk' + (opt.sp ? ' sp' : '');
+    if (opt.w) b.style.minWidth = (opt.w * 26 + (opt.w - 1) * 4) + 'px';
+    const u = document.createElement('span'); u.className = 'u'; u.textContent = opt.u || '';
+    const t = document.createElement('span'); t.textContent = label;
+    b.append(u, t);
+    if (opt.m) { // modifier: cycle off→単発→ロック
+      const st = document.createElement('span'); st.className = 'st'; b.append(st);
+      b.title = `${label}（クリックで off → 単発 → ロック → off）`;
+      (_skModBtns[opt.m] = _skModBtns[opt.m] || []).push(b);
+      b.onclick = (e) => { e.preventDefault(); skCycleMod(opt.m); };
+    } else {
+      b.title = label + (opt.u ? ` (SHIFT+ → ${opt.u})` : '');
+      b.onmousedown = (e) => { e.preventDefault(); skPressKey(opt, b); };
+    }
+    return b;
+  };
+  const row = (keys) => { const r = document.createElement('div'); r.className = 'skrow'; for (const [l, o] of keys) r.appendChild(mk(l, o)); return r; };
+  const col = (...rows) => { const c = document.createElement('div'); c.className = 'skcol'; for (const r of rows) c.appendChild(r); return c; };
+  const head = document.createElement('div'); head.className = 'skhead';
+  head.innerHTML = '<b>⌨️ PC-8001 キーボード</b><span style="color:#9ab">修飾キー: off→単発→ロック</span><span class="sp"></span>';
+  const closeb = document.createElement('button'); closeb.textContent = '✕'; closeb.style.cssText = 'background:#0000;border:0;color:#cde;cursor:pointer;font-size:14px';
+  closeb.onclick = () => { ov.style.display = 'none'; };
+  head.appendChild(closeb);
+  const body = document.createElement('div'); body.className = 'skbody';
+  const mainCol = col(row(SK.fn), ...SK.rows.map(row));
+  const rightCol = col(row(SK.cursor), ...SK.tenkey.map(row));
+  body.append(mainCol, rightCol);
+  ov.append(head, body);
+  document.body.appendChild(ov);
+  // drag by the header
+  let dx = 0, dy = 0, drag = false;
+  head.addEventListener('mousedown', (e) => { if (e.target === closeb) return; drag = true; const r = ov.getBoundingClientRect(); dx = e.clientX - r.left; dy = e.clientY - r.top; ov.style.transform = 'none'; ov.style.left = r.left + 'px'; ov.style.top = r.top + 'px'; ov.style.bottom = 'auto'; e.preventDefault(); });
+  window.addEventListener('mousemove', (e) => { if (!drag) return; ov.style.left = Math.max(0, e.clientX - dx) + 'px'; ov.style.top = Math.max(0, e.clientY - dy) + 'px'; });
+  window.addEventListener('mouseup', () => { drag = false; });
+  renderSkMods();
+  return ov;
+}
+function toggleSoftKb() { const ov = buildSoftKb(); ov.style.display = ov.style.display === 'none' ? 'block' : 'none'; }
 
 // ---- gamepad config panel -------------------------------------------------
 function buildPadConfig() {
