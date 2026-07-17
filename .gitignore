@@ -2,3 +2,10 @@ node_modules/
 roms/*
 !roms/README.md
 hw/gerber/
+
+# opn-scope demo performance data — large generated OPN register traces + audio
+# (feena/ys2/sor). Kept out of git (~27 MB); distributed to prod/dev by other
+# means (scp from HVU). opn-scope.html degrades gracefully when they're absent.
+demo/*-trace.json
+demo/*-regs.json
+demo/*.mp3
