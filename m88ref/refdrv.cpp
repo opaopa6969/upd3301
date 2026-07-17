@@ -132,6 +132,10 @@ int main(int argc, char** argv) {
   for (int i = 0xef80; i < 0xefd0; i++) printf("%02x ", ram[i]); printf("\n");
   printf("# MEMDUMP EFD0: ");
   for (int i = 0xefd0; i < 0xf000; i++) printf("%02x ", ram[i]); printf("\n");
+  // optional arbitrary dump: argv[6] = hex address, dumps 0x40 bytes of main RAM
+  if (argc > 6) { unsigned da = (unsigned) strtol(argv[6], 0, 16);
+    printf("# MEMDUMP %04X: ", da);
+    for (unsigned i = da; i < da + 0x40; i++) printf("%02x ", ram[i & 0xffff]); printf("\n"); }
 
   // sub-CPU RAM: FAT walk cross-check for 軽井沢 SW-LOADER
   { uint8* sram = pc88.GetMem2()->GetRAM();  // 0x4000-sized, sub addr A → sram[A-0x4000]
