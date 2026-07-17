@@ -38,7 +38,7 @@
  "/index.js":"/index.js?v=cache1","/upd8257.js":"/upd8257.js?v=cache1",
  "/pc8001.js":"/pc8001.js?v=cache1","/crt.js":"/crt.js?v=cache1",
  "/tube.js":"/tube.js?v=cache1","/term.js":"/term.js?v=cache1",
- "/semivideo.js":"/semivideo.js?v=adapt","/z80.js":"/z80.js?v=cache1",
+ "/semivideo.js":"/semivideo.js?v=adapt2","/z80.js":"/z80.js?v=cache1",
  "/demo/font.js":"/demo/font.js?v=cache1"
 }}
 </script>
@@ -272,7 +272,7 @@ function frameToCells() {
     : convMode === 'alpha'
     ? rgbaToAlpha(rgba, dw, dh, { gain, autoLevels, edgeGain: 1.0 })
     : convMode === 'adaptive'
-    ? rgbaToAdaptive(rgba, dw, dh, { gain, autoLevels, maxPairs: 20 })
+    ? rgbaToAdaptive(rgba, dw, dh, { maxPairs: 20 }) // owns its levels/gain/saturation
     : rgbaToSemigraphic(rgba, dw, dh, {
         gain, autoLevels,
         temporalPhase: flickerLevels ? phase % (flickerLevels - 1) : null,
@@ -599,6 +599,16 @@ const convBtns = { dither: $('mdither'), line: $('mline'), alpha: $('malpha'), a
 function setConv(m) {
   convMode = m;
   for (const [k, el] of Object.entries(convBtns)) el.classList.toggle('on', k === m);
+  // 適応 owns levels/gain/saturation internally → grey out those controls
+  const adaptive = m === 'adaptive';
+  for (const id of ['bauto', 'kgain']) {
+    const el = $(id); if (!el) continue;
+    el.disabled = adaptive;
+    const box = el.closest('label') || el;
+    box.style.opacity = adaptive ? 0.35 : '';
+    box.style.pointerEvents = adaptive ? 'none' : '';
+    box.title = adaptive ? '適応モードでは自動（このツマミは無効）' : (box.title || '');
+  }
 }
 $('mdither').onclick = () => setConv('dither');
 $('mline').onclick = () => setConv('line');

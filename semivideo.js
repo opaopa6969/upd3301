@@ -252,11 +252,12 @@ export function rgbaToAlpha(rgba, dotW, dotH, { gain = 1.0, autoLevels = true, e
 // line alone. Dots are the flat-fill/outline pattern (like α); only the colour
 // is budgeted. `maxPairs` = per-line colour changes, `coherence` = how hard to
 // hold vertical edges (0 = per-line independent, 1 = strongly aligned).
-export function rgbaToAdaptive(rgba, dotW, dotH, { maxPairs = 20, autoLevels = true, gain = 1.0, coherence = 0.5 } = {}) {
+export function rgbaToAdaptive(rgba, dotW, dotH, { maxPairs = 20, coherence = 0.5 } = {}) {
   const cols = dotW >> 1, rows = dotH >> 2, n = dotW * dotH, cN = cols * rows;
-  let lo = 0, scale = 1;
-  if (autoLevels) ({ lo, scale } = computeLevels(rgba, n));
-  const norm = (v) => Math.min(1, Math.max(0, (v - lo) * scale / 255 * gain));
+  // adaptive mode OWNS its levels/gain/saturation — the auto-levels toggle and
+  // the GAIN knob don't apply here (adapting these IS the mode).
+  const { lo, scale } = computeLevels(rgba, n);
+  const norm = (v) => Math.min(1, Math.max(0, (v - lo) * scale / 255));
 
   // whole-frame stats → adaptive fill floor + edge threshold (the "アダプティブ"):
   // washed-out/low-saturation footage keeps more colour (lower floor); a busy,
@@ -265,7 +266,12 @@ export function rgbaToAdaptive(rgba, dotW, dotH, { maxPairs = 20, autoLevels = t
   let sumS = 0, sumMax = 0;
   for (let i = 0; i < n; i++) { const o = i * 4, r = norm(rgba[o]), g = norm(rgba[o + 1]), b = norm(rgba[o + 2]); const mx = Math.max(r, g, b); sumS += mx - Math.min(r, g, b); sumMax += mx; }
   const meanS = sumS / n, meanMax = sumMax / n;
-  const fillDark = Math.min(0.45, Math.max(0.16, 0.24 + meanMax * 0.12 - meanS * 0.25));
+  // 色ノリ lever: push each cell's hue OUT from its own mean before snapping to
+  // the 8-cube, so mid-saturation colours land on a hue instead of washing to
+  // white/black. Washed-out frames (low meanS) get pushed harder — this is the
+  // adaptive part the user wanted, replacing a manual GAIN.
+  const satBoost = Math.max(1.5, Math.min(3.4, 2.0 + (0.22 - meanS) * 5.5));
+  const floor = 0.11;                 // below this a cell is genuinely dark → black
   const eth = 0.13 + meanS * 0.12;
 
   // region-boundary map → dark outline dots
@@ -296,7 +302,14 @@ export function rgbaToAdaptive(rgba, dotW, dotH, { maxPairs = 20, autoLevels = t
   let bwMax = 1e-6; for (let cx = 1; cx < cols; cx++) if (bw[cx] > bwMax) bwMax = bw[cx];
 
   const codes = new Uint8Array(cN), colors = new Uint8Array(cN);
-  const quant = (r, g, b) => { const t = Math.max(fillDark, Math.max(r, g, b) * 0.5); return (r > t ? 2 : 0) | (g > t ? 4 : 0) | (b > t ? 1 : 0); };
+  const quant = (r, g, b) => {
+    if (Math.max(r, g, b) < floor) return 0;                 // dark → black
+    const mean = (r + g + b) / 3;
+    const R = mean + (r - mean) * satBoost, G = mean + (g - mean) * satBoost, B = mean + (b - mean) * satBoost;
+    let c = (R > 0.5 ? 2 : 0) | (G > 0.5 ? 4 : 0) | (B > 0.5 ? 1 : 0);
+    if (c === 0) c = mean > 0.5 ? 7 : 0;                       // neutral → white/black by luma
+    return c;
+  };
 
   for (let cy = 0; cy < rows; cy++) {
     const rn = [];
@@ -319,7 +332,7 @@ export function rgbaToAdaptive(rgba, dotW, dotH, { maxPairs = 20, autoLevels = t
     }
   }
   carryEmptyCellColors(codes, colors, cols, rows);
-  return { schemaVersion: SCHEMA_VERSION, cols, rows, codes, colors, meta: { fillDark, eth } };
+  return { schemaVersion: SCHEMA_VERSION, cols, rows, codes, colors, meta: { satBoost, floor, eth } };
 }
 
 // PC-98 style: outlines + interiors flat-filled with an adaptive 16-color
