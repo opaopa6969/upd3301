@@ -809,32 +809,50 @@ function autoType(text, done) {
   const step = () => {
     if (i >= text.length) { if (done) done(); return; }
     const ch = text[i++];
-    const val = ch === '\n' ? map['Enter'] : (map[ch] !== undefined ? map[ch] : map[ch.toLowerCase()]);
+    let val, shift = false;
+    if (ch === '\n') val = map['Enter'];
+    else if (ch >= 'A' && ch <= 'Z') { val = map[ch.toLowerCase()]; shift = true; } // uppercase needs SHIFT
+    else if (ch === '"') { val = map['2']; shift = true; }                          // " = SHIFT + 2
+    else val = map[ch] !== undefined ? map[ch] : map[ch.toLowerCase()];
     if (val === undefined) { step(); return; }
-    const cells = cellsOf(val);
+    const cells = cellsOf(val).slice();
+    if (shift) cells.push([8, 6]); // SHIFT
     kbSet(cells, true);
     setTimeout(() => { kbSet(cells, false); setTimeout(step, 55); }, 85);
   };
   step();
+}
+// the tape's file name (N-BASIC header: 0xD3 sync leader then the name) — so
+// ▶CLOAD can auto-type CLOAD"NAME" (N-BASIC's CLOAD needs a name, case-sensitive)
+function tapeFileName() {
+  const segs = machine && machine.tape && machine.tape.segs;
+  const data = segs && segs.find((s) => s.kind === 'data');
+  if (!data || !data.bytes) return '';
+  const b = data.bytes; let i = 0;
+  while (i < b.length && b[i] === 0xd3) i++; // skip sync
+  let name = '';
+  for (let k = 0; k < 16 && i + k < b.length; k++) { const c = b[i + k]; if (c >= 0x20 && c < 0x7f) name += String.fromCharCode(c); else break; }
+  return name.trim();
 }
 $('ftape').onchange = async (e) => {
   const f = e.target.files[0]; if (!f) return;
   tapeBytes = new Uint8Array(await f.arrayBuffer()); tapeName = f.name;
   if (machine && machine.insertTape) {
     machine.insertTape(tapeBytes);
-    $('tapeinfo').textContent = `📼 ${f.name} 挿入 — ▶CLOAD か、N88-BASICで CLOAD"名前"`;
+    $('tapeinfo').textContent = `📼 ${f.name} 挿入 — ▶CLOAD を押す（PC-8001テープは N-BASIC/N80 モード推奨）`;
   } else {
-    $('tapeinfo').textContent = `📼 ${f.name} 保持 — テープは N88-BASIC モードで読める（機種→N88に切替）`;
+    $('tapeinfo').textContent = `📼 ${f.name} 保持 — 機種を選んで再度どうぞ`;
   }
   ensureAudio();
 };
 $('btapecload').onclick = () => {
   if (!tapeBytes) { $('tapeinfo').textContent = 'テープ未挿入（📼テープを選んで）'; return; }
-  if (!(machine && machine.insertTape)) { $('tapeinfo').textContent = 'N88-BASIC モードに切替えてから（機種→N88）'; return; }
+  if (!(machine && machine.insertTape)) { $('tapeinfo').textContent = 'テープ非対応の機種です'; return; }
   if (frozen()) resumePlay();
   ensureAudio();
-  autoType('cload\n');
-  $('tapeinfo').textContent = `▶ CLOAD 実行中… (${tapeName})`;
+  const nm = tapeFileName();
+  autoType(nm ? `cload"${nm}"\n` : 'cload\n'); // N-BASIC needs CLOAD"NAME"; nameless CLOAD errors
+  $('tapeinfo').textContent = nm ? `▶ CLOAD"${nm}" 実行中…` : `▶ CLOAD 実行中…（名前不明。手動で CLOAD"名前"）`;
 };
 // ---- session auto-save & resume: survive an accidental reset / mode-switch /
 // reload. A deterministic snapshot + the mounted disks + boot config are stashed
@@ -1266,6 +1284,7 @@ function boot() {
   const origIn = machine._in.bind(machine);
   machine._in = (p) => (p === 0x30 || p === 0x31
     ? machine.dipsw[p - 0x30] : origIn(p));
+  if (tapeBytes) machine.insertTape(tapeBytes); // survive the rebuild (CLOAD reads it)
   canvas.focus();
 }
 

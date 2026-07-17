@@ -15,6 +15,7 @@
 import { Z80 } from './z80.js';
 import { Pc8001TextSystem } from './pc8001.js';
 import { snapObj, restoreObj } from './snap.js';
+import { loadTape } from './tape.js';
 
 export const SCHEMA_VERSION = 1;
 
@@ -29,6 +30,9 @@ export class Pc8001Machine {
     this.frameT = Math.round(clockHz / frameHz * (1 - dmaSteal));
     this.tInFrame = 0;
     this.frame = 0;
+    this.clockHz = clockHz;
+    this._nomFrameT = clockHz / frameHz;   // constant frame length for a monotonic tape clock
+    this.tape = null; this._cmtMotor = false; // cassette (tape.js) — CLOAD reads it via the 8251
 
     // PC-8012 expansion-unit bank RAM: 32KB boards overlaying 0000-7FFF.
     // Port E2h = per-bank READ enable bitmap, E3h = per-bank WRITE enable
@@ -103,17 +107,29 @@ export class Pc8001Machine {
     const mask = this.exMode ? 1 : (1 << this.extRam.length) - 1;
     if (port === 0xe2) { this.readEn = v & mask; return; }
     if (port === 0xe3) { this.writeEn = v & mask; return; }
+    if (port === 0x21) { if (this.tape) this.tape.writeControl(v); return; } // 8251 mode/command (tape)
+    if (port === 0x20) return;                                               // 8251 TX (tape is load-only)
+    if (port === 0x30 && this.tape) { this._cmtMotor = (v & 8) !== 0; this.tape.setMotor(this._cmtMotor); } // CMT motor (b3); fall through for width/CRTC
     this.sys.out(port, v);
   }
+
+  // Monotonic machine T-state count for tape timing (nominal frame length so
+  // it stays monotonic regardless of the per-frame DMA-steal adjustment).
+  _tapeNow() { return this.frame * this._nomFrameT + this.tInFrame; }
+  insertTape(bytes) { this.tape = loadTape('tape', bytes, this.clockHz); this.tape.setMotor(this._cmtMotor); return this; }
+  ejectTape() { this.tape = null; return this; }
 
   _in(port) {
     if (port <= 0x0b) return this.keys[port]; // keyboard matrix
     if (port === 0x40) {
-      // d5: VRTC (1 = vertical retrace) — high for the frame's tail
+      // d5: VRTC (1 = vertical retrace) — high for the frame's tail; d2: CMT carrier
       const vrtc = this.tInFrame > this.frameT * 0.78;
-      return vrtc ? 0xff : 0xdf;
+      let v = vrtc ? 0xff : 0xdf;
+      if (this.tape) { this.tape.pump(this._tapeNow()); v = (v & ~0x04) | (this.tape.carrier() ? 0x04 : 0); }
+      return v;
     }
-    if (port === 0x20 || port === 0x21) return 0x00; // 8251 stub
+    if (port === 0x20) { if (this.tape) this.tape.pump(this._tapeNow()); return this.tape ? this.tape.readData() : 0x00; }   // 8251 RX (tape)
+    if (port === 0x21) { if (this.tape) this.tape.pump(this._tapeNow()); return this.tape ? this.tape.status8251() : 0x00; } // 8251 status
     if (port === 0xe2) return this.readEn; // PC-8012 bank state readback
     if (port === 0xe3) return this.writeEn;
     const v = this.sys.in(port);
