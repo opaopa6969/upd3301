@@ -80,6 +80,55 @@ Net: after the sweep and follow-ups, **no open behavioural divergence remains** 
 this set. Titles match M88, differ only in post-boot timing phase, or (Dragon
 Buster) were a harness artifact. The text-window fix was the one real bug.
 
+## Batch sweep (353 titles, 250 frames)
+
+`tools/batch-compare.mjs` runs the whole `.d88` collection through both
+emulators and diffs the E6CD/tvramNZ fingerprint, then splits mismatches by
+whether the screen-fill (`tvramNZ`) agrees — a single-frame E6CD snapshot is
+noisy because a game-specific flag byte is caught at a different animation
+frame in each emulator, so "boots fine but E6CD differs" is the common,
+*non-bug* case.
+
+| Category | Count | % | Meaning |
+|----------|-------|---|---------|
+| exact E6CD match | 304 | 86% | same fingerprint at 250f |
+| phase noise (both boot, tvNZ within 15%) | 31 | 9% | game runs in both; snapshot caught different frames — **not a bug** |
+| real divergence lead (tvNZ differs >15%) | 16 | 4.5% | screen content genuinely differs — worth chasing |
+| blank/early (both tvNZ<200) | 1 | — | CHOPLIFT (needs keypress / more frames) |
+| refdrv error | 1 | — | M88 itself failed to run リトルコンピューターピープル |
+
+**→ 335/353 (95%) track M88** (exact + phase noise). The phase-noise bucket
+includes the already-resolved Ys1 / Abyss2 / Sorcerian cases, and duplicate
+copies of a title (Rayieza≡地球戦士ライーザ, Hajya≡覇者の封印) land on the
+*same* divergence — the metric is stable.
+
+**Reading for the cycle-accuracy question:** if frame-level timing were the
+bottleneck, divergence would be broad and the phase-noise bucket would be
+real faults. Instead 95% track M88 at frame granularity — the frame-stepped
+core is sufficient for the bulk. The 16 leads are **title-specific**, not a
+systematic timing wall, so chasing them individually beats a cycle-exact
+rewrite (which also risks the working 95%).
+
+**Real divergence leads (screen content differs at 250f):**
+
+```
+ﾄﾘﾄｰﾝ            M88 tv0(empty)  ours tv4096(full)  — inverted; graphics-only?
+Skyfox           M88 tv2678      ours tv643         — ours stalls earlier
+Snatcher         M88 tv2678      ours tv1173
+Makaimura        M88 tv3126      ours tv1987
+tennis           M88 tv2678      ours tv4096(full)  — ours may fill garbage
+GAZZEL           M88 tv3077      ours tv2048
+Deringer / Stercru / starclsr / ROLLER / キャッスルエクセレント
+Rayieza(≡地球戦士ライーザ) / Hajya(≡覇者の封印) / ロリータシンドローム
+```
+
+**Harness gotcha (load-bearing):** our side must be built with the four N88
+extension ROMs (`n88_0..3.rom`) as `ext`, mapped at 6000-7FFF — that
+extension ROM *is* N88-DISK-BASIC. Omit it and the machine drops to the
+N88-BASIC prompt and **no game boots**, yet every title falsely "matches" at
+E6CD=00 (both idle). The first run of this sweep hit exactly that and
+reported a meaningless 83%; with `ext` wired the real picture above emerged.
+
 ## How to reproduce / extend
 
 ```sh
@@ -87,9 +136,16 @@ Buster) were a harness artifact. The text-window fix was the one real bug.
 m88ref/build.sh
 m88ref/_m88m_build/M88M/refdrv <romDir> <disk.d88> 250   # prints final E6CD, tvramNZ, g_rdN
 
-# ours side: a Node harness — new Pc8801Machine → insertDisk → stepFrame ×250,
-# then read m.ram[0xe6cd], count non-zero m.tvram[], hook globalThis.__fdcCmd.
-# IMPORTANT: mount *every* image of a multi-disk .d88 —
+# whole collection, both emulators, categorised:
+node tools/batch-compare.mjs <romDir> <diskDir> 250
+
+# ours side (what batch-compare does per title): a Node harness —
+#   new Pc8801Machine({main, ext, sub, mode:'n88'}) → insertDisk → stepFrame ×250,
+#   then read m.ram[0xe6cd], count non-zero m.tvram[], hook globalThis.__fdcCmd.
+# IMPORTANT #1: `ext` = the four N88 extension ROMs concatenated
+#   (n88_0..3.rom at i*0x2000, mapped 6000-7FFF). That ROM *is* N88-DISK-BASIC;
+#   WITHOUT it no disk boots and every title falsely "matches" at E6CD=00.
+# IMPORTANT #2: mount *every* image of a multi-disk .d88 —
 #   const d = parseD88All(bytes); d.forEach((img,u) => u<2 && m.insertDisk(u,img));
 # A two-disk title with only image 0 mounted will loop on an empty drive 1
 # (that was the Dragon Buster "divergence").
