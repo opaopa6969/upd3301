@@ -32,7 +32,17 @@ Two answers, two layers:
 | ROM at rest | this browser's IndexedDB | (Phase 1) same + gate · (Phase 2) **your server-side folder** |
 | Bytes leave device? | **never** | only to *your own* encrypted per-user store |
 | Use case | "try it on this machine" | "upload once, use on all my devices" |
-| Status | **shipped** (Phase 0) | **to build** (Phase 1 → 2) |
+| Status | **shipped** (Phase 0) | **Phase 1 shipped** · Phase 2 (per-user server ROM) to build |
+
+> **Phase 1 (auth gate) is live as of 2026-07-17.** `emulator.unlaxer.org` is a
+> route in the prod volta-gateway (`/home/opa/volta-gateway/volta-gateway.yaml`
+> on HVU) pointing at the *same* static backend as the public site
+> (`http://192.168.1.50:3301`) but **without** `public: true`, so the gateway
+> gates it through volta auth (`auth.unlaxer.org`). Unauthenticated hits get a
+> 302 to the login. Added by hand-editing the gateway yaml + zero-downtime
+> `docker kill -s HUP volta-gateway` (no outage); the public `3301.unlaxer.org`
+> route is untouched. Phase 2 (per-user server-side ROM folders instead of just
+> the shared IndexedDB layer) is still to build.
 
 ## 2. Architecture
 
