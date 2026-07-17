@@ -603,7 +603,7 @@ async function scanFolder(dir, prefix = '', depth = 0, acc) {
   if (depth > 5) return acc;
   for await (const [nm, h] of dir.entries()) {
     if (h.kind === 'file') {
-      if (/\.(d88|88d|d77)$/i.test(nm)) acc.disks.push({ name: nm, path: prefix + nm, handle: h });
+      if (/\.(d88|88d|d77|d8u|hdm|tfd|xdf|zip)$/i.test(nm)) acc.disks.push({ name: nm, path: prefix + nm, handle: h }); // .zip is unzipped on load/import
       else if (classify88(nm)) acc.roms.push({ name: nm, handle: h });
       else if (/^font88?\.rom$/i.test(nm) || /font.*\.rom$/i.test(nm)) acc.fonts.push({ name: nm, handle: h });
     } else if (h.kind === 'directory') await scanFolder(h, prefix + nm + '/', depth + 1, acc);
@@ -653,17 +653,65 @@ async function loadFolderDisk(item) {
     if (parts.length > 1) refreshDriveSelectors();
   } catch (err) { $('dipnote').textContent = 'folder disk: ' + err.message; }
 }
+// A display name that keeps folder / zip context when the bare filename is
+// ambiguous (many d88s are just "disk1.d88" — the *folder* or the *.zip* is
+// what carries the game title). Prefers the .zip title, else the nearest
+// non-generic parent directory, when it adds information over the filename.
+function diskDisplayName(path, innerName) {
+  const segs = (path || '').split('/').filter(Boolean);
+  const container = segs.length ? segs[segs.length - 1] : (innerName || '');
+  const file = innerName || container;
+  const low = file.toLowerCase();
+  const GENERIC = /^(pc-?88(01)?|disks?|games?|roms?|memory|d88|img|images?|emu|エミュ|floppy|fdd|new|old|dump)$/i;
+  if (/\.zip$/i.test(container)) { // the archive name often carries the title the inner d88 lacks
+    const z = container.replace(/\.zip$/i, '');
+    if (z && !low.includes(z.toLowerCase())) return z + ' › ' + file;
+  }
+  const stem = file.replace(/\.(d88|88d|d77)$/i, '');
+  for (let k = segs.length - 2; k >= 0; k--) { // nearest informative parent dir
+    const dir = segs[k];
+    if (GENERIC.test(dir) || /^\(.*\)$/.test(dir)) continue;
+    if (!low.includes(dir.toLowerCase()) && dir !== stem) return dir + ' / ' + file;
+    break;
+  }
+  return file;
+}
+// import one scanned folder item (unzipping if needed) into the idb library;
+// returns how many disk images it added. `seen` (a Set of roles) dedups.
+async function importFolderItem(item, seen) {
+  const bytes = new Uint8Array(await (await item.handle.getFile()).arrayBuffer());
+  const parts = (await expandDiskFile(item.name, bytes)).filter((p) => p.isDisk);
+  let n = 0;
+  for (const p of parts) {
+    const role = 'disk:' + (item.path || item.name) + (parts.length > 1 ? '::' + p.name : '');
+    if (seen && seen.has(role)) continue;
+    await putRom(role, diskDisplayName(item.path, p.name), p.bytes);
+    if (seen) seen.add(role);
+    n++;
+  }
+  return n;
+}
 async function saveFolderDiskToLibrary(item) {
   try {
-    const bytes = new Uint8Array(await (await item.handle.getFile()).arrayBuffer());
-    const parts = (await expandDiskFile(item.name, bytes)).filter((p) => p.isDisk); // store extracted d88(s)
-    if (!parts.length) { $('dipnote').textContent = `${item.name}: 保存できるディスク画像なし`; return; }
-    for (const p of parts) await putRom('disk:' + p.name, p.name, p.bytes);
+    const n = await importFolderItem(item);
+    if (!n) { $('dipnote').textContent = `${item.name}: 保存できるディスク画像なし`; return; }
     refreshDiskList(); await openDiskBrowser(true); // reload the idb list so it shows as 💾
-    $('dipnote').textContent = parts.length > 1
-      ? `💾 「${item.name}」から ${parts.length} 枚を保存済みに追加した`
-      : `💾 「${parts[0].name}」を保存済みに追加した`;
+    $('dipnote').textContent = n > 1
+      ? `💾 「${item.name}」から ${n} 枚を保存済みに追加した`
+      : `💾 「${diskDisplayName(item.path, item.name)}」を保存済みに追加した`;
   } catch (err) { $('dipnote').textContent = 'save: ' + err.message; }
+}
+// bulk: import EVERY scanned folder disk into the idb library (dedup + progress).
+async function importAllFolderDisks() {
+  if (!folderDisks.length) { $('diskfolderinfo').textContent = '先に📁フォルダを開いてください'; return; }
+  let seen; try { seen = new Set((await listRoms()).filter((i) => i.role.startsWith('disk:')).map((i) => i.role)); } catch { seen = new Set(); }
+  let added = 0, fail = 0, i = 0;
+  for (const item of folderDisks) {
+    $('diskfolderinfo').textContent = `💾 インポート中… ${++i}/${folderDisks.length}（追加 ${added}${fail ? ` / 失敗 ${fail}` : ''}）`;
+    try { added += await importFolderItem(item, seen); } catch { fail++; }
+  }
+  await openDiskBrowser(true); renderDiskList();
+  $('diskfolderinfo').textContent = `✓ ${added}枚をライブラリにインポート${fail ? `（${fail}件失敗）` : ''}`;
 }
 function ensureDiskBrowser() {
   if ($('diskbrowser')) return;
@@ -679,6 +727,7 @@ function ensureDiskBrowser() {
        </div>
        <div style="display:flex;gap:8px;align-items:center;padding:6px 12px;border-bottom:1px solid #23232f;font-size:12px">
          <button id="diskpick" title="D88の入ったフォルダを選ぶ（例 C:\\var\\emulator）。中身は端末に残ったまま、ブラウザが直接読む">📁 フォルダを開く</button>
+         <button id="diskimportall" title="スキャン済みの全ディスクを保存済みライブラリ(💾)へ一括インポート（zipは展開、重複はスキップ）">💾 全部インポート</button>
          <span id="diskfolderinfo" style="color:#778"></span>
        </div>
        <div id="disklist" style="overflow:auto;padding:6px"></div>
@@ -691,6 +740,7 @@ function ensureDiskBrowser() {
     if (!window.showDirectoryPicker) { $('diskfolderinfo').textContent = 'このブラウザはフォルダ選択に未対応(Chrome系で可)'; return; }
     try { const dir = await window.showDirectoryPicker(); await useFolder(dir); } catch {}
   };
+  $('diskimportall').onclick = () => importAllFolderDisks();
 }
 let _idbItems = [];
 async function renderDiskList() {
