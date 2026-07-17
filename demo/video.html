@@ -272,7 +272,10 @@ function frameToCells() {
     : convMode === 'alpha'
     ? rgbaToAlpha(rgba, dw, dh, { gain, autoLevels, edgeGain: 1.0 })
     : convMode === 'adaptive'
-    ? rgbaToAdaptive(rgba, dw, dh, { maxPairs: 20 }) // owns its levels/gain/saturation
+    // ~20 colour changes/line is the μPD3301's real limit on the 80-col screen;
+    // scale it with the geometry so EX/UEX use their extra colour instead of
+    // banding (80→20, 160→40, 320→80). Owns its levels/gain/saturation.
+    ? rgbaToAdaptive(rgba, dw, dh, { maxPairs: Math.max(20, Math.round((dw >> 1) / 4)) })
     : rgbaToSemigraphic(rgba, dw, dh, {
         gain, autoLevels,
         temporalPhase: flickerLevels ? phase % (flickerLevels - 1) : null,
