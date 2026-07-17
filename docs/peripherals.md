@@ -289,7 +289,7 @@ N88-BASIC sets I = F3h, so the handler table lives at F300h.
 
 | Source | Number | Vector | 8214 level | E6h enable | Raised by (this repo) |
 |--------|--------|--------|-----------|------------|----------------------|
-| SIO (8251) | 0 | 00h | 1 | bit 2 | nothing — 8251 is a stub |
+| SIO (8251) | 0 | 00h | 1 | bit 2 | nothing — CLOAD polls RXRDY; SIO IRQ not raised |
 | VSYNC | 1 | 02h | 2 | bit 1 | end of every frame, 60 Hz |
 | RTC | 2 | 04h | 3 | bit 0 | interval timer, 600 Hz |
 | SOUND (OPN) | 4 | 08h | 5 | — (real HW: port 32h side) | nothing — YM2203 is a stub (44h/45h read 00h) |
@@ -333,7 +333,7 @@ the measured behavior, not as a citation from an NEC databook.
 
 ---
 
-# μPD8251 — USART (honest stub)
+# μPD8251 — USART (cassette load, byte-level)
 
 ## THE REAL CHIP (background)
 
@@ -349,16 +349,42 @@ the motor relay on port 30h. The CPU never hears audio, only serial bytes.
 The μPD8214's source 0 (level 1, vector 00h, E6h bit 2) is reserved for
 this chip's interrupts.
 
-## THIS REPO (status: stub)
+## THIS REPO (status: implemented — byte-level, M88-faithful)
 
-- `machine.js` (PC-8001): ports 20h/21h read **00h** — a flat stub.
-- `machine88.js` (PC-8801): the ports are not decoded at all, so they read
-  **FFh** (pulled-up floating bus).
-- No SIO interrupt is ever raised; the 8214's source 0 slot sits wired and
-  waiting.
-- Consequence: **CMT (cassette) load does not work yet.** Implementing the
-  8251 + FSK-decoded tape images is future work; until then this section
-  documents the hole rather than papering over it.
+We model the tape the way **M88** (`tapemgr.cpp` + `sio.cpp`) does: at the
+**byte level**, not as an FSK waveform. A `.t88`/`.cas` image ([`tape.js`](../tape.js))
+is an ordered list of MARK / SPACE / DATA segments; while the motor runs
+(port 30h bit 3) a play clock advances and DATA bytes are streamed into the
+8251 receive register at the block's baud (44 T88 tick-units/byte at 1200,
+88 at 600; **1 unit = clockHz/4800 T-states**). The CPU sees:
+
+- **21h (status)** — `TXRDY|TXE` (05h) plus `RXRDY` (02h) when a byte is
+  latched; `OE`/`FE` clear on a keeping-up reader. Writes run the 8251
+  mode/command state machine (we honour **RxE** / error-reset / internal
+  reset — enough for CLOAD).
+- **20h (data)** — the current byte; the read clears RXRDY and requests the
+  next "soon" (matching M88's `SetEvent(event,1)`), so a block streams at
+  read speed rather than crawling at baud.
+- **40h bit 2 (carrier)** — high while parked on a MARK. (This is *not* an
+  FSK bit-stream; an early guess decoded FSK here and was wrong. The ROM
+  disassembly at 0C00h — wait carrier → `OUT 21h` mode/command → poll
+  `IN 21h` RXRDY → `IN 20h` — and M88's source both show the 8251 byte path.)
+
+Verified end-to-end: `CLOAD"TIME"` on `Time.t88` in N-BASIC reports
+`Found:TIME`, and the 3852 bytes the CPU pulls from 20h match the tape's
+DATA segments byte-for-byte; `LIST` detokenises to clean BASIC. Two gotchas
+worth knowing: N-BASIC **filenames are case-sensitive** (the header stores
+uppercase `TIME`, so you must type `CLOAD"TIME"` — the machine boots in
+lowercase, so shift the name), and a program that then hits `Syntax error`
+is usually a **dialect mismatch** (e.g. an N88/disk-BASIC program run under
+N-BASIC), not a load fault — the bytes are exact.
+
+- No SIO **interrupt** is raised — N-BASIC's CLOAD *polls* RXRDY, so the
+  8214's source 0 slot stays wired and waiting (fine for load; a title that
+  wanted SIO IRQs would need it hooked up).
+- Long tape leaders/inter-block gaps are capped (`DUR_CAP`) so multi-second
+  leaders don't make CLOAD crawl; carrier still stabilises well within the
+  cap. Real pre-data marks (≥1000 units) are untouched.
 
 ---
 

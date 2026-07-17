@@ -215,6 +215,7 @@ export class Pc8801Machine {
     this.subRatio = (clockHz / frameHz) / this.frameT;
     this.tInFrame = 0;
     this.frame = 0;
+    this._nomFrameT = clockHz / frameHz; // nominal (constant) frame length for a monotonic tape clock
 
     this.cpu = new Z80({
       read: (a) => this.readMem(a),
@@ -369,15 +370,17 @@ export class Pc8801Machine {
     if (port === 0x70) return (this._txtwnd >> 8) & 0xff; // text window base
     if (port === 0x71) return this._port71;
     if (port === 0x33) return this._port33;
-    if (port === 0x20) return this.tape ? this.tape.read() : 0xff;                  // 8251 RX data (tape)
-    if (port === 0x21) return 0x05 | (this.tape && this.tape.rxReady() ? 0x02 : 0); // 8251 status: TxRDY|TxEMPTY|RxRDY
+    if (port === 0x20) { if (this.tape) this.tape.pump(this._tapeNow()); return this.tape ? this.tape.readData() : 0xff; }        // 8251 RX data (tape)
+    if (port === 0x21) { if (this.tape) this.tape.pump(this._tapeNow()); return this.tape ? this.tape.status8251() : 0x05; }      // 8251 status: TxRDY|TxEMPTY|RxRDY|OE|FE
     if ((port === 0x46 || port === 0xac) && this.opna) return this.opna.readStatus(); // OPNA ext status
     if ((port === 0x47 || port === 0xad) && this.opna) return this.opna.readStatus(); // OPNA ext data (status fallback)
     if (port === 0x40) {
       // d5 = VRTC (high during retrace), d1 = CMT carrier etc.
       const vrtc = this.tInFrame > this.frameT * 0.86;
-      const carrier = (this.tape && this.tape.carrier()) ? 0x04 : 0; // b2 = CMT carrier
-      return (vrtc ? 0x20 : 0x00) | 0x02 | this._rtcIn40() | carrier; // b5=VRTC, b4=RTC out, b2=CMT
+      // b2 = CMT carrier-detect: high while the tape is parked on a MARK
+      let cmt = 0;
+      if (this.tape) { this.tape.pump(this._tapeNow()); cmt = this.tape.carrier() ? 0x04 : 0; }
+      return (vrtc ? 0x20 : 0x00) | 0x02 | this._rtcIn40() | cmt; // b5=VRTC, b4=RTC out, b2=CMT carrier
 
     }
     if (port === 0x50) return this.crtc.readParam();
@@ -444,7 +447,7 @@ export class Pc8801Machine {
         if (this.tape) this.tape.setMotor(this._cmtMotor);
         return;
       case 0x20: return; // 8251 TX data (tape write — not modelled; load-only)
-      case 0x21: return; // 8251 mode/command word (async 8N1 for tape; nothing to configure)
+      case 0x21: if (this.tape) this.tape.writeControl(v); return; // 8251 mode/command word (rxen/reset for tape)
       case 0x31: // graphics control. The bits are NOT what you'd guess:
         // b0 = 1 → 200-line (0 = 400-line), b1 = 64K-RAM mode,
         // b2 = N-BASIC select, b3 = VRAM displayed, b4 = 1 → COLOR (0 = mono),
@@ -631,7 +634,12 @@ export class Pc8801Machine {
   insertDisk(unit, disk) { this.sub?.insertDisk(unit, disk); return this; }
   // Load a cassette image (T88 / CAS bytes). N-BASIC `CLOAD`/`LOAD"CAS:"` then
   // reads it through the 8251 (ports 20h/21h) with motor+carrier on 30h/40h.
-  insertTape(bytes) { this.tape = loadTape('tape', bytes); this.tape.setMotor(this._cmtMotor); return this; }
+  // Monotonic machine T-state count for tape timing. Uses the *nominal* frame
+  // length (frameT jitters with DMA steal, which would make frame*frameT
+  // non-monotonic and corrupt the tape play clock).
+  _tapeNow() { return this.frame * this._nomFrameT + this.tInFrame; }
+
+  insertTape(bytes) { this.tape = loadTape('tape', bytes, this.clockHz); this.tape.setMotor(this._cmtMotor); return this; }
   ejectTape() { this.tape = null; return this; }
   ejectDisk(unit) { this.sub?.ejectDisk(unit); return this; }
 
