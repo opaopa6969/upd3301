@@ -66,6 +66,7 @@
   <button id="bshare">🖥 画面/タブ共有</button>
   <button id="bgame">🎮 ゲームアタッチ</button>
   <button id="brec">⏺ 録画</button>
+  <button id="btune" title="コマ送りでノブを詰めてキーフレーム記録→トラック化。再生/録画時に自動適用（シーン毎に線画/適応も切替）">🎬 チューニング</button>
 </div>
 <div class="row"><span class="lbl">モード:</span>
   <button id="gex" class="on">EX 160×50 (セル毎8色)</button>
@@ -90,6 +91,19 @@
   <label title="輪郭：黒アウトラインの太さ／量。＋で線が濃く多く">輪郭 <input type="range" id="kedge" min="0.4" max="2.5" step="0.1" value="1"></label>
   <label title="縦整合：強い縦エッジで行間の色境界を揃える強さ（0=行ごと独立, 高いほど揃う）">縦整合 <input type="range" id="kcoh" min="0" max="1.5" step="0.05" value="0.5"></label>
   <label title="色数/行：μPD3301の1ライン色変化予算（自動値=解像度比例）に対する倍率">色数/行 <input type="range" id="kpairs" min="0.4" max="2.5" step="0.1" value="1"></label>
+</div>
+<div class="row knobs" id="tunerow" style="display:none">
+  <span style="color:#fd8;font-size:12px;min-width:70px">🎬 トラック:</span>
+  <button id="tapply" title="トラックのキーフレームを再生時にノブへ自動適用（コマ間は補間、mode/gainも駆動）">適用 OFF</button>
+  <button id="tprev" title="1コマ戻る（一時停止して微調整）">◀ コマ</button>
+  <button id="tnext" title="1コマ進む">コマ ▶</button>
+  <button id="trec" title="今の時刻に現在のノブ値（+mode/gain）をキーフレーム記録">🔑 記録</button>
+  <button id="tdelkey" title="現在時刻に最も近いキーフレームを削除">🗑 キー</button>
+  <span id="tinfo" style="color:#9ab;font-size:11px;min-width:60px">0 キー</span>
+  <button id="texport" title="トラックをJSONファイルに書き出し（どの動画かの情報付き）">💾 書出</button>
+  <button id="timport" title="トラックJSONを読み込み">📂 読込</button>
+  <input type="file" id="timportf" accept="application/json,.json" style="display:none">
+  <button id="tclear" title="このトラックを全消去">クリア</button>
 </div>
 <div class="row"><span class="lbl">紋様:</span>
   <button id="sbayer" class="on">分散 (Bayer)</button>
@@ -197,6 +211,7 @@ let pc98 = null, fullc = null, dotIdx = null, screenPat = 'bayer';
 let phosphor98 = null, tubes98 = {}, rollBuf98 = null, rowBright = null, rowDark = null;
 let autoLevels = true, flickerLevels = 0, gain = 1.3, phase = 0; // 0=off, 3=27c, 8=512c
 let skHueBias = 0, skEdgeGain = 1, skCoherence = 0.5, skMaxScale = 1; // 適応モードのツマミ
+let vidName = ''; // 現在の動画ソース名（チューニングトラックの動画同定に使う）
 let term = null, img = null, grab = null, idxBuf = null, rollBuf = null;
 let phosphor = null;
 let tubeMode = 'none', tubes = {};
@@ -263,6 +278,12 @@ function getTube98() {
 boot();
 
 function frameToCells() {
+  // per-frame tuning: while playing with 適用 on, the track drives the knobs
+  // (mode/gain/hue/edge/coh/pairs) for this exact moment before we convert.
+  if (tuneApply && !video.paused && tuneTrack && tuneTrack.keys.length) {
+    const k = trackAt(video.currentTime);
+    if (k) applyKnobs(k, true);
+  }
   const dw = term.dotWidth, dh = term.dotHeight;
   grab.drawImage(video, 0, 0, dw, dh);
   const rgba = grab.getImageData(0, 0, dw, dh).data;
@@ -417,6 +438,7 @@ $('file').onchange = (e) => {
   const f = e.target.files[0];
   if (!f) return;
   say('loading ' + f.name + ' ...');
+  vidName = f.name;
   video.srcObject = null;
   video.src = URL.createObjectURL(f);
   video.load();
@@ -427,6 +449,7 @@ $('file').onchange = (e) => {
 // costs ~1 frame on top of the capture. Playable; gloriously unreadable.
 $('bgame').onclick = async () => {
   try {
+    vidName = 'game';
     video.removeAttribute('src');
     video.srcObject = await navigator.mediaDevices.getDisplayMedia({
       video: { frameRate: 60 }, audio: true,
@@ -447,6 +470,7 @@ $('bshare').onclick = async () => {
   // (Tick "share tab audio" in the picker to bring the sound along.
   // DRM'd streams arrive as black frames — that's the DRM, not us.)
   try {
+    vidName = 'screen';
     video.removeAttribute('src');
     video.srcObject = await navigator.mediaDevices.getDisplayMedia({
       video: { frameRate: 30 }, audio: true,
@@ -456,6 +480,7 @@ $('bshare').onclick = async () => {
 };
 $('bcam').onclick = async () => {
   try {
+    vidName = 'webcam';
     video.removeAttribute('src');
     video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 400 } });
     tryPlay();
@@ -664,6 +689,171 @@ $('khue').oninput = (e) => { skHueBias = +e.target.value; };
 $('kedge').oninput = (e) => { skEdgeGain = +e.target.value; };
 $('kcoh').oninput = (e) => { skCoherence = +e.target.value; };
 $('kpairs').oninput = (e) => { skMaxScale = +e.target.value; };
+
+// ---- per-frame tuning timeline (チューニングトラック) ----------------------
+// Keyframes of the adaptive knobs (+ mode/gain) keyed to the video's OWN
+// timeline. コマ送りto a moment, tune, 🔑記録. Between keys the numeric knobs
+// interpolate linearly; mode STEPS (holds the previous key until the next) so
+// you can go 線画 in one scene and 適応 in the next. During playback with 適用
+// on, the track drives the knobs each frame — so the recorded WebM is tuned
+// per scene ("8001でここまでできるんか！"). Auto-persisted to IndexedDB keyed
+// by the video's identity (name+duration+size); exportable/importable as JSON.
+const TUNE_DB = 'upd3301-tune', TUNE_STORE = 'tracks', TUNE_V = 1;
+let tuneTrack = null;   // { v, video:{name,dur,w,h}, keys:[{t,mode,gain,hue,edge,coh,pairs}] }
+let tuneApply = false;  // drive the knobs from the track during playback
+let _tuneDb = null, _tuneSaveTimer = 0;
+const FRAME_STEP = 1 / 24; // one コマ (source fps unknown; 24 is fine for tuning)
+
+function tuneDbP() {
+  if (_tuneDb) return _tuneDb;
+  _tuneDb = new Promise((res, rej) => {
+    if (typeof indexedDB === 'undefined') return rej(new Error('no indexedDB'));
+    const rq = indexedDB.open(TUNE_DB, 1);
+    rq.onupgradeneeded = () => rq.result.createObjectStore(TUNE_STORE);
+    rq.onsuccess = () => res(rq.result);
+    rq.onerror = () => rej(rq.error);
+  });
+  return _tuneDb;
+}
+function videoId() {
+  const dur = Number.isFinite(video.duration) ? video.duration : 0;
+  return `${vidName || 'stream'}|${dur.toFixed(1)}|${video.videoWidth}x${video.videoHeight}`;
+}
+function ensureTrack() {
+  if (!tuneTrack) {
+    tuneTrack = { v: TUNE_V, video: { name: vidName || 'stream', dur: video.duration || 0, w: video.videoWidth, h: video.videoHeight }, keys: [] };
+  }
+  return tuneTrack;
+}
+async function tuneSave() {
+  if (!tuneTrack || !tuneTrack.keys.length) return;
+  try {
+    const db = await tuneDbP();
+    tuneTrack.video = { name: vidName || 'stream', dur: video.duration || 0, w: video.videoWidth, h: video.videoHeight };
+    db.transaction(TUNE_STORE, 'readwrite').objectStore(TUNE_STORE).put(tuneTrack, videoId());
+  } catch { /* IndexedDB unavailable — export still works */ }
+}
+function tuneSaveSoon() { clearTimeout(_tuneSaveTimer); _tuneSaveTimer = setTimeout(tuneSave, 500); }
+async function tuneLoadForVideo() {
+  try {
+    const db = await tuneDbP();
+    const id = videoId();
+    const rq = db.transaction(TUNE_STORE, 'readonly').objectStore(TUNE_STORE).get(id);
+    rq.onsuccess = () => {
+      if (rq.result && Array.isArray(rq.result.keys) && rq.result.keys.length) {
+        tuneTrack = rq.result;
+        tuneUiSync();
+        say(`🎬 保存済みトラックを読込: ${tuneTrack.keys.length} キー`);
+      }
+    };
+  } catch { /* none */ }
+}
+
+function lerp(a, b, u) { return a + (b - a) * u; }
+function trackAt(t0) {
+  const ks = tuneTrack && tuneTrack.keys;
+  if (!ks || !ks.length) return null;
+  if (t0 <= ks[0].t) return ks[0];
+  if (t0 >= ks[ks.length - 1].t) return ks[ks.length - 1];
+  let i = 0; while (i < ks.length - 1 && ks[i + 1].t <= t0) i++;
+  const a = ks[i], b = ks[i + 1];
+  const u = (t0 - a.t) / Math.max(1e-6, b.t - a.t);
+  return {
+    mode: a.mode,   // step: hold the earlier key's mode until the next key
+    gain: lerp(a.gain ?? gain, b.gain ?? gain, u),
+    hue: lerp(a.hue, b.hue, u), edge: lerp(a.edge, b.edge, u),
+    coh: lerp(a.coh, b.coh, u), pairs: lerp(a.pairs, b.pairs, u),
+  };
+}
+function applyKnobs(k, reflect) {
+  skHueBias = k.hue; skEdgeGain = k.edge; skCoherence = k.coh; skMaxScale = k.pairs;
+  if (typeof k.gain === 'number') gain = k.gain;
+  if (k.mode && k.mode !== convMode) setConv(k.mode);
+  if (reflect) {
+    const set = (id, v) => { const e = $(id); if (e) e.value = String(v); };
+    set('khue', skHueBias); set('kedge', skEdgeGain);
+    set('kcoh', skCoherence); set('kpairs', skMaxScale); set('kgain', gain);
+  }
+}
+
+function tuneRecord() {
+  const tr = ensureTrack();
+  const t0 = video.currentTime || 0;
+  const key = { t: t0, mode: convMode, gain, hue: skHueBias, edge: skEdgeGain, coh: skCoherence, pairs: skMaxScale };
+  const i = tr.keys.findIndex((kk) => Math.abs(kk.t - t0) < FRAME_STEP * 0.75); // replace an on-frame key
+  if (i >= 0) tr.keys[i] = key;
+  else { tr.keys.push(key); tr.keys.sort((a, b) => a.t - b.t); }
+  tuneUiSync(); tuneSaveSoon();
+  say(`🔑 記録 @${fmt(t0)} · ${convMode} · ${tr.keys.length} キー`);
+}
+function tuneDelKey() {
+  if (!tuneTrack || !tuneTrack.keys.length) return;
+  const t0 = video.currentTime || 0;
+  let bi = 0, bd = Infinity;
+  tuneTrack.keys.forEach((k, i) => { const d = Math.abs(k.t - t0); if (d < bd) { bd = d; bi = i; } });
+  const g = tuneTrack.keys.splice(bi, 1)[0];
+  tuneUiSync(); tuneSaveSoon();
+  say(`🗑 キー削除 @${fmt(g.t)} · ${tuneTrack.keys.length} 残り`);
+}
+function frameStep(dir) {
+  if (!video.paused) video.pause();
+  const dur = video.duration || 0;
+  let t0 = (video.currentTime || 0) + dir * FRAME_STEP;
+  if (dur) t0 = Math.max(0, Math.min(dur - 1e-3, t0));
+  video.currentTime = t0;
+  say(`コマ ${dir > 0 ? '▶' : '◀'} @${fmt(t0)}（一時停止）`);
+}
+function tuneExport() {
+  const tr = ensureTrack();
+  tr.video = { name: vidName || 'stream', dur: video.duration || 0, w: video.videoWidth, h: video.videoHeight };
+  const blob = new Blob([JSON.stringify(tr, null, 1)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `tune-${(vidName || 'video').replace(/\.[^.]+$/, '') || 'video'}.json`;
+  a.click();
+  say(`💾 書出: ${tr.keys.length} キー`);
+}
+function tuneImport(file) {
+  const rd = new FileReader();
+  rd.onload = () => {
+    try {
+      const tr = JSON.parse(rd.result);
+      if (!tr || !Array.isArray(tr.keys)) throw new Error('形式が不正');
+      tr.keys.sort((a, b) => a.t - b.t);
+      tuneTrack = tr;
+      tuneUiSync(); tuneSaveSoon();
+      const vn = tr.video && tr.video.name;
+      const mismatch = vn && vidName && vn !== vidName;
+      say(`📂 読込: ${tr.keys.length} キー（元動画: ${vn || '?'}）` + (mismatch ? ' ⚠今の動画と別物' : ''));
+    } catch (e) { say('読込失敗: ' + e.message); }
+  };
+  rd.readAsText(file);
+}
+function tuneUiSync() {
+  const n = (tuneTrack && tuneTrack.keys && tuneTrack.keys.length) || 0;
+  const info = $('tinfo');
+  if (info) info.textContent = `${n} キー`;
+  const ab = $('tapply');
+  if (ab) { ab.textContent = tuneApply ? '適用 ON' : '適用 OFF'; ab.classList.toggle('on', tuneApply); }
+}
+
+$('btune').onclick = () => {
+  const row = $('tunerow');
+  const show = row.style.display === 'none' || !row.style.display;
+  row.style.display = show ? 'flex' : 'none';
+  $('btune').classList.toggle('on', show);
+};
+$('tapply').onclick = () => { tuneApply = !tuneApply; tuneUiSync(); };
+$('tprev').onclick = () => frameStep(-1);
+$('tnext').onclick = () => frameStep(1);
+$('trec').onclick = tuneRecord;
+$('tdelkey').onclick = tuneDelKey;
+$('texport').onclick = tuneExport;
+$('timport').onclick = () => $('timportf').click();
+$('timportf').onchange = (e) => { const f = e.target.files[0]; if (f) tuneImport(f); e.target.value = ''; };
+$('tclear').onclick = () => { tuneTrack = null; tuneUiSync(); say('チューニングをクリア'); };
+video.addEventListener('loadedmetadata', () => { tuneTrack = null; tuneUiSync(); tuneLoadForVideo(); });
+tuneUiSync();
 
 // CRT
 const phosBtns = { P22: $('pP22'), LONG: $('pLONG'), P39: $('pP39'), P7: $('pP7'), AMBER: $('pAMBER'), PLASMA: $('pPLASMA') };
