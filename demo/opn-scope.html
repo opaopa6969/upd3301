@@ -109,11 +109,18 @@ async function loadGame(g, autoplay) {
   curGame = g;
   playing = false; setPlayBtn(false);
   trace = null; regs = null;
-  const [t, r] = await Promise.all([
-    fetch(g.trace + '?v=' + VER).then(x => x.json()),
-    fetch(g.regs + '?v=' + VER).then(x => x.json()),
-  ]);
-  trace = t; fps = t.fps; secs = t.secs; regs = r;
+  try {
+    const [t, r] = await Promise.all([
+      fetch(g.trace + '?v=' + VER).then(x => { if (!x.ok) throw new Error(g.trace + ' → ' + x.status); return x.json(); }),
+      fetch(g.regs + '?v=' + VER).then(x => { if (!x.ok) throw new Error(g.regs + ' → ' + x.status); return x.json(); }),
+    ]);
+    trace = t; fps = t.fps; secs = t.secs; regs = r;
+  } catch (e) {
+    // performance data (trace/regs) not shipped for this song → degrade, don't crash
+    $('gameNote').textContent = '⚠ この曲の演奏データが未収録です（' + g.trace + ' / ' + g.regs + '）。別の曲を選んでください。';
+    $('seek').value = 0;
+    return;
+  }
   buildJumps();
   playSample = 0; frameIdx = 0;
   if (engineMode) { if (ctx) engineSeek(0); }
@@ -216,6 +223,7 @@ async function ensureEngine() {
   node.connect(ctx.destination);
 }
 function engineSeek(sec) {
+  if (!regs) return; // no performance data loaded (missing/404) → nothing to replay
   // chip state is cumulative → rebuild it by replaying (and rendering, since
   // envelopes only advance in render) up to the target frame, discarding audio.
   newChip();
@@ -334,6 +342,7 @@ function setPlayBtn(on) { $('play').textContent = on ? '⏸ 停止' : '▶ 再�
 
 $('play').onclick = async () => {
   if (engineMode) {
+    if (!regs) return; // no performance data → play is a no-op
     await ensureEngine();
     if (!playing) { if (frameIdx >= regs.frames.length) engineSeek(0); await ctx.resume(); playing = true; setPlayBtn(true); }
     else { playing = false; setPlayBtn(false); }
