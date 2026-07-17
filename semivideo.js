@@ -241,6 +241,87 @@ export function rgbaToAlpha(rgba, dotW, dotH, { gain = 1.0, autoLevels = true, e
   return { schemaVersion: SCHEMA_VERSION, cols, rows, codes, colors };
 }
 
+// "適応" — the honest PC-8001 optimiser. The μPD3301 allows only ~20 attribute
+// (colour) changes per LINE, so colouring every cell freely isn't real hardware.
+// This mode looks at the WHOLE frame (one frame of latency is fine), auto-tunes
+// the fill floor + edge threshold from the frame's colour/contrast stats, and
+// then spends each row's ~20-colour budget optimally: it greedily merges colour
+// runs cheapest-error-first down to the budget, but RESISTS merging across
+// strong vertical edges (columns where many rows disagree) so breaks line up
+// between rows instead of shattering — you can't get this right looking at one
+// line alone. Dots are the flat-fill/outline pattern (like α); only the colour
+// is budgeted. `maxPairs` = per-line colour changes, `coherence` = how hard to
+// hold vertical edges (0 = per-line independent, 1 = strongly aligned).
+export function rgbaToAdaptive(rgba, dotW, dotH, { maxPairs = 20, autoLevels = true, gain = 1.0, coherence = 0.5 } = {}) {
+  const cols = dotW >> 1, rows = dotH >> 2, n = dotW * dotH, cN = cols * rows;
+  let lo = 0, scale = 1;
+  if (autoLevels) ({ lo, scale } = computeLevels(rgba, n));
+  const norm = (v) => Math.min(1, Math.max(0, (v - lo) * scale / 255 * gain));
+
+  // whole-frame stats → adaptive fill floor + edge threshold (the "アダプティブ"):
+  // washed-out/low-saturation footage keeps more colour (lower floor); a busy,
+  // saturated frame raises the edge threshold so fine chroma noise stops
+  // spending outline budget.
+  let sumS = 0, sumMax = 0;
+  for (let i = 0; i < n; i++) { const o = i * 4, r = norm(rgba[o]), g = norm(rgba[o + 1]), b = norm(rgba[o + 2]); const mx = Math.max(r, g, b); sumS += mx - Math.min(r, g, b); sumMax += mx; }
+  const meanS = sumS / n, meanMax = sumMax / n;
+  const fillDark = Math.min(0.45, Math.max(0.16, 0.24 + meanMax * 0.12 - meanS * 0.25));
+  const eth = 0.13 + meanS * 0.12;
+
+  // region-boundary map → dark outline dots
+  const edge = new Uint8Array(n);
+  for (let y = 0; y < dotH - 1; y++) {
+    for (let x = 0; x < dotW - 1; x++) {
+      const o = (y * dotW + x) * 4, ox = o + 4, oy = o + dotW * 4;
+      let mag = 0; for (let c = 0; c < 3; c++) mag = Math.max(mag, Math.abs(norm(rgba[o + c]) - norm(rgba[ox + c])), Math.abs(norm(rgba[o + c]) - norm(rgba[oy + c])));
+      if (mag > eth) edge[y * dotW + x] = 1;
+    }
+  }
+  // per-cell mean colour (for the budgeting)
+  const cr = new Float32Array(cN), cg = new Float32Array(cN), cb = new Float32Array(cN);
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      let sr = 0, sg = 0, sb = 0;
+      for (let sub = 0; sub < 8; sub++) { const dx = sub >> 2, dy = sub & 3, o = ((cy * 4 + dy) * dotW + (cx * 2 + dx)) * 4; sr += norm(rgba[o]); sg += norm(rgba[o + 1]); sb += norm(rgba[o + 2]); }
+      const i = cy * cols + cx; cr[i] = sr / 8; cg[i] = sg / 8; cb[i] = sb / 8;
+    }
+  }
+  // vertical-edge weight per boundary column: how strongly rows disagree across
+  // it, summed over the whole frame → the columns worth keeping a break at.
+  const bw = new Float32Array(cols);
+  for (let cy = 0; cy < rows; cy++) for (let cx = 1; cx < cols; cx++) {
+    const a = cy * cols + cx - 1, b = cy * cols + cx;
+    bw[cx] += Math.abs(cr[a] - cr[b]) + Math.abs(cg[a] - cg[b]) + Math.abs(cb[a] - cb[b]);
+  }
+  let bwMax = 1e-6; for (let cx = 1; cx < cols; cx++) if (bw[cx] > bwMax) bwMax = bw[cx];
+
+  const codes = new Uint8Array(cN), colors = new Uint8Array(cN);
+  const quant = (r, g, b) => { const t = Math.max(fillDark, Math.max(r, g, b) * 0.5); return (r > t ? 2 : 0) | (g > t ? 4 : 0) | (b > t ? 1 : 0); };
+
+  for (let cy = 0; cy < rows; cy++) {
+    const rn = [];
+    for (let cx = 0; cx < cols; cx++) { const i = cy * cols + cx; rn.push({ s: cx, e: cx, n: 1, r: cr[i], g: cg[i], b: cb[i] }); }
+    const cost = (a) => { const A = rn[a], B = rn[a + 1], w = A.n * B.n / (A.n + B.n); return ((A.r - B.r) ** 2 + (A.g - B.g) ** 2 + (A.b - B.b) ** 2) * w + coherence * (bw[B.s] / bwMax); };
+    while (rn.length > maxPairs) {
+      let bi = 0, bc = Infinity;
+      for (let a = 0; a + 1 < rn.length; a++) { const c = cost(a); if (c < bc) { bc = c; bi = a; } }
+      const A = rn[bi], B = rn[bi + 1], N = A.n + B.n;
+      A.r = (A.r * A.n + B.r * B.n) / N; A.g = (A.g * A.n + B.g * B.n) / N; A.b = (A.b * A.n + B.b * B.n) / N;
+      A.e = B.e; A.n = N; rn.splice(bi + 1, 1);
+    }
+    for (const run of rn) {
+      const col = quant(run.r, run.g, run.b);
+      for (let cx = run.s; cx <= run.e; cx++) {
+        let code = 0;
+        for (let sub = 0; sub < 8; sub++) { const dx = sub >> 2, dy = sub & 3, di = (cy * 4 + dy) * dotW + (cx * 2 + dx); if (edge[di]) continue; code |= 1 << ((sub & 3) + (dx ? 4 : 0)); }
+        const i = cy * cols + cx; codes[i] = code; colors[i] = code ? col : 0;
+      }
+    }
+  }
+  carryEmptyCellColors(codes, colors, cols, rows);
+  return { schemaVersion: SCHEMA_VERSION, cols, rows, codes, colors, meta: { fillDark, eth } };
+}
+
 // PC-98 style: outlines + interiors flat-filled with an adaptive 16-color
 // palette picked from the 512 cube (the "16 colors out of the analog
 // palette" culture, one palette per picture). This mode ignores the μPD3301

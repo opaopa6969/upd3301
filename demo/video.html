@@ -38,7 +38,7 @@
  "/index.js":"/index.js?v=cache1","/upd8257.js":"/upd8257.js?v=cache1",
  "/pc8001.js":"/pc8001.js?v=cache1","/crt.js":"/crt.js?v=cache1",
  "/tube.js":"/tube.js?v=cache1","/term.js":"/term.js?v=cache1",
- "/semivideo.js":"/semivideo.js?v=alpha","/z80.js":"/z80.js?v=cache1",
+ "/semivideo.js":"/semivideo.js?v=adapt","/z80.js":"/z80.js?v=cache1",
  "/demo/font.js":"/demo/font.js?v=cache1"
 }}
 </script>
@@ -76,6 +76,7 @@
   <button id="mdither" class="on">ディザ</button>
   <button id="mline">線画 (アニメ)</button>
   <button id="malpha" title="αデモ風：領域をフラット塗り＋黒輪郭（PC-8001 8色セル）。線画と違い中身も塗る">α (アニメ塗り)</button>
+  <button id="madaptive" title="フレーム全体を見て、μPD3301の1ライン20色制約内で色配分を最適化＋fillDark/edge等を自動調整（縦エッジで揃える。1フレーム遅延）">適応 (最適化)</button>
   <button id="m98">98風 (512中16色)</button>
   <button id="mfull">フルカラーディザ</button>
   <button id="bauto" class="on">動的2値化 (自動レベル)</button>
@@ -152,7 +153,7 @@ import { mountMenuBar } from './menubar.js';
   if (menus.length) { mountMenuBar(mm, { storageKey: 'menubar-video', brand: '動画セミグラ', menus }); document.querySelectorAll('.row[data-cat-menu]').forEach((r) => { r.style.display = 'none'; }); }
 })();
 import { Terminal } from '../term.js';
-import { rgbaToSemigraphic, rgbaToLineArt, rgbaToAlpha, analyzePc98, renderPc98Phase, analyzeFullColor, renderFullColorPhase } from '../semivideo.js';
+import { rgbaToSemigraphic, rgbaToLineArt, rgbaToAlpha, rgbaToAdaptive, analyzePc98, renderPc98Phase, analyzeFullColor, renderFullColorPhase } from '../semivideo.js';
 import { ATTR } from '../pc8001.js';
 import { CrtPhosphor, PHOSPHORS, rollScan } from '../crt.js';
 import { CrtTube } from '../tube.js';
@@ -270,6 +271,8 @@ function frameToCells() {
     ? rgbaToLineArt(rgba, dw, dh, { edgeGain: gain, autoLevels })
     : convMode === 'alpha'
     ? rgbaToAlpha(rgba, dw, dh, { gain, autoLevels, edgeGain: 1.0 })
+    : convMode === 'adaptive'
+    ? rgbaToAdaptive(rgba, dw, dh, { gain, autoLevels, maxPairs: 20 })
     : rgbaToSemigraphic(rgba, dw, dh, {
         gain, autoLevels,
         temporalPhase: flickerLevels ? phase % (flickerLevels - 1) : null,
@@ -592,7 +595,7 @@ for (const [k, el] of Object.entries(geoBtns)) {
     for (const [k2, el2] of Object.entries(geoBtns)) el2.classList.toggle('on', k2 === k);
   };
 }
-const convBtns = { dither: $('mdither'), line: $('mline'), alpha: $('malpha'), pc98: $('m98'), full: $('mfull') };
+const convBtns = { dither: $('mdither'), line: $('mline'), alpha: $('malpha'), adaptive: $('madaptive'), pc98: $('m98'), full: $('mfull') };
 function setConv(m) {
   convMode = m;
   for (const [k, el] of Object.entries(convBtns)) el.classList.toggle('on', k === m);
@@ -600,6 +603,7 @@ function setConv(m) {
 $('mdither').onclick = () => setConv('dither');
 $('mline').onclick = () => setConv('line');
 $('malpha').onclick = () => setConv('alpha');
+$('madaptive').onclick = () => setConv('adaptive');
 $('m98').onclick = () => setConv('pc98');
 $('mfull').onclick = () => setConv('full');
 const patBtns = { bayer: $('sbayer'), halftone: $('shalftone'), line: $('sline') };
