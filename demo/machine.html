@@ -58,6 +58,11 @@
   <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
+  <span id="grp-tape" style="display:inline-flex;gap:4px;align-items:center">
+    <label style="color:#778;font-size:12px" title="カセットテープ(.t88/.cas/.cmt)を読み込む。N88モードで CLOAD するとテープから読める">📼 テープ: <input type="file" id="ftape" accept=".t88,.cas,.cmt,.T88,.CAS,.CMT" style="font-size:11px"></label>
+    <button id="btapecload" title="N88-BASICに CLOAD↵ を自動入力してテープ読み込みを開始（名前付きは手入力で CLOAD&quot;名前&quot;）">▶ CLOAD</button>
+    <span id="tapeinfo" style="color:#778;font-size:12px"></span>
+  </span>
   <span id="grp-savedisk" style="display:inline-flex;gap:4px;align-items:center">
     <select id="savedisk" title="このブラウザに保存済みのディスクから選ぶ" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px;max-width:200px"><option value="">💾 保存済みディスク…</option></select>
     <button id="bdiskbrowse" title="保存済みディスクを検索して選ぶ（数百件対応）">📚 一覧</button>
@@ -179,6 +184,7 @@ const { cgrom } = buildFont();
 addPlaceholderUpperHalf(cgrom);
 
 let machine = null, romBytes = null;
+let tapeBytes = null, tapeName = ''; // cassette (.t88/.cas/.cmt) kept for re-insert on boot
 // PC-8801 (n88 mode) needs a whole BIOS SET, not one image: n88.rom (32KB main)
 // + n88_0..3.rom (4×8KB extension banks, concatenated at 2000h stride into a
 // 32KB `ext`) + disk.rom (2KB FDD sub-CPU ROM). n80.rom is optional (its own
@@ -789,6 +795,47 @@ async function openDiskBrowser(keepOpen) {
 }
 $('bdiskbrowse').onclick = () => openDiskBrowser(false);
 $('bsoftkb').onclick = () => toggleSoftKb();
+
+// ---- cassette tape (.t88/.cas/.cmt) ---------------------------------------
+// The tape engine lives in Pc8801Machine (machine88.js): it streams bytes into
+// the 8251 (ports 20h/21h) at the block's baud while the motor runs (30h),
+// carrier on 40h — exactly what N88-BASIC's CLOAD polls. So a tape loads in the
+// N88 machine; the plain Pc8001Machine (machine.js) still has an 8251 stub, so
+// tape there is a no-op (switch to N88-BASIC to read PC-8001 tapes via CLOAD).
+// auto-type a string through the keyboard matrix (press → hold → release → next)
+function autoType(text, done) {
+  const map = activeKeymap();
+  let i = 0;
+  const step = () => {
+    if (i >= text.length) { if (done) done(); return; }
+    const ch = text[i++];
+    const val = ch === '\n' ? map['Enter'] : (map[ch] !== undefined ? map[ch] : map[ch.toLowerCase()]);
+    if (val === undefined) { step(); return; }
+    const cells = cellsOf(val);
+    kbSet(cells, true);
+    setTimeout(() => { kbSet(cells, false); setTimeout(step, 55); }, 85);
+  };
+  step();
+}
+$('ftape').onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  tapeBytes = new Uint8Array(await f.arrayBuffer()); tapeName = f.name;
+  if (machine && machine.insertTape) {
+    machine.insertTape(tapeBytes);
+    $('tapeinfo').textContent = `📼 ${f.name} 挿入 — ▶CLOAD か、N88-BASICで CLOAD"名前"`;
+  } else {
+    $('tapeinfo').textContent = `📼 ${f.name} 保持 — テープは N88-BASIC モードで読める（機種→N88に切替）`;
+  }
+  ensureAudio();
+};
+$('btapecload').onclick = () => {
+  if (!tapeBytes) { $('tapeinfo').textContent = 'テープ未挿入（📼テープを選んで）'; return; }
+  if (!(machine && machine.insertTape)) { $('tapeinfo').textContent = 'N88-BASIC モードに切替えてから（機種→N88）'; return; }
+  if (frozen()) resumePlay();
+  ensureAudio();
+  autoType('cload\n');
+  $('tapeinfo').textContent = `▶ CLOAD 実行中… (${tapeName})`;
+};
 // ---- session auto-save & resume: survive an accidental reset / mode-switch /
 // reload. A deterministic snapshot + the mounted disks + boot config are stashed
 // in IndexedDB every few seconds and on tab-hide; next visit offers to resume. --
@@ -1202,6 +1249,8 @@ function boot() {
     machine.dipsw = [dipOf('dip1', 0xdb), dipOf('dip2', 0x79)];
     applyCpuThrottle(); // re-apply the CPU-speed knob to the fresh machine
     mountDisks(machine);
+    if (tapeBytes) machine.insertTape(tapeBytes); // survive the rebuild
+
     // give the OPNA its drum PCM (async; FM works immediately, drums as soon
     // as the ROM lands). No-op on a plain (non-SB2) machine.
     if (machine.opna) loadRhythmRom().then((r) => { if (r && machine?.opna) machine.opna.setRhythmRom(r.samples, r.rate); });
