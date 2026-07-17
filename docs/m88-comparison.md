@@ -109,18 +109,31 @@ core is sufficient for the bulk. The 16 leads are **title-specific**, not a
 systematic timing wall, so chasing them individually beats a cycle-exact
 rewrite (which also risks the working 95%).
 
-**Real divergence leads (screen content differs at 250f):**
+**Real divergence leads.** Extending each to 3000 frames and instrumenting
+the frozen loop separates false leads (still animating — just phase noise the
+250f snapshot missed) from genuine stalls, and buckets the stalls by *what
+the CPU is polling* while frozen. The causes are **diverse and
+title-specific** — not one systematic timing wall — which is why individual
+chase beats a cycle-exact rewrite.
 
-```
-ﾄﾘﾄｰﾝ            M88 tv0(empty)  ours tv4096(full)  — inverted; graphics-only?
-Skyfox           M88 tv2678      ours tv643         — ours stalls earlier
-Snatcher         M88 tv2678      ours tv1173
-Makaimura        M88 tv3126      ours tv1987
-tennis           M88 tv2678      ours tv4096(full)  — ours may fill garbage
-GAZZEL           M88 tv3077      ours tv2048
-Deringer / Stercru / starclsr / ROLLER / キャッスルエクセレント
-Rayieza(≡地球戦士ライーザ) / Hajya(≡覇者の封印) / ロリータシンドローム
-```
+*Downgraded — actually running (E6CD/tvNZ still changing at 3000f):*
+Stercru, starclsr, キャッスルエクセレント, ロリータシンドローム.
+
+*Genuine stalls (frozen 250→3000f), by what they poll while stuck:*
+
+| Bucket | Titles | Frozen loop polls |
+|--------|--------|-------------------|
+| **port 40h (VRTC/timing bit)** ← shared | Skyfox, tennis | IN 40h ×1000s; main PC in a `DI; JP` vsync-wait (Skyfox 5504→85fd) |
+| **OPNA status (44h)** | Snatcher | IN 44h ×100s — waits on a sound-chip status flag |
+| **PPI/expansion (FEh/FCh)** | ﾄﾘﾄｰﾝ | IN FEh ×34000 — waits on an 8255/expansion bit |
+| **text-window/ext-ROM (70h/71h)** | Hajya(≡覇者の封印) | IN 71h/70h ×100s |
+| **keyboard scan** (may be legit key-wait) | Rayieza(≡地球戦士ライーザ), ROLLER | scans kbd rows; a naive SPACE/RETURN inject didn't wake them |
+| **memory/interrupt-wait** (no port IN) | Makaimura, Deringer, GAZZEL | tight RAM loop; a flag an IRQ should set never flips (GAZZEL runs off into 0018-0036) |
+
+Best ROI first: **port 40h** is the only *shared* root (two titles), and
+**OPNA-status (44h)** likely touches other sound-heavy titles — both are
+plausible single fixes. The memory/interrupt-wait bucket is the hardest
+(needs the missing IRQ source identified per title).
 
 **Harness gotcha (load-bearing):** our side must be built with the four N88
 extension ROMs (`n88_0..3.rom`) as `ext`, mapped at 6000-7FFF — that
