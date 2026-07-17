@@ -146,7 +146,7 @@ async function expandDiskFile(fileName, bytes) {
     .sort((a, b) => b.bytes.length - a.bytes.length);
   return members.map((m) => ({ name: m.name, bytes: m.bytes, isDisk: /\.(d88|88d|d8u|hdm|tfd|xdf)$/i.test(m.name) }));
 }
-import { putRom, getRom, listRoms, clearRoms, deleteRom } from './romstore.js';
+import { putRom, getRom, listRoms, clearRoms, deleteRom } from './romstore.js?v=2';
 
 // OPNA rhythm ROM (the six ADPCM-A drums) — fetched + decoded once, then
 // side-loaded into the OPNA so Sound Board II rhythm ($00-$0D) is audible.
