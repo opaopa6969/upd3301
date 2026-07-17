@@ -38,7 +38,7 @@
  "/index.js":"/index.js?v=cache1","/upd8257.js":"/upd8257.js?v=cache1",
  "/pc8001.js":"/pc8001.js?v=cache1","/crt.js":"/crt.js?v=cache1",
  "/tube.js":"/tube.js?v=cache1","/term.js":"/term.js?v=cache1",
- "/semivideo.js":"/semivideo.js?v=adapt3","/z80.js":"/z80.js?v=cache1",
+ "/semivideo.js":"/semivideo.js?v=adapt4","/z80.js":"/z80.js?v=cache1",
  "/demo/font.js":"/demo/font.js?v=cache1"
 }}
 </script>
@@ -83,6 +83,13 @@
   <button id="b27">27色ちらつき</button>
   <button id="b512">512色ちらつき</button>
   <label class="lbl"><input type="range" id="kgain" min="0.5" max="3" step="0.1" value="1.3" style="accent-color:#4a8"> GAIN</label>
+</div>
+<div class="row knobs" id="adaptknobs" style="display:none">
+  <span style="color:#8fd;font-size:12px;min-width:70px">適応ノブ:</span>
+  <label title="色ノリ：ガンの点灯閾値を自動値からずらす。＋で彩度↑（白潰れ減）、−で淡く">色ノリ <input type="range" id="khue" min="-0.15" max="0.18" step="0.01" value="0"></label>
+  <label title="輪郭：黒アウトラインの太さ／量。＋で線が濃く多く">輪郭 <input type="range" id="kedge" min="0.4" max="2.5" step="0.1" value="1"></label>
+  <label title="縦整合：強い縦エッジで行間の色境界を揃える強さ（0=行ごと独立, 高いほど揃う）">縦整合 <input type="range" id="kcoh" min="0" max="1.5" step="0.05" value="0.5"></label>
+  <label title="色数/行：μPD3301の1ライン色変化予算（自動値=解像度比例）に対する倍率">色数/行 <input type="range" id="kpairs" min="0.4" max="2.5" step="0.1" value="1"></label>
 </div>
 <div class="row"><span class="lbl">紋様:</span>
   <button id="sbayer" class="on">分散 (Bayer)</button>
@@ -189,6 +196,7 @@ let convMode = 'dither'; // 'dither' | 'line' | 'pc98'
 let pc98 = null, fullc = null, dotIdx = null, screenPat = 'bayer';
 let phosphor98 = null, tubes98 = {}, rollBuf98 = null, rowBright = null, rowDark = null;
 let autoLevels = true, flickerLevels = 0, gain = 1.3, phase = 0; // 0=off, 3=27c, 8=512c
+let skHueBias = 0, skEdgeGain = 1, skCoherence = 0.5, skMaxScale = 1; // 適応モードのツマミ
 let term = null, img = null, grab = null, idxBuf = null, rollBuf = null;
 let phosphor = null;
 let tubeMode = 'none', tubes = {};
@@ -275,7 +283,10 @@ function frameToCells() {
     // ~20 colour changes/line is the μPD3301's real limit on the 80-col screen;
     // scale it with the geometry so EX/UEX use their extra colour instead of
     // banding (80→20, 160→40, 320→80). Owns its levels/gain/saturation.
-    ? rgbaToAdaptive(rgba, dw, dh, { maxPairs: Math.max(20, Math.round((dw >> 1) / 4)) })
+    ? rgbaToAdaptive(rgba, dw, dh, {
+        maxPairs: Math.max(6, Math.round((dw >> 1) / 4 * skMaxScale)),
+        satBias: skHueBias, edgeGain: skEdgeGain, coherence: skCoherence,
+      })
     : rgbaToSemigraphic(rgba, dw, dh, {
         gain, autoLevels,
         temporalPhase: flickerLevels ? phase % (flickerLevels - 1) : null,
@@ -612,6 +623,7 @@ function setConv(m) {
     box.style.pointerEvents = adaptive ? 'none' : '';
     box.title = adaptive ? '適応モードでは自動（このツマミは無効）' : (box.title || '');
   }
+  const ak = $('adaptknobs'); if (ak) ak.style.display = adaptive ? 'flex' : 'none'; // 適応ノブは適応時のみ
 }
 $('mdither').onclick = () => setConv('dither');
 $('mline').onclick = () => setConv('line');
@@ -648,6 +660,10 @@ function setFlicker(levels) {
 $('b27').onclick = () => setFlicker(3);
 $('b512').onclick = () => setFlicker(8);
 $('kgain').oninput = (e) => { gain = +e.target.value; };
+$('khue').oninput = (e) => { skHueBias = +e.target.value; };
+$('kedge').oninput = (e) => { skEdgeGain = +e.target.value; };
+$('kcoh').oninput = (e) => { skCoherence = +e.target.value; };
+$('kpairs').oninput = (e) => { skMaxScale = +e.target.value; };
 
 // CRT
 const phosBtns = { P22: $('pP22'), LONG: $('pLONG'), P39: $('pP39'), P7: $('pP7'), AMBER: $('pAMBER'), PLASMA: $('pPLASMA') };

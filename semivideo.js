@@ -252,7 +252,7 @@ export function rgbaToAlpha(rgba, dotW, dotH, { gain = 1.0, autoLevels = true, e
 // line alone. Dots are the flat-fill/outline pattern (like α); only the colour
 // is budgeted. `maxPairs` = per-line colour changes, `coherence` = how hard to
 // hold vertical edges (0 = per-line independent, 1 = strongly aligned).
-export function rgbaToAdaptive(rgba, dotW, dotH, { maxPairs = 20, coherence = 0.5 } = {}) {
+export function rgbaToAdaptive(rgba, dotW, dotH, { maxPairs = 20, coherence = 0.5, satBias = 0, edgeGain = 1 } = {}) {
   const cols = dotW >> 1, rows = dotH >> 2, n = dotW * dotH, cN = cols * rows;
   // adaptive mode OWNS its levels/gain/saturation — the auto-levels toggle and
   // the GAIN knob don't apply here (adapting these IS the mode).
@@ -271,9 +271,9 @@ export function rgbaToAdaptive(rgba, dotW, dotH, { maxPairs = 20, coherence = 0.
   // colour instead of washing to white. Higher hueK = fewer guns = more
   // saturated; washed-out frames (low meanS) get a higher hueK to pull colour
   // out. This adaptive floor/hue is exactly the "GAINを自動で" the user wanted.
-  const hueK = Math.max(0.68, Math.min(0.9, 0.76 + (0.18 - meanS) * 0.8));
+  const hueK = Math.max(0.45, Math.min(0.95, 0.72 + (0.18 - meanS) * 0.6 + satBias)); // satBias = 色ノリ knob
   const floor = 0.12;                 // below this a cell is genuinely dark → black
-  const eth = 0.13 + meanS * 0.12;
+  const eth = (0.13 + meanS * 0.12) / Math.max(0.3, edgeGain); // edgeGain = 輪郭 knob (higher → thicker/more outline)
 
   // region-boundary map → dark outline dots
   const edge = new Uint8Array(n);
