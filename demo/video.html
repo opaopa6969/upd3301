@@ -232,6 +232,20 @@ function buildGlyphSet(rom) {
   }
   return out;
 }
+// best-effort: pull the manifest's default PC-8001 CGROM so hybrid mode gets the
+// real graphic characters (罫線/記号) automatically wherever the ROMs are served
+// (authed host / localhost). ROM-less public deploy: keep the fallback font.
+(async () => {
+  try {
+    const mf = await (await fetch('../roms/manifest.json')).json();
+    if (!mf || !mf.font) return;
+    const rb = await fetch('../roms/' + mf.font);
+    if (!rb.ok) return;
+    applyFontRom(cgrom, new Uint8Array(await rb.arrayBuffer()));
+    hybridGlyphs = buildGlyphSet(cgrom); fontLoaded = true;
+    if (typeof updateGlyphInfo === 'function') updateGlyphInfo();
+  } catch { /* keep the hand-drawn fallback */ }
+})();
 import { ATTR } from '../pc8001.js';
 import { CrtPhosphor, PHOSPHORS, rollScan } from '../crt.js';
 import { CrtTube } from '../tube.js';

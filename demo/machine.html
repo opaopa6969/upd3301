@@ -216,7 +216,11 @@ async function fetchRom(path) {
 async function loadMachine(entry) {
   if (!entry?.rom) { guts.textContent = 'この機種はN-BASIC ROM(N80)が無い（88のN88起動はWIP: issue #4）'; return; }
   try {
-    if (entry.font) { try { applyFontRom(cgrom, await fetchRom(entry.font)); } catch {} }
+    // font: per-machine dump, else the manifest's default CGROM — without it a
+    // null-font machine falls back to placeholder glyphs and 罫線/graphic text
+    // games render garbage.
+    const fontPath = entry.font ?? manifest?.font;
+    if (fontPath) { try { applyFontRom(cgrom, await fetchRom(fontPath)); } catch {} }
     romBytes = await fetchRom(entry.rom);
     guts.textContent = 'loaded ' + entry.rom;
     boot();
