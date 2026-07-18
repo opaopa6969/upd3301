@@ -38,7 +38,7 @@
  "/index.js":"/index.js?v=cache1","/upd8257.js":"/upd8257.js?v=cache1",
  "/pc8001.js":"/pc8001.js?v=cache1","/crt.js":"/crt.js?v=cache1",
  "/tube.js":"/tube.js?v=cache1","/term.js":"/term.js?v=cache1",
- "/semivideo.js":"/semivideo.js?v=adapt4","/z80.js":"/z80.js?v=cache1",
+ "/semivideo.js":"/semivideo.js?v=adapt4","/semiedit.js":"/semiedit.js?v=edit1","/z80.js":"/z80.js?v=cache1",
  "/demo/font.js":"/demo/font.js?v=cache1"
 }}
 </script>
@@ -59,7 +59,36 @@
     <button id="bsettings">⚙ 設定</button>
     <button id="bfull">⛶ 全画面</button>
   </div>
+  <div id="editpanel">
+    <div id="edittools">
+      <span style="color:#fd8;font-weight:bold">🎨 セル編集</span>
+      <span id="editpal" style="display:inline-flex;gap:3px"></span>
+      <button id="etpaint" class="on">塗り</button>
+      <button id="etdot">ドット</button>
+      <button id="etpick">スポイト</button>
+      <label style="font-size:11px;color:#9ab">拡大<input type="range" id="etzoom" min="4" max="26" step="1" value="11" style="width:80px"></label>
+      <button id="etundo" title="元に戻す (Ctrl+Z)">↶</button>
+      <button id="etredo" title="やり直し (Ctrl+Y)">↷</button>
+      <button id="etregrab" title="今の映像フレームを取り込み直す">再取込</button>
+      <button id="etpng">PNG</button>
+      <button id="etsave">JSON保存</button>
+      <button id="etload">JSON読込</button>
+      <input type="file" id="etloadf" accept="application/json,.json" style="display:none">
+      <button id="etclose">閉じる</button>
+      <span id="editinfo" style="color:#9ab;font-size:11px"></span>
+    </div>
+    <div id="editscroll"><canvas id="editcv"></canvas></div>
+  </div>
 </div>
+<style>
+#editpanel { display:none; position:absolute; inset:0; z-index:30; background:#06060c; flex-direction:column; }
+#editpanel.open { display:flex; }
+#edittools { display:flex; flex-wrap:wrap; gap:6px; align-items:center; padding:6px 8px; background:#12121c; border-bottom:1px solid #2a2a3a; }
+#edittools button { font-size:12px; }
+#edittools .swatch { cursor:pointer; }
+#editscroll { flex:1; overflow:auto; padding:8px; background:#000; }
+#editcv { image-rendering:pixelated; cursor:crosshair; touch-action:none; }
+</style>
 <div class="row">
   <input type="file" id="file" accept="video/*">
   <button id="bcam">Webカメラ</button>
@@ -67,6 +96,7 @@
   <button id="bgame">🎮 ゲームアタッチ</button>
   <button id="brec">⏺ 録画</button>
   <button id="btune" title="コマ送りでノブを詰めてキーフレーム記録→トラック化。再生/録画時に自動適用（シーン毎に線画/適応も切替）">🎬 チューニング</button>
+  <button id="bedit" title="一時停止した1コマをセル単位で手修正（8色アトリビュート塗り＋ドット編集）。μPD3301の1ライン20色予算も可視化。PNG/JSON書出">🎨 セル編集</button>
 </div>
 <div class="row"><span class="lbl">モード:</span>
   <button id="gex" class="on">EX 160×50 (セル毎8色)</button>
@@ -175,6 +205,7 @@ import { mountMenuBar } from './menubar.js';
 })();
 import { Terminal } from '../term.js';
 import { rgbaToSemigraphic, rgbaToLineArt, rgbaToAlpha, rgbaToAdaptive, analyzePc98, renderPc98Phase, analyzeFullColor, renderFullColorPhase } from '../semivideo.js';
+import { GRB, GRB_NAMES, renderCells, lineAttrChanges, cloneBuf, setColor, setDot, getDot, serialize, deserialize } from '../semiedit.js';
 import { ATTR } from '../pc8001.js';
 import { CrtPhosphor, PHOSPHORS, rollScan } from '../crt.js';
 import { CrtTube } from '../tube.js';
@@ -212,6 +243,7 @@ let phosphor98 = null, tubes98 = {}, rollBuf98 = null, rowBright = null, rowDark
 let autoLevels = true, flickerLevels = 0, gain = 1.3, phase = 0; // 0=off, 3=27c, 8=512c
 let skHueBias = 0, skEdgeGain = 1, skCoherence = 0.5, skMaxScale = 1; // 適応モードのツマミ
 let vidName = ''; // 現在の動画ソース名（チューニングトラックの動画同定に使う）
+let lastCells = null; // 直近フレームの {cols,rows,codes,colors}（セル編集の取込元）
 let term = null, img = null, grab = null, idxBuf = null, rollBuf = null;
 let phosphor = null;
 let tubeMode = 'none', tubes = {};
@@ -290,10 +322,12 @@ function frameToCells() {
   phase++;
   if (convMode === 'pc98') { // no cells, no attributes: full per-dot color
     pc98 = analyzePc98(rgba, dw, dh, { gain, autoLevels });
+    lastCells = null; // セル系でないので編集不可
     return;
   }
   if (convMode === 'full') { // 512 cube per dot, selectable screen pattern
     fullc = analyzeFullColor(rgba, dw, dh, { gain, autoLevels, pattern: screenPat });
+    lastCells = null;
     return;
   }
   const r = convMode === 'line'
@@ -314,6 +348,7 @@ function frameToCells() {
         temporalLevels: flickerLevels || 3,
       });
   const { codes, colors } = r;
+  lastCells = { schemaVersion: 1, cols: term.cols, rows: term.rows, codes, colors }; // 編集の取込元（cloneBufでコピーされる）
   for (let i = 0; i < codes.length; i++) {
     term.chars[i] = codes[i];
     term.colorA[i] = (colors[i] << 5) | ATTR.SEMIGRAPHIC | ATTR.COLOR_FLAG;
@@ -394,6 +429,7 @@ function blit() {
 const FR = 1 / 60;
 let last = performance.now(), acc = 0, workMs = 0, frameNo98 = 0;
 function loop(now) {
+  if (editing) { requestAnimationFrame(loop); return; } // セル編集中は変換/描画を止める
   acc += Math.min(0.1, (now - last) / 1000);
   last = now;
   const t0 = performance.now();
@@ -854,6 +890,142 @@ $('timportf').onchange = (e) => { const f = e.target.files[0]; if (f) tuneImport
 $('tclear').onclick = () => { tuneTrack = null; tuneUiSync(); say('チューニングをクリア'); };
 video.addEventListener('loadedmetadata', () => { tuneTrack = null; tuneUiSync(); tuneLoadForVideo(); });
 tuneUiSync();
+
+// ---- manual cell editor (AtrbViewer的な手動アトリビュート/ドット編集) ------
+// Freeze a converted frame into a cell buffer and hand-fix it: paint per-cell
+// 8-colour attributes, toggle individual semigraphic dots, eyedrop colours —
+// with the μPD3301's ~20-colour-changes-per-line budget drawn live in a gutter
+// (over-budget rows go red: that line literally can't exist on the 80-col
+// hardware). Export PNG or a JSON cell buffer. Video keeps its global tuning
+// track; this is for perfecting a still. (Same buffer shape as semivideo →
+// later bakeable into a track keyframe.)
+let editing = false, editBuf = null, editZoom = 11, editTool = 'paint', editColor = 7;
+let editUndo = [], editRedo = [], editDrag = false, editDotVal = 1, editDirty = false;
+const GUT = 26; // left gutter px for the per-row colour-change budget
+const ecv = $('editcv'), ectx = ecv.getContext('2d');
+
+function editGrab() {
+  if (!lastCells || !lastCells.codes || !lastCells.codes.length) return false;
+  editBuf = cloneBuf(lastCells); editUndo = []; editRedo = [];
+  return true;
+}
+function editOpen() {
+  video.pause();
+  if (!editGrab()) { say('セル系モード（ディザ/線画/α/適応）で表示してから編集して'); return; }
+  editing = true; $('editpanel').classList.add('open'); $('bedit').classList.add('on');
+  buildPalette(); editRender();
+}
+function editClose() { editing = false; $('editpanel').classList.remove('open'); $('bedit').classList.remove('on'); }
+
+function editSnapshot() { editUndo.push(cloneBuf(editBuf)); if (editUndo.length > 80) editUndo.shift(); editRedo = []; }
+function editUndoDo() { if (!editUndo.length) return; editRedo.push(cloneBuf(editBuf)); editBuf = editUndo.pop(); editRender(); }
+function editRedoDo() { if (!editRedo.length) return; editUndo.push(cloneBuf(editBuf)); editBuf = editRedo.pop(); editRender(); }
+
+function buildPalette() {
+  const wrap = $('editpal'); wrap.innerHTML = '';
+  GRB.forEach((rgb, i) => {
+    const b = document.createElement('button');
+    b.className = 'swatch'; b.dataset.c = i;
+    b.style.cssText = `width:20px;height:20px;padding:0;background:rgb(${rgb.join(',')});border:2px solid ${i === editColor ? '#fff' : '#333'}`;
+    b.title = GRB_NAMES[i] + ' (' + i + ')';
+    b.onclick = () => { editColor = i; palSel(); };
+    wrap.appendChild(b);
+  });
+}
+function palSel() { [...$('editpal').children].forEach((b) => { b.style.borderColor = (+b.dataset.c === editColor) ? '#fff' : '#333'; }); infoLine(); }
+
+function editRender() {
+  if (!editBuf) return;
+  const z = editZoom;
+  const { width, height, rgba } = renderCells(editBuf, z, { grid: z >= 6 });
+  ecv.width = width + GUT; ecv.height = height;
+  ectx.fillStyle = '#0a0a12'; ectx.fillRect(0, 0, ecv.width, ecv.height);
+  ectx.putImageData(new ImageData(rgba, width, height), GUT, 0);
+  const counts = lineAttrChanges(editBuf);
+  ectx.font = '9px monospace'; ectx.textBaseline = 'middle'; ectx.textAlign = 'right';
+  for (let y = 0; y < editBuf.rows; y++) {
+    const n = counts[y], over = n > 20;
+    if (over) { ectx.fillStyle = 'rgba(255,40,40,0.16)'; ectx.fillRect(GUT, y * z, width, z); }
+    ectx.fillStyle = over ? '#f77' : (n > 16 ? '#fd8' : '#6a7');
+    if (z >= 8) ectx.fillText(String(n), GUT - 3, y * z + z / 2);
+  }
+  ectx.textAlign = 'left';
+  infoLine(counts);
+}
+function editRenderSoon() { if (editDirty) return; editDirty = true; requestAnimationFrame(() => { editDirty = false; editRender(); }); }
+function infoLine(counts) {
+  if (!editBuf) return;
+  const cs = counts || lineAttrChanges(editBuf);
+  let over = 0, mx = 0; for (const c of cs) { if (c > 20) over++; if (c > mx) mx = c; }
+  const tool = { paint: '塗り', dot: 'ドット', pick: 'スポイト' }[editTool];
+  $('editinfo').textContent = `${editBuf.cols}×${editBuf.rows} · ${tool} · 色=${GRB_NAMES[editColor]} · 最大 ${mx} 色/行` + (over ? ` · ⚠20超 ${over}行` : ' · 予算内');
+}
+
+function evtCell(e) {
+  if (!editBuf) return null;
+  const rect = ecv.getBoundingClientRect();
+  const x = (e.clientX - rect.left) * (ecv.width / rect.width) - GUT;
+  const y = (e.clientY - rect.top) * (ecv.height / rect.height);
+  if (x < 0) return null;
+  const cx = Math.floor(x / editZoom), cy = Math.floor(y / editZoom);
+  if (cx < 0 || cy < 0 || cx >= editBuf.cols || cy >= editBuf.rows) return null;
+  const fx = x - cx * editZoom, fy = y - cy * editZoom;
+  return { cx, cy, dx: fx < editZoom / 2 ? 0 : 1, dy: Math.min(3, Math.floor(fy * 4 / editZoom)) };
+}
+function editApply(c) {
+  if (editTool === 'dot') setDot(editBuf, c.cx, c.cy, c.dx, c.dy, editDotVal);
+  else if (editTool === 'paint') setColor(editBuf, c.cx, c.cy, editColor);
+}
+ecv.addEventListener('pointerdown', (e) => {
+  const c = evtCell(e); if (!c) return;
+  e.preventDefault(); ecv.setPointerCapture(e.pointerId);
+  if (editTool === 'pick') { editColor = editBuf.colors[c.cy * editBuf.cols + c.cx] & 7; palSel(); return; }
+  editSnapshot(); editDrag = true;
+  if (editTool === 'dot') editDotVal = getDot(editBuf, c.cx, c.cy, c.dx, c.dy) ? 0 : 1; // toggle sense from first cell
+  editApply(c); editRender();
+});
+ecv.addEventListener('pointermove', (e) => { if (!editDrag) return; const c = evtCell(e); if (c) { editApply(c); editRenderSoon(); } });
+ecv.addEventListener('pointerup', () => { editDrag = false; });
+ecv.addEventListener('pointercancel', () => { editDrag = false; });
+
+function setTool(tl) { editTool = tl; for (const [id, t2] of [['etpaint', 'paint'], ['etdot', 'dot'], ['etpick', 'pick']]) $(id).classList.toggle('on', t2 === tl); infoLine(); }
+$('bedit').onclick = () => (editing ? editClose() : editOpen());
+$('etpaint').onclick = () => setTool('paint');
+$('etdot').onclick = () => setTool('dot');
+$('etpick').onclick = () => setTool('pick');
+$('etzoom').oninput = (e) => { editZoom = +e.target.value; editRender(); };
+$('etundo').onclick = editUndoDo;
+$('etredo').onclick = editRedoDo;
+$('etregrab').onclick = () => { if (editGrab()) editRender(); say('現フレームを再取込'); };
+$('etclose').onclick = editClose;
+$('etpng').onclick = () => {
+  const { width, height, rgba } = renderCells(editBuf, 8, { grid: false }); // native cell size
+  const c = document.createElement('canvas'); c.width = width; c.height = height;
+  c.getContext('2d').putImageData(new ImageData(rgba, width, height), 0, 0);
+  c.toBlob((b) => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = `semiedit-${(vidName || 'art').replace(/\.[^.]+$/, '') || 'art'}.png`; a.click(); });
+};
+$('etsave').onclick = () => {
+  const j = serialize(editBuf, { geometry, video: vidName || '', t: video.currentTime || 0 });
+  const b = new Blob([JSON.stringify(j)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(b);
+  a.download = `semiedit-${(vidName || 'art').replace(/\.[^.]+$/, '') || 'art'}.json`; a.click();
+};
+$('etload').onclick = () => $('etloadf').click();
+$('etloadf').onchange = (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => { try { editBuf = deserialize(JSON.parse(rd.result)); editUndo = []; editRedo = []; editRender(); say('セルJSON読込'); } catch (err) { say('読込失敗: ' + err.message); } };
+  rd.readAsText(f); e.target.value = '';
+};
+document.addEventListener('keydown', (e) => {
+  if (!editing) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); editUndoDo(); }
+  else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) { e.preventDefault(); editRedoDo(); }
+  else if (e.key === 'Escape') editClose();
+  else if (e.key >= '0' && e.key <= '7') { editColor = +e.key; palSel(); }
+  else if (e.key === 'p') setTool('paint');
+  else if (e.key === 'd') setTool('dot');
+});
 
 // CRT
 const phosBtns = { P22: $('pP22'), LONG: $('pLONG'), P39: $('pP39'), P7: $('pP7'), AMBER: $('pAMBER'), PLASMA: $('pPLASMA') };
