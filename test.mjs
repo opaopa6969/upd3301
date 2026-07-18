@@ -435,8 +435,13 @@ test('P22: blue dies first — a white flash decays through orange', () => {
   const dark = Uint8Array.from([0]);
   for (let i = 0; i < 4; i++) crt.step(dark, 1 / 60);
   const s = crt.sample(0, 0);
+  // P22's tail is deliberately short (see PHOSPHORS.P22 note): 4 frames after a
+  // white flash the fast component is gone and only the warm tail remains. The
+  // physics that matters here is the ORDER — blue dies first, red lingers — not
+  // an absolute glow floor tuned to the old (too-long) tail.
   assert.ok(s.r > s.g && s.g > s.b, `afterglow orders r>g>b (${s.r}, ${s.g}, ${s.b})`);
-  assert.ok(s.r > 0.005, 'red tail still glowing');
+  assert.ok(s.r > s.b * 10, `red lingers long after blue has died (${s.r} vs ${s.b})`);
+  assert.ok(s.r > 5e-4, `a faint red tail still glows (${s.r})`);
 });
 
 test('P39 mono: whatever the guns drive, the light is green', () => {
