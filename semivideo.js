@@ -528,3 +528,88 @@ export function renderFullColorPhase(analysis, phase, out = null) {
   }
   return idx;
 }
+
+// ---- hybrid: semigraphic dots + real font glyphs (experimental) -----------
+// Per cell, binarize the 8×8 source block and pick whichever tile matches best
+// (Hamming distance): the μPD3301 2×4 semigraphic pattern, or a glyph from the
+// PC-8001 font. Glyphs only win when clearly better (glyphBias margin), so the
+// frame stays mostly semigraphic and doesn't dissolve into text noise — the
+// glyphs earn their place on shapes the 2×4 grid can't do (diagonals, curves,
+// fine texture). Colour is the dominant hue of the lit pixels, as elsewhere.
+//
+//   rgba   — (cols*8) × (rows*8) straight RGBA (8×8 source samples per cell).
+//   glyphs — [{ code, bits }] where bits is 8 bytes, bits[line] an 8-bit row
+//            (bit7 = leftmost pixel) — i.e. a CGROM glyph sliced to 8×8.
+//   glyphBias — Hamming margin a glyph must beat the semigraphic tile by.
+// Returns { schemaVersion, cols, rows, codes, colors, text }; text[i]=1 means
+// codes[i] is a font char code (render WITHOUT the semigraphic attribute).
+const POP8 = (() => { const p = new Uint8Array(256); for (let i = 1; i < 256; i++) p[i] = p[i >> 1] + (i & 1); return p; })();
+
+export function rgbaToHybrid(rgba, cols, rows, opts = {}) {
+  const { glyphs = [], gain = 1, autoLevels = true, glyphBias = 6 } = opts;
+  const W = cols * 8, H = rows * 8, n = W * H;
+  const { lo, scale } = autoLevels ? computeLevels(rgba, n) : { lo: 0, scale: 1 };
+  const norm = (raw) => Math.min(255, Math.max(0, (raw - lo) * scale * gain));
+  const codes = new Uint8Array(cols * rows);
+  const colors = new Uint8Array(cols * rows);
+  const text = new Uint8Array(cols * rows);
+  const luma = new Float32Array(64);
+  const tgt = new Uint8Array(8);
+  for (let cy = 0; cy < rows; cy++) {
+    for (let cx = 0; cx < cols; cx++) {
+      const i = cy * cols + cx;
+      // gather 8×8 luma + mean
+      let sum = 0;
+      for (let py = 0; py < 8; py++) {
+        for (let px = 0; px < 8; px++) {
+          const o = ((cy * 8 + py) * W + (cx * 8 + px)) * 4;
+          const y = norm((rgba[o] * 77 + rgba[o + 1] * 150 + rgba[o + 2] * 29) >> 8);
+          luma[py * 8 + px] = y; sum += y;
+        }
+      }
+      const mean = sum / 64;
+      if (mean <= 12) { codes[i] = 0; colors[i] = 0; continue; } // blank/black cell
+      // binarize target at the cell mean
+      let anyOn = 0;
+      for (let py = 0; py < 8; py++) {
+        let row = 0;
+        for (let px = 0; px < 8; px++) if (luma[py * 8 + px] >= mean) { row |= 1 << (7 - px); anyOn++; }
+        tgt[py] = row;
+      }
+      if (anyOn === 0) { codes[i] = 0; colors[i] = 0; continue; }
+      // semigraphic candidate: 2×4 majority over the same block
+      let semiCode = 0;
+      for (let sub = 0; sub < 8; sub++) {
+        const dx = sub >> 2, dy = sub & 3;
+        let c = 0;
+        for (let yy = 0; yy < 2; yy++) for (let xx = 0; xx < 4; xx++) {
+          if ((tgt[dy * 2 + yy] >> (7 - (dx * 4 + xx))) & 1) c++;
+        }
+        if (c >= 4) semiCode |= 1 << ((sub & 3) + (dx ? 4 : 0)); // dy + dx*4
+      }
+      let semiDist = 0;
+      for (let py = 0; py < 8; py++) {
+        const dy = py >> 1;
+        const recon = (((semiCode >> dy) & 1) ? 0xf0 : 0) | (((semiCode >> (4 + dy)) & 1) ? 0x0f : 0);
+        semiDist += POP8[recon ^ tgt[py]];
+      }
+      // best-matching font glyph
+      let bestG = -1, bestD = 1 << 30;
+      for (let g = 0; g < glyphs.length; g++) {
+        const b = glyphs[g].bits;
+        let d = 0;
+        for (let py = 0; py < 8; py++) d += POP8[b[py] ^ tgt[py]];
+        if (d < bestD) { bestD = d; bestG = g; }
+      }
+      if (bestG >= 0 && bestD + glyphBias < semiDist) { codes[i] = glyphs[bestG].code; text[i] = 1; }
+      else { codes[i] = semiCode; }
+      // colour = dominant hue of the lit pixels (hue-preserving, like alpha)
+      let R = 0, G = 0, B = 0, cnt = 0;
+      for (let py = 0; py < 8; py++) for (let px = 0; px < 8; px++) {
+        if ((tgt[py] >> (7 - px)) & 1) { const o = ((cy * 8 + py) * W + (cx * 8 + px)) * 4; R += rgba[o]; G += rgba[o + 1]; B += rgba[o + 2]; cnt++; }
+      }
+      if (cnt) { R /= cnt; G /= cnt; B /= cnt; const mx = Math.max(R, G, B); if (mx >= 24) { const th = mx * 0.72; colors[i] = (R >= th ? 2 : 0) | (G >= th ? 4 : 0) | (B >= th ? 1 : 0); } }
+    }
+  }
+  return { schemaVersion: SCHEMA_VERSION, cols, rows, codes, colors, text };
+}

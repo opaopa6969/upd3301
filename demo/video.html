@@ -38,7 +38,7 @@
  "/index.js":"/index.js?v=cache1","/upd8257.js":"/upd8257.js?v=cache1",
  "/pc8001.js":"/pc8001.js?v=cache1","/crt.js":"/crt.js?v=cache1",
  "/tube.js":"/tube.js?v=cache1","/term.js":"/term.js?v=cache1",
- "/semivideo.js":"/semivideo.js?v=adapt4","/semiedit.js":"/semiedit.js?v=edit1","/z80.js":"/z80.js?v=cache1",
+ "/semivideo.js":"/semivideo.js?v=hybrid1","/semiedit.js":"/semiedit.js?v=edit1","/z80.js":"/z80.js?v=cache1",
  "/demo/font.js":"/demo/font.js?v=cache1"
 }}
 </script>
@@ -108,6 +108,7 @@
   <button id="mline">線画 (アニメ)</button>
   <button id="malpha" title="αデモ風：領域をフラット塗り＋黒輪郭（PC-8001 8色セル）。線画と違い中身も塗る">α (アニメ塗り)</button>
   <button id="madaptive" title="フレーム全体を見て、μPD3301の1ライン20色制約内で色配分を最適化＋fillDark/edge等を自動調整（縦エッジで揃える。1フレーム遅延）">適応 (最適化)</button>
+  <button id="mhybrid" title="試験：セル毎に セミグラ2×4タイル or PC-8001フォント文字 の当たりが良い方を選ぶ（斜め/曲線/中間調は文字が勝つ）。実機標準CGROMを積むと本領。重い">混在 (試験)</button>
   <button id="m98">98風 (512中16色)</button>
   <button id="mfull">フルカラーディザ</button>
   <button id="bauto" class="on">動的2値化 (自動レベル)</button>
@@ -121,6 +122,12 @@
   <label title="輪郭：黒アウトラインの太さ／量。＋で線が濃く多く">輪郭 <input type="range" id="kedge" min="0.4" max="2.5" step="0.1" value="1"></label>
   <label title="縦整合：強い縦エッジで行間の色境界を揃える強さ（0=行ごと独立, 高いほど揃う）">縦整合 <input type="range" id="kcoh" min="0" max="1.5" step="0.05" value="0.5"></label>
   <label title="色数/行：μPD3301の1ライン色変化予算（自動値=解像度比例）に対する倍率">色数/行 <input type="range" id="kpairs" min="0.4" max="2.5" step="0.1" value="1"></label>
+</div>
+<div class="row knobs" id="hybridknobs" style="display:none">
+  <span style="color:#8fd;font-size:12px;min-width:70px">混在ノブ:</span>
+  <label title="文字寄せ：フォント文字がセミグラに勝つ判定の閾値。右へ動かすほど文字が増える（左＝ほぼセミグラ）">文字寄せ <input type="range" id="kglyph" min="0" max="20" step="1" value="14"></label>
+  <label style="font-size:11px;color:#9ab" title="PC-8001標準CGROMの生ダンプを読むと、罫線/網掛け/記号など本物のグラフィック文字が候補に入る（未指定時は手描きフォールバック）">CGROM: <input type="file" id="fontrom" accept=".rom,.bin,application/octet-stream" style="font-size:11px"></label>
+  <span id="glyphinfo" style="color:#778;font-size:11px"></span>
 </div>
 <div class="row knobs" id="tunerow" style="display:none">
   <span style="color:#fd8;font-size:12px;min-width:70px">🎬 トラック:</span>
@@ -204,8 +211,27 @@ import { mountMenuBar } from './menubar.js';
   if (menus.length) { mountMenuBar(mm, { storageKey: 'menubar-video', brand: '動画セミグラ', menus }); document.querySelectorAll('.row[data-cat-menu]').forEach((r) => { r.style.display = 'none'; }); }
 })();
 import { Terminal } from '../term.js';
-import { rgbaToSemigraphic, rgbaToLineArt, rgbaToAlpha, rgbaToAdaptive, analyzePc98, renderPc98Phase, analyzeFullColor, renderFullColorPhase } from '../semivideo.js';
+import { rgbaToSemigraphic, rgbaToLineArt, rgbaToAlpha, rgbaToAdaptive, rgbaToHybrid, analyzePc98, renderPc98Phase, analyzeFullColor, renderFullColorPhase } from '../semivideo.js';
 import { GRB, GRB_NAMES, renderCells, lineAttrChanges, cloneBuf, setColor, setDot, getDot, serialize, deserialize } from '../semiedit.js';
+import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
+
+// hybrid mode's font: PC-8001 CGROM. buildFont() is the hand-drawn fallback;
+// load a real dump via the フォントROM input for authentic graphic characters.
+const cgrom = buildFont().cgrom;
+addPlaceholderUpperHalf(cgrom);
+let hybridGlyphs = buildGlyphSet(cgrom);
+function buildGlyphSet(rom) {
+  // candidate tiles for hybrid matching: every non-blank, non-near-full glyph
+  // (blanks/solids are already covered by semigraphics). 8×8, bits[7]=leftmost.
+  const pc = (b) => { let c = 0; while (b) { c += b & 1; b >>= 1; } return c; };
+  const out = [];
+  for (let code = 0; code < 256; code++) {
+    const bits = new Uint8Array(8); let ones = 0;
+    for (let line = 0; line < 8; line++) { const b = rom[code * 16 + line]; bits[line] = b; ones += pc(b); }
+    if (ones >= 4 && ones <= 58) out.push({ code, bits });
+  }
+  return out;
+}
 import { ATTR } from '../pc8001.js';
 import { CrtPhosphor, PHOSPHORS, rollScan } from '../crt.js';
 import { CrtTube } from '../tube.js';
@@ -242,6 +268,8 @@ let pc98 = null, fullc = null, dotIdx = null, screenPat = 'bayer';
 let phosphor98 = null, tubes98 = {}, rollBuf98 = null, rowBright = null, rowDark = null;
 let autoLevels = true, flickerLevels = 0, gain = 1.3, phase = 0; // 0=off, 3=27c, 8=512c
 let skHueBias = 0, skEdgeGain = 1, skCoherence = 0.5, skMaxScale = 1; // 適応モードのツマミ
+let skGlyphBias = 6; // ハイブリッド: 文字がセミグラに勝つのに必要なHamming差（低=文字増）
+let grab8 = null; // ハイブリッド用の 8×8/セル 取り込みキャンバス
 let vidName = ''; // 現在の動画ソース名（チューニングトラックの動画同定に使う）
 let lastCells = null; // 直近フレームの {cols,rows,codes,colors}（セル編集の取込元）
 let term = null, img = null, grab = null, idxBuf = null, rollBuf = null;
@@ -273,6 +301,7 @@ function boot() {
   canvas.width = W; canvas.height = H * 2;
   img = ctx.createImageData(W, H * 2);
   grab = makeGrab(term.dotWidth, term.dotHeight);
+  grab8 = makeGrab(term.cols * 8, term.rows * 8); // hybrid: 8×8 source per cell
   idxBuf = new Uint8Array(W * H);
   rollBuf = new Uint8Array(W * H);
   rollPos = 0;
@@ -316,42 +345,52 @@ function frameToCells() {
     const k = trackAt(video.currentTime);
     if (k) applyKnobs(k, true);
   }
-  const dw = term.dotWidth, dh = term.dotHeight;
-  grab.drawImage(video, 0, 0, dw, dh);
-  const rgba = grab.getImageData(0, 0, dw, dh).data;
   phase++;
-  if (convMode === 'pc98') { // no cells, no attributes: full per-dot color
-    pc98 = analyzePc98(rgba, dw, dh, { gain, autoLevels });
+  if (convMode === 'pc98' || convMode === 'full') { // per-dot colour, no cells/attributes
+    const dw = term.dotWidth, dh = term.dotHeight;
+    grab.drawImage(video, 0, 0, dw, dh);
+    const rgba = grab.getImageData(0, 0, dw, dh).data;
+    if (convMode === 'pc98') pc98 = analyzePc98(rgba, dw, dh, { gain, autoLevels });
+    else fullc = analyzeFullColor(rgba, dw, dh, { gain, autoLevels, pattern: screenPat });
     lastCells = null; // セル系でないので編集不可
     return;
   }
-  if (convMode === 'full') { // 512 cube per dot, selectable screen pattern
-    fullc = analyzeFullColor(rgba, dw, dh, { gain, autoLevels, pattern: screenPat });
-    lastCells = null;
-    return;
+  let r;
+  if (convMode === 'hybrid') {
+    // experimental: sample the frame at 8×8/cell and let each cell pick the
+    // better of a semigraphic 2×4 tile or a PC-8001 font glyph (best-tile).
+    const w8 = term.cols * 8, h8 = term.rows * 8;
+    grab8.drawImage(video, 0, 0, w8, h8);
+    const rgba8 = grab8.getImageData(0, 0, w8, h8).data;
+    r = rgbaToHybrid(rgba8, term.cols, term.rows, { glyphs: hybridGlyphs, gain, autoLevels, glyphBias: skGlyphBias });
+  } else {
+    const dw = term.dotWidth, dh = term.dotHeight;
+    grab.drawImage(video, 0, 0, dw, dh);
+    const rgba = grab.getImageData(0, 0, dw, dh).data;
+    r = convMode === 'line'
+      ? rgbaToLineArt(rgba, dw, dh, { edgeGain: gain, autoLevels })
+      : convMode === 'alpha'
+      ? rgbaToAlpha(rgba, dw, dh, { gain, autoLevels, edgeGain: 1.0 })
+      : convMode === 'adaptive'
+      // ~20 colour changes/line is the μPD3301's real limit on the 80-col
+      // screen; scale it with the geometry so EX/UEX use their extra colour
+      // instead of banding (80→20, 160→40, 320→80). Owns levels/gain/saturation.
+      ? rgbaToAdaptive(rgba, dw, dh, {
+          maxPairs: Math.max(6, Math.round((dw >> 1) / 4 * skMaxScale)),
+          satBias: skHueBias, edgeGain: skEdgeGain, coherence: skCoherence,
+        })
+      : rgbaToSemigraphic(rgba, dw, dh, {
+          gain, autoLevels,
+          temporalPhase: flickerLevels ? phase % (flickerLevels - 1) : null,
+          temporalLevels: flickerLevels || 3,
+        });
   }
-  const r = convMode === 'line'
-    ? rgbaToLineArt(rgba, dw, dh, { edgeGain: gain, autoLevels })
-    : convMode === 'alpha'
-    ? rgbaToAlpha(rgba, dw, dh, { gain, autoLevels, edgeGain: 1.0 })
-    : convMode === 'adaptive'
-    // ~20 colour changes/line is the μPD3301's real limit on the 80-col screen;
-    // scale it with the geometry so EX/UEX use their extra colour instead of
-    // banding (80→20, 160→40, 320→80). Owns its levels/gain/saturation.
-    ? rgbaToAdaptive(rgba, dw, dh, {
-        maxPairs: Math.max(6, Math.round((dw >> 1) / 4 * skMaxScale)),
-        satBias: skHueBias, edgeGain: skEdgeGain, coherence: skCoherence,
-      })
-    : rgbaToSemigraphic(rgba, dw, dh, {
-        gain, autoLevels,
-        temporalPhase: flickerLevels ? phase % (flickerLevels - 1) : null,
-        temporalLevels: flickerLevels || 3,
-      });
-  const { codes, colors } = r;
-  lastCells = { schemaVersion: 1, cols: term.cols, rows: term.rows, codes, colors }; // 編集の取込元（cloneBufでコピーされる）
+  const { codes, colors, text } = r;
+  lastCells = { schemaVersion: 1, cols: term.cols, rows: term.rows, codes, colors, ...(text ? { text } : {}) };
   for (let i = 0; i < codes.length; i++) {
     term.chars[i] = codes[i];
-    term.colorA[i] = (colors[i] << 5) | ATTR.SEMIGRAPHIC | ATTR.COLOR_FLAG;
+    // hybrid text cells drop the semigraphic bit → render as a font glyph
+    term.colorA[i] = (colors[i] << 5) | ((text && text[i]) ? 0 : ATTR.SEMIGRAPHIC) | ATTR.COLOR_FLAG;
     term.funcA[i] = 0;
   }
   term.stats.overflowRows = 0;
@@ -447,7 +486,7 @@ function loop(now) {
       phosphor98.step(vholdApply(dotIdx, rollBuf98, term.dotWidth, term.dotHeight), FR);
     } else {
       term.sys.crtc.stepFrame();
-      term.sys.render({ cgrom: cgromEmpty, out: idxBuf });
+      term.sys.render({ cgrom, out: idxBuf }); // real font so hybrid text cells show
       phosphor.step(vholdApply(idxBuf, rollBuf), FR);
     }
   }
@@ -670,7 +709,7 @@ for (const [k, el] of Object.entries(geoBtns)) {
     for (const [k2, el2] of Object.entries(geoBtns)) el2.classList.toggle('on', k2 === k);
   };
 }
-const convBtns = { dither: $('mdither'), line: $('mline'), alpha: $('malpha'), adaptive: $('madaptive'), pc98: $('m98'), full: $('mfull') };
+const convBtns = { dither: $('mdither'), line: $('mline'), alpha: $('malpha'), adaptive: $('madaptive'), hybrid: $('mhybrid'), pc98: $('m98'), full: $('mfull') };
 function setConv(m) {
   convMode = m;
   for (const [k, el] of Object.entries(convBtns)) el.classList.toggle('on', k === m);
@@ -685,13 +724,33 @@ function setConv(m) {
     box.title = adaptive ? '適応モードでは自動（このツマミは無効）' : (box.title || '');
   }
   const ak = $('adaptknobs'); if (ak) ak.style.display = adaptive ? 'flex' : 'none'; // 適応ノブは適応時のみ
+  const hk = $('hybridknobs'); if (hk) hk.style.display = (m === 'hybrid') ? 'flex' : 'none';
+  if (m === 'hybrid') updateGlyphInfo();
 }
 $('mdither').onclick = () => setConv('dither');
 $('mline').onclick = () => setConv('line');
 $('malpha').onclick = () => setConv('alpha');
 $('madaptive').onclick = () => setConv('adaptive');
+$('mhybrid').onclick = () => setConv('hybrid');
 $('m98').onclick = () => setConv('pc98');
 $('mfull').onclick = () => setConv('full');
+function updateGlyphInfo() {
+  const el = $('glyphinfo'); if (el) el.textContent = `候補 ${hybridGlyphs.length} 文字${fontLoaded ? '（実CGROM）' : '（フォールバック）'}`;
+}
+let fontLoaded = false;
+$('kglyph').oninput = (e) => { skGlyphBias = 20 - +e.target.value; }; // 右=文字増（低bias）
+$('fontrom').onchange = (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    try {
+      applyFontRom(cgrom, new Uint8Array(rd.result));
+      hybridGlyphs = buildGlyphSet(cgrom); fontLoaded = true; updateGlyphInfo();
+      say(`CGROM読込: ${f.name}（候補 ${hybridGlyphs.length} 文字）`);
+    } catch (err) { say('CGROM読込失敗: ' + err.message); }
+  };
+  rd.readAsArrayBuffer(f);
+};
 const patBtns = { bayer: $('sbayer'), halftone: $('shalftone'), line: $('sline') };
 for (const [k, el] of Object.entries(patBtns)) {
   el.onclick = () => {
