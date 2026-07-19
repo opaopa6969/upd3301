@@ -56,12 +56,48 @@ export function setColor(buf, cx, cy, col) {
 // the cell's code changed.
 export function setDot(buf, cx, cy, dx, dy, on) {
   if (cx < 0 || cy < 0 || cx >= buf.cols || cy >= buf.rows) return false;
-  const i = cy * buf.cols + cx, b = dotBit(dx, dy), had = buf.codes[i] & b;
+  const i = cy * buf.cols + cx, b = dotBit(dx, dy);
+  // Editing a dot means this cell is semigraphic: drop any glyph flag first and
+  // start from a clear pattern (the glyph's code isn't a dot pattern).
+  if (buf.text && buf.text[i]) { buf.text[i] = 0; buf.codes[i] = 0; }
+  const had = buf.codes[i] & b;
   buf.codes[i] = on ? (buf.codes[i] | b) : (buf.codes[i] & ~b);
   return (!!had) !== (!!on);
 }
 export function getDot(buf, cx, cy, dx, dy) {
   return (buf.codes[cy * buf.cols + cx] & dotBit(dx, dy)) !== 0;
+}
+
+// ---- text/glyph layer -----------------------------------------------------
+// A cell can carry a font GLYPH instead of a semigraphic dot pattern: text[i]=1
+// marks codes[i] as a CGROM character code (not a dot pattern). The μPD3301
+// lets glyph and semigraphic cells coexist within an attribute run, so the
+// editor can drop the font's box/shade/quadrant characters onto a converted
+// frame. The layer is lazily allocated — a buffer that never gets a glyph stays
+// text-free (and serializes without a `text` field).
+function ensureText(buf) {
+  if (!buf.text) buf.text = new Uint8Array(buf.cols * buf.rows);
+  return buf.text;
+}
+export function isGlyph(buf, cx, cy) {
+  if (cx < 0 || cy < 0 || cx >= buf.cols || cy >= buf.rows) return false;
+  return !!(buf.text && buf.text[cy * buf.cols + cx]);
+}
+// Place a font glyph on a cell (codes[i] becomes a char code). Returns success.
+export function setGlyph(buf, cx, cy, code) {
+  if (cx < 0 || cy < 0 || cx >= buf.cols || cy >= buf.rows) return false;
+  const i = cy * buf.cols + cx;
+  ensureText(buf)[i] = 1;
+  buf.codes[i] = code & 0xff;
+  return true;
+}
+// Revert a cell to (empty) semigraphic — clears the glyph flag and its pattern.
+export function clearGlyph(buf, cx, cy) {
+  if (cx < 0 || cy < 0 || cx >= buf.cols || cy >= buf.rows) return false;
+  const i = cy * buf.cols + cx;
+  if (buf.text) buf.text[i] = 0;
+  buf.codes[i] = 0;
+  return true;
 }
 
 // ---- μPD3301 line budget --------------------------------------------------
@@ -93,9 +129,15 @@ export function lineAttrChanges(buf) {
 // square-ish (cell split 2 wide × 4 tall). Optional 1px cell grid. This is the
 // EDITOR view (clean, zoomable); the CRT view stays with the phosphor/tube
 // pipeline. Deterministic.
+// opts.cgrom — optional Uint8Array (256×16 stride, 8×8 glyph in low 8 lines,
+// bit7 = leftmost pixel; same shape demo/font.js builds). When a cell is a
+// glyph (buf.text[i]) and a cgrom is given, its 8×8 character is drawn instead
+// of the 2×4 semigraphic tile. Without a cgrom, glyph cells fall back to their
+// codes read as a dot pattern (harmless, deterministic).
 export function renderCells(buf, cellPx, opts = {}) {
   const grid = opts.grid !== false;
-  const { cols, rows, codes, colors } = buf;
+  const { cols, rows, codes, colors, text } = buf;
+  const cgrom = opts.cgrom;
   const cw = cellPx, ch = cellPx;
   const W = cols * cw, H = rows * ch;
   const rgba = new Uint8ClampedArray(W * H * 4);
@@ -104,12 +146,15 @@ export function renderCells(buf, cellPx, opts = {}) {
       const i = cy * cols + cx;
       const code = codes[i], col = colors[i] & 7;
       const p = GRB[col];
+      const isText = !!(text && text[i] && cgrom);
       for (let py = 0; py < ch; py++) {
         const dy = Math.min(3, (py * 4 / ch) | 0);
+        const grow = isText ? cgrom[code * 16 + Math.min(7, (py * 8 / ch) | 0)] : 0;
         const rowBase = ((cy * ch + py) * W + cx * cw) * 4;
         for (let px = 0; px < cw; px++) {
-          const dx = px < cw / 2 ? 0 : 1;
-          const on = code & dotBit(dx, dy);
+          let on;
+          if (isText) { on = (grow >> (7 - Math.min(7, (px * 8 / cw) | 0))) & 1; }
+          else { const dx = px < cw / 2 ? 0 : 1; on = code & dotBit(dx, dy); }
           let r = on ? p[0] : 0, g = on ? p[1] : 0, b = on ? p[2] : 0;
           if (grid && (px === 0 || py === 0)) { r = (r + 46) >> 1; g = (g + 52) >> 1; b = (b + 60) >> 1; }
           const o = rowBase + px * 4;
