@@ -38,7 +38,7 @@
  "/index.js":"/index.js?v=cache1","/upd8257.js":"/upd8257.js?v=cache1",
  "/pc8001.js":"/pc8001.js?v=col40","/crt.js":"/crt.js?v=cache1",
  "/tube.js":"/tube.js?v=cache1","/term.js":"/term.js?v=cache1",
- "/semivideo.js":"/semivideo.js?v=hybrid1","/semiedit.js":"/semiedit.js?v=edit2","/z80.js":"/z80.js?v=cache1",
+ "/semivideo.js":"/semivideo.js?v=hybrid1","/semiedit.js":"/semiedit.js?v=edit3","/z80.js":"/z80.js?v=cache1",
  "/demo/font.js":"/demo/font.js?v=cache1"
 }}
 </script>
@@ -73,6 +73,7 @@
       <button id="etregrab" title="今の映像フレームを取り込み直す">再取込</button>
       <button id="etpng">PNG</button>
       <button id="etsave">JSON保存</button>
+      <button id="etbas" title="このセル画を PC-8001 実機/他エミュで動く N-BASIC プログラム（VRAM へ POKE）として書き出し。ORIGINAL(80×25) のみ・20色/行超過行があると不可（赤い行を直す）">BASIC書出</button>
       <button id="etload">JSON読込</button>
       <input type="file" id="etloadf" accept="application/json,.json" style="display:none">
       <button id="etclose">閉じる</button>
@@ -219,7 +220,7 @@ import { mountMenuBar } from './menubar.js';
 })();
 import { Terminal } from '../term.js';
 import { rgbaToSemigraphic, rgbaToLineArt, rgbaToAlpha, rgbaToAdaptive, rgbaToHybrid, analyzePc98, renderPc98Phase, analyzeFullColor, renderFullColorPhase } from '../semivideo.js';
-import { GRB, GRB_NAMES, renderCells, lineAttrChanges, cloneBuf, setColor, setDot, getDot, setGlyph, clearGlyph, isGlyph, serialize, deserialize } from '../semiedit.js';
+import { GRB, GRB_NAMES, renderCells, lineAttrChanges, cloneBuf, setColor, setDot, getDot, setGlyph, clearGlyph, isGlyph, serialize, deserialize, bufToVram, vramToBasic, vramFitError } from '../semiedit.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 
 // hybrid mode's font: PC-8001 CGROM. buildFont() is the hand-drawn fallback;
@@ -1149,6 +1150,20 @@ $('etsave').onclick = () => {
   const b = new Blob([JSON.stringify(j)], { type: 'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(b);
   a.download = `semiedit-${(vidName || 'art').replace(/\.[^.]+$/, '') || 'art'}.json`; a.click();
+};
+$('etbas').onclick = () => {
+  const fit = vramFitError(editBuf);
+  if (fit) { say('BASIC書出不可: ' + fit); return; }
+  const vram = bufToVram(editBuf);
+  if (vram.overRows.length) {
+    const rs = vram.overRows.slice(0, 8).join(',') + (vram.overRows.length > 8 ? '…' : '');
+    say(`BASIC書出不可: ${vram.overRows.length}行が20色/行超過（赤い行を直して）: 行 ${rs}`); return;
+  }
+  const stem = (vidName || 'art').replace(/\.[^.]+$/, '') || 'art';
+  const bas = vramToBasic(vram, { name: stem.toUpperCase().slice(0, 20) });
+  const b = new Blob([bas], { type: 'text/plain' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = `semiedit-${stem}.bas`; a.click();
+  say('N-BASIC書出（PC-8001実機/他エミュ用・VRAMバイト列はmachine.jsで一致検証済み／実機実行は未検証）');
 };
 $('etload').onclick = () => $('etloadf').click();
 $('etloadf').onchange = (e) => {

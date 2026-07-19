@@ -106,17 +106,21 @@ export function clearGlyph(buf, cx, cy) {
 // the ~20-per-line hardware limit bounds on the 80-col screen — the editor
 // paints it red when a row goes over.
 export function lineAttrChanges(buf) {
-  const { cols, rows, colors, codes } = buf;
+  const { cols, rows, colors, codes, text } = buf;
   const out = new Int32Array(rows);
   for (let y = 0; y < rows; y++) {
     let runs = 0, prev = -1;
     for (let x = 0; x < cols; x++) {
       const i = y * cols + x;
-      // empty (unlit) cells cost nothing — their colour is invisible and the
-      // hardware carries the running attribute across them.
-      if (codes[i] === 0) continue;
-      const c = colors[i] & 7;
-      if (c !== prev) { runs++; prev = c; }
+      const isText = !!(text && text[i]);
+      // empty (unlit) semigraphic cells cost nothing — their colour is invisible
+      // and the hardware carries the running attribute across them.
+      if (!isText && codes[i] === 0) continue;
+      // a new attribute pair is needed whenever the colour OR the semigraphic
+      // flag toggles (text glyph ↔ semigraphic tile flip bit4 of the colour
+      // spec), so both belong to the run key — matches bufToVram's pair count.
+      const key = (colors[i] & 7) | (isText ? 8 : 0);
+      if (key !== prev) { runs++; prev = key; }
     }
     // a single leading run of the default colour (black, 0) is free
     out[y] = runs;
@@ -184,4 +188,111 @@ export function deserialize(obj) {
   const buf = { schemaVersion: SCHEMA_VERSION, cols: obj.cols, rows: obj.rows, codes, colors };
   if (Array.isArray(obj.text)) { const t = new Uint8Array(n); for (let i = 0; i < n; i++) t[i] = obj.text[i] ? 1 : 0; buf.text = t; }
   return buf;
+}
+
+// ---- PC-8001 real-hardware export -----------------------------------------
+// Encode an ORIGINAL-geometry cell buffer (cols≤80, rows≤25) into N-BASIC text
+// VRAM bytes and a POKE program, so a picture drawn here reproduces on a real
+// PC-8001 (or another emulator). The μPD3301 text line is 120 bytes: 80 char
+// codes + 20 attribute PAIRS (pos,value). A colour-spec value =
+// (colour<<5)|0x08|(semigraphic?0x10:0). These mirror pc8001.js
+// (ATTR.COLOR_FLAG 0x08 / ATTR.SEMIGRAPHIC 0x10 / TEXT_VRAM 0xF3C8); the export
+// test asserts they still agree with the emulator, so the two can't drift.
+export const VRAM = Object.freeze({
+  BASE: 0xf3c8, COLS: 80, ROWS: 25, ATTR_PAIRS: 20, BYTES_PER_LINE: 120,
+  COLOR_FLAG: 0x08, SEMIGRAPHIC: 0x10,
+});
+export function colorSpec(color, semi) {
+  return ((color & 7) << 5) | VRAM.COLOR_FLAG | (semi ? VRAM.SEMIGRAPHIC : 0);
+}
+
+// A buffer maps to real hardware only at ORIGINAL geometry (EX/UEX exceed the
+// PC-8001's 80×25 text screen). Returns null when it fits, else a reason.
+export function vramFitError(buf) {
+  if (buf.cols > VRAM.COLS || buf.rows > VRAM.ROWS) {
+    return `実機は 80×25 まで（このバッファは ${buf.cols}×${buf.rows}）。ORIGINALモードで作って`;
+  }
+  return null;
+}
+
+// Attribute pairs for one row (a maximal run of same colour+semigraphic-flag
+// costs one pair; empty cells inherit). Returns { pairs:[pos,val,...], over }.
+function rowPairs(buf, y) {
+  const { cols, colors, codes, text } = buf;
+  const pairs = [];
+  let curSpec = -1;
+  for (let x = 0; x < cols && x < VRAM.COLS; x++) {
+    const i = y * cols + x;
+    const isText = !!(text && text[i]);
+    if (!isText && codes[i] === 0) continue; // empty carries the running attr
+    const spec = colorSpec(colors[i] & 7, isText ? 0 : 1);
+    if (spec !== curSpec) { pairs.push(x, spec); curSpec = spec; }
+  }
+  return { pairs, over: pairs.length / 2 > VRAM.ATTR_PAIRS };
+}
+
+// Build the full text-VRAM image (rows × 120 bytes) ready to POKE at BASE.
+// overRows lists rows exceeding the 20-pair budget (export should refuse/warn).
+export function bufToVram(buf) {
+  const cols = Math.min(buf.cols, VRAM.COLS);
+  const rows = Math.min(buf.rows, VRAM.ROWS);
+  const bpl = VRAM.BYTES_PER_LINE;
+  const mem = new Uint8Array(rows * bpl);
+  const overRows = [];
+  for (let y = 0; y < rows; y++) {
+    const lb = y * bpl;
+    for (let x = 0; x < cols; x++) mem[lb + x] = buf.codes[y * buf.cols + x];
+    const { pairs, over } = rowPairs(buf, y);
+    if (over) overRows.push(y);
+    const n = Math.min(pairs.length, VRAM.ATTR_PAIRS * 2);
+    for (let k = 0; k < n; k++) mem[lb + VRAM.COLS + k] = pairs[k];
+  }
+  return { base: VRAM.BASE, bytesPerLine: bpl, cols, rows, mem, overRows };
+}
+
+// Is a VRAM line all-default (no codes, no attrs)? Such lines are left to CLS.
+function lineBlank(mem, lb, cols) {
+  for (let i = 0; i < VRAM.BYTES_PER_LINE; i++) if (mem[lb + i]) return false;
+  return true;
+}
+
+// Emit an N-BASIC program that POKEs the VRAM image and holds the picture.
+// Per non-blank line the DATA carries: base-address, 80 code bytes, a pair-byte
+// count P, then P attribute bytes (the reader zeroes slots P..39 so leftover CLS
+// attributes can't bleed). A -1 address ends the list. Deterministic.
+// NOTE: the emitted BYTES are verified against machine.js in the test; BASIC
+// *execution* (WIDTH/CONSOLE/mode on real silicon) is not headless-checkable.
+export function vramToBasic(vram, { name = 'ART', dataLine = 1000, dataStep = 10 } = {}) {
+  const { base, bytesPerLine, rows, cols, mem } = vram;
+  const src = [
+    '10 REM ' + String(name).slice(0, 40).replace(/[\r\n]/g, ' '),
+    '20 WIDTH 80,25:CONSOLE 0,25,0,1:COLOR 7,0,0:CLS',
+    '30 READ A:IF A<0 THEN 70',
+    '40 FOR I=0 TO 79:READ D:POKE A+I,D:NEXT',
+    '50 READ P:FOR I=0 TO P-1:READ D:POKE A+80+I,D:NEXT:FOR I=P TO 39:POKE A+80+I,0:NEXT',
+    '60 GOTO 30',
+    '70 K$=INKEY$:IF K$="" THEN 70',
+    '80 END',
+  ];
+  const nums = [];
+  for (let y = 0; y < rows; y++) {
+    const lb = y * bytesPerLine;
+    if (lineBlank(mem, lb, cols)) continue;
+    nums.push(base + y * bytesPerLine);
+    for (let x = 0; x < VRAM.COLS; x++) nums.push(mem[lb + x]);
+    let p = VRAM.ATTR_PAIRS * 2;
+    while (p > 0 && mem[lb + VRAM.COLS + p - 1] === 0) p--; // trim trailing 0 pairs
+    nums.push(p);
+    for (let k = 0; k < p; k++) nums.push(mem[lb + VRAM.COLS + k]);
+  }
+  nums.push(-1);
+  // pack DATA into ~200-char lines (N-BASIC's line length is finite)
+  let dl = dataLine, cur = '';
+  const flush = () => { if (cur) { src.push(dl + ' DATA ' + cur); dl += dataStep; cur = ''; } };
+  for (const v of nums) {
+    const t = (cur ? cur + ',' : '') + v;
+    if (t.length > 200) { flush(); cur = '' + v; } else cur = t;
+  }
+  flush();
+  return src.join('\n') + '\n';
 }
