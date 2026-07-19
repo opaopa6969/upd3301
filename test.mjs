@@ -246,6 +246,21 @@ test('40-column mode: even cells shown 2x wide, same pixel width', () => {
   assert.equal(img.pixels[2], 0);
 });
 
+test("code 0xFC (N-BASIC 'Ok' prompt marker) renders blank", () => {
+  // N-BASIC's "Ok" message is "Ok\xFC\r\n"; real hardware shows nothing after
+  // "Ok". 0xFC is a non-displaying marker (blank in the PC-8001 CGROM), so even
+  // with a fully-lit font it must produce no ink.
+  const sys = new Pc8001TextSystem();
+  sys.initTextMode({ cols: 80 });
+  sys.line(0).code(10, 0xfc).code(11, 'A'.charCodeAt(0)); // away from the (0,0) cursor
+  const cgrom = new Uint8Array(256 * 16).fill(0xff); // every glyph fully lit
+  sys.update(1 / 60);
+  const img = sys.render({ cgrom });
+  const cellInk = (cx) => { let n = 0; for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) n += img.ink[y * img.width + cx * 8 + x]; return n; };
+  assert.equal(cellInk(10), 0, '0xFC renders blank');
+  assert.ok(cellInk(11) > 0, 'a normal glyph still renders');
+});
+
 test('reverse display (START DISPLAY bit 0) inverts every cell', () => {
   const sys = new Pc8001TextSystem();
   sys.initTextMode();

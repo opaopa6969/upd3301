@@ -173,6 +173,13 @@ export function renderScreen(screen, {
           const left = (code >> band) & 1;
           const right = (code >> (4 + band)) & 1;
           tile = (left ? 0xf0 : 0) | (right ? 0x0f : 0);
+        } else if (code === 0xfc) {
+          // N-BASIC ends its "Ok" prompt with code 0xFC ("Ok\xFC\r\n" — in every
+          // N-BASIC ROM's message table). On a real PC-8001 nothing shows after
+          // "Ok": 0xFC is a non-displaying marker, blank in the PC-8001 CGROM
+          // (our BYO 8801 fonts happen to carry a diagonal there). Render blank
+          // so the boot matches real hardware. (Ground truth: real PC-8001 boot.)
+          tile = 0;
         } else if (pcg && pcg.on && code >= 0x80 && line < 8) {
           tile = pcg.ram[(code & 0x7f) * 8 + line]; // PCG-redefined glyph (visual-unverified)
         } else {
