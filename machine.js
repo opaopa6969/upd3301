@@ -136,13 +136,13 @@ export class Pc8001Machine {
     return v === 0xff && port >= 0x50 && port <= 0x68 ? this.sys.in(port) : v;
   }
 
-  // The 8001's port 30h d0 selects the character clock (40/80), but N-BASIC
-  // programs the CRTC's column count too — trust the chip: 80 columns means
-  // 80-column dots. (Assuming port 30h alone stretched every dot 2x and made
-  // the screen 1280 px wide.)
-  _syncWidth() {
-    if (this.sys.crtc.cols >= 60) this.sys.width80 = true;
-  }
+  // Width comes from port 30h d0 (pc8001 sets this.sys.width80 on OUT): d0=1 is
+  // 80-column, d0=0 is 40-column. N-BASIC boots 40-column — an 80-char CRTC row
+  // where the μPD3301 shows 40 double-width characters read from the even cells
+  // (render handles this). The old heuristic forced width80 from the CRTC column
+  // count, which stretched that 40-col boot into a gapped 80-col mess; trust the
+  // port instead.
+  _syncWidth() {}
 
   // run exactly one video frame's worth of CPU time, then refresh the CRT
   stepFrame() {

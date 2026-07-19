@@ -114,7 +114,14 @@ export function renderScreen(screen, {
   const { cols, rows, linesPerChar, cells, attrPairs, attrsPerRow } = screen;
   const abpr = screen.attrBytesPerRow ?? attrsPerRow * 2;
   const dotW = width80 ? 1 : 2;
-  const width = cols * 8 * dotW;
+  // 40-column mode (port 30h d0=0): the μPD3301's character clock is halved, so
+  // it shows cols/2 characters at DOUBLE WIDTH, taken from the EVEN cells —
+  // N-BASIC writes chars to even bytes, the odd ones are skipped. Same 640px
+  // screen as 80-col, NOT a 1280px stretch. (Ground truth: PC-8001 boots 40-col
+  // and the banner renders clean; see the width note in machine._syncWidth.)
+  const charStride = width80 ? 1 : 2;
+  const dispCols = width80 ? cols : (cols >> 1);
+  const width = dispCols * 8 * dotW;
   const height = rows * linesPerChar;
   const pixels = out && out.length === width * height ? out : new Uint8Array(width * height);
   pixels.fill(0);
@@ -144,7 +151,8 @@ export function renderScreen(screen, {
     } else {
       expandRowStates(rowAttrs, attrsPerRow, cols, colorRow, funcRow);
     }
-    for (let x = 0; x < cols; x++) {
+    for (let dx = 0; dx < dispCols; dx++) {
+      const x = dx * charStride; // cell/attribute index (40-col: even cells)
       const code = cells[y * cols + x];
       const colorSpec = colorRow[x];
       const func = funcRow[x];
@@ -179,7 +187,7 @@ export function renderScreen(screen, {
         if (isCursor && (cursor.block || line === linesPerChar - 1)) tile ^= 0xff;
 
         const py = y * linesPerChar + line;
-        let px = x * 8 * dotW;
+        let px = dx * 8 * dotW; // pixel column uses the display index
         for (let bit = 7; bit >= 0; bit--) {
           const on = (tile >> bit) & 1;
           const v = on ? fg : 0;

@@ -227,15 +227,20 @@ test('27-color trick: doubled DMA count alternates two screens', () => {
   assert.equal(f3, 0x41); // autoload wrapped back to screen A
 });
 
-test('40-column mode doubles dots, same pixel width', () => {
+test('40-column mode: even cells shown 2x wide, same pixel width', () => {
+  // Real 40-col (as N-BASIC boots it): an 80-char CRTC row with port 30h d0=0.
+  // The μPD3301 halves the character clock → shows cols/2 = 40 characters at
+  // double width, taken from the EVEN cells (N-BASIC writes chars to even bytes,
+  // odd bytes skipped). 640px wide — same screen as 80-col, not a 1280px stretch.
   const sys = new Pc8001TextSystem();
-  sys.initTextMode({ cols: 40 });
-  sys.line(0, { cols: 40 }).text(0, 'W').attrs(0, 0xe8);
+  sys.initTextMode({ cols: 80 });
+  sys.out(0x30, 0); // 40-column character clock (d0=0), colour mode
+  sys.line(0).text(0, 'W').attrs(0, 0xe8); // 'W' at even cell 0 → display col 0
   const cgrom = new Uint8Array(256 * 16);
   cgrom['W'.charCodeAt(0) * 16] = 0x80; // single leftmost dot on line 0
   sys.update(1 / 60);
   const img = sys.render({ cgrom });
-  assert.equal(img.width, 640);
+  assert.equal(img.width, 640); // 40 display cols × 8 × 2
   assert.equal(img.pixels[0], 7);
   assert.equal(img.pixels[1], 7); // doubled
   assert.equal(img.pixels[2], 0);
