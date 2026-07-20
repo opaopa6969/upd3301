@@ -9,3 +9,6 @@ hw/gerber/
 demo/*-trace.json
 demo/*-regs.json
 demo/*.mp3
+
+# per-user ROM/disk library written by serve.py /api/store (user dumps; never in git)
+userdata/

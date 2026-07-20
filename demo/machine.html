@@ -24,6 +24,7 @@
  "/pc8001.js":"/pc8001.js?v=col40","/crt.js":"/crt.js?v=cache1",
  "/tube.js":"/tube.js?v=cache1","/term.js":"/term.js?v=cache1",
  "/semivideo.js":"/semivideo.js?v=cache1","/z80.js":"/z80.js?v=cache1",
+ "/romid.js":"/romid.js?v=romid1",
  "/demo/font.js":"/demo/font.js?v=cache1"
 }}
 </script>
@@ -64,7 +65,8 @@
     <span id="tapeinfo" style="color:#778;font-size:12px"></span>
   </span>
   <span id="grp-savedisk" style="display:inline-flex;gap:4px;align-items:center">
-    <select id="savedisk" title="このブラウザに保存済みのディスクから選ぶ" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px;max-width:200px"><option value="">💾 保存済みディスク…</option></select>
+    <input id="diskquick" placeholder="🔍 絞り込み" title="入力した語を含むディスクだけを右のドロップダウンに出す（数百〜千本でも探せる）" style="width:110px;background:#181820;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
+    <select id="savedisk" title="このブラウザに保存済みのディスクから選ぶ（左の絞り込みが効く）" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px;max-width:200px"><option value="">💾 保存済みディスク…</option></select>
     <button id="bdiskbrowse" title="保存済みディスクを検索して選ぶ（数百件対応）">📚 一覧</button>
   </span>
   <span id="grp-drive" style="display:flex;flex-direction:column;gap:4px;color:#9ab;font-size:12px;min-width:240px" title="どのディスクをどのドライブに入れるか選ぶ（マルチディスク用・実行中の入れ替え可）">
@@ -153,6 +155,8 @@ async function expandDiskFile(fileName, bytes) {
   return members.map((m) => ({ name: m.name, bytes: m.bytes, isDisk: /\.(d88|88d|d8u|hdm|tfd|xdf)$/i.test(m.name) }));
 }
 import { putRom, getRom, listRoms, clearRoms, deleteRom } from './romstore.js?v=2';
+import { identify, machinesFromRoles } from '../romid.js';
+import * as sysStore from './systemstore.js?v=1';
 
 // OPNA rhythm ROM (the six ADPCM-A drums) — fetched + decoded once, then
 // side-loaded into the OPNA so Sound Board II rhythm ($00-$0D) is audible.
@@ -275,7 +279,8 @@ async function autoLoad() {
     o.textContent = m.name + (m.boots ? ' ✓' : '');
     sel.appendChild(o);
   }
-  sel.onchange = () => loadMachine(list.find((m) => m.name === sel.value));
+  manifestMachines = list; // stored-ROM machines are appended by addStoredMachines()
+  sel.onchange = onMachChange;
   const def = list.find((m) => manifest.default && m.rom === manifest.default) ?? list[0];
   if (def) {
     sel.value = def.name;
@@ -583,14 +588,25 @@ $('fdisk').onchange = async (e) => {
 // Saved-disk library: every uploaded .d88 is kept in IndexedDB under a
 // `disk:<name>` slot, so you can re-pick it later without the file dialog. The
 // dropdown lists them; picking one mounts it (and marks it last-used).
+// The dropdown is unusable past a few dozen images, so a quick-filter box next
+// to it narrows what goes IN the <select> (the 📚 overlay stays the full browser).
+// Cap the rendered options: a <select> with 1000 nodes janks the whole toolbar.
+const DISK_OPT_CAP = 200;
 async function refreshDiskList() {
   const sel = $('savedisk'); if (!sel) return;
   let items = []; try { items = await listRoms(); } catch {}
-  const dl = items.filter((i) => i.role.startsWith('disk:'))
+  const q = ($('diskquick')?.value || '').trim().toLowerCase();
+  const all = items.filter((i) => i.role.startsWith('disk:'))
     .sort((a, b) => a.name.localeCompare(b.name));
+  const hit = q ? all.filter((i) => i.name.toLowerCase().includes(q)) : all;
+  const dl = hit.slice(0, DISK_OPT_CAP);
   const kb = (n) => (n / 1024 < 1024 ? (n / 1024 | 0) + 'KB' : (n / 1048576).toFixed(1) + 'MB');
-  sel.innerHTML = '<option value="">💾 保存済みディスク…</option>' +
-    dl.map((i) => `<option value="${i.role}">${i.name} (${kb(i.size)})</option>`).join('');
+  const head = q
+    ? `🔍 「${q}」に一致 ${hit.length}/${all.length} 件…`
+    : `💾 保存済みディスク… (${all.length})`;
+  sel.innerHTML = `<option value="">${head}</option>` +
+    dl.map((i) => `<option value="${i.role}">${i.name} (${kb(i.size)})</option>`).join('') +
+    (hit.length > dl.length ? `<option value="" disabled>… 他 ${hit.length - dl.length} 件は 📚 一覧で</option>` : '');
 }
 async function loadSavedDisk(role) {
   const rec = await getRom(role);
@@ -601,6 +617,7 @@ async function loadSavedDisk(role) {
   } catch (err) { $('dipnote').textContent = 'saved disk: ' + err.message; }
 }
 $('savedisk').onchange = (e) => { if (e.target.value) loadSavedDisk(e.target.value); };
+$('diskquick').oninput = () => refreshDiskList();
 // ---- disk browser: a searchable list for large saved-disk libraries (hundreds
 // of images make a <select> useless). Overlay with a filter box + scroll list. --
 // A tiny IndexedDB slot to remember the chosen disk FOLDER handle across visits
@@ -691,40 +708,65 @@ function diskDisplayName(path, innerName) {
 }
 // import one scanned folder item (unzipping if needed) into the idb library;
 // returns how many disk images it added. `seen` (a Set of roles) dedups.
-async function importFolderItem(item, seen) {
+// Import one scanned item. romid.js decides what each file IS: a disk goes to
+// the disk library, a recognised PC-8001/8801 ROM goes to its own role (so a
+// folder holding a BIOS set imports the BIOS too, not just the disks), and
+// anything unrecognised is SKIPPED — that is the "88/80 用以外は import しない"
+// filter (issue #20). Returns per-kind counts so the caller can report honestly.
+async function importFolderItem(item, seen, toSystem = false) {
   const bytes = new Uint8Array(await (await item.handle.getFile()).arrayBuffer());
-  const parts = (await expandDiskFile(item.name, bytes)).filter((p) => p.isDisk);
-  let n = 0;
+  const parts = await expandDiskFile(item.name, bytes);
+  const out = { disks: 0, roms: 0, skipped: 0 };
   for (const p of parts) {
-    const role = 'disk:' + (item.path || item.name) + (parts.length > 1 ? '::' + p.name : '');
+    const id = identify({ name: p.name, size: p.bytes.length });
+    if (!id) { out.skipped++; continue; }
+    let role, label;
+    if (id.kind === 'rom') {
+      role = id.role;                       // canonical slot ('rom', 'n88main', …)
+      label = p.name;
+    } else {
+      role = 'disk:' + (item.path || item.name) + (parts.length > 1 ? '::' + p.name : '');
+      label = diskDisplayName(item.path, p.name);
+    }
     if (seen && seen.has(role)) continue;
-    await putRom(role, diskDisplayName(item.path, p.name), p.bytes);
+    await putRom(role, label, p.bytes);
+    if (toSystem) { try { await sysStore.put(role, label, p.bytes); } catch { /* quota → reported by caller */ } }
     if (seen) seen.add(role);
-    n++;
+    if (id.kind === 'rom') out.roms++; else out.disks++;
   }
-  return n;
+  return out;
 }
 async function saveFolderDiskToLibrary(item) {
   try {
-    const n = await importFolderItem(item);
-    if (!n) { $('dipnote').textContent = `${item.name}: 保存できるディスク画像なし`; return; }
-    refreshDiskList(); await openDiskBrowser(true); // reload the idb list so it shows as 💾
+    const r = await importFolderItem(item);
+    const n = r.disks + r.roms;
+    if (!n) { $('dipnote').textContent = `${item.name}: PC-8001/8801 用として認識できるファイルなし`; return; }
+    refreshDiskList(); refreshStore(); await openDiskBrowser(true); // reload the idb list so it shows as 💾
     $('dipnote').textContent = n > 1
-      ? `💾 「${item.name}」から ${n} 枚を保存済みに追加した`
+      ? `💾 「${item.name}」から ${r.disks}枚 + ROM ${r.roms}個を保存済みに追加した`
       : `💾 「${diskDisplayName(item.path, item.name)}」を保存済みに追加した`;
   } catch (err) { $('dipnote').textContent = 'save: ' + err.message; }
 }
 // bulk: import EVERY scanned folder disk into the idb library (dedup + progress).
 async function importAllFolderDisks() {
   if (!folderDisks.length) { $('diskfolderinfo').textContent = '先に📁フォルダを開いてください'; return; }
-  let seen; try { seen = new Set((await listRoms()).filter((i) => i.role.startsWith('disk:')).map((i) => i.role)); } catch { seen = new Set(); }
-  let added = 0, fail = 0, i = 0;
+  // dedup against EVERY stored role (ROMs too now, not just disk:*)
+  let seen; try { seen = new Set((await listRoms()).map((i) => i.role)); } catch { seen = new Set(); }
+  const toSystem = !!$('disktosystem')?.checked;
+  let disks = 0, roms = 0, skipped = 0, fail = 0, i = 0;
   for (const item of folderDisks) {
-    $('diskfolderinfo').textContent = `💾 インポート中… ${++i}/${folderDisks.length}（追加 ${added}${fail ? ` / 失敗 ${fail}` : ''}）`;
-    try { added += await importFolderItem(item, seen); } catch { fail++; }
+    $('diskfolderinfo').textContent = `💾 インポート中… ${++i}/${folderDisks.length}`
+      + `（ディスク ${disks} / ROM ${roms}${skipped ? ` / 対象外 ${skipped}` : ''}${fail ? ` / 失敗 ${fail}` : ''}`
+      + `${toSystem ? ' 🖧' : ''}）`;
+    try {
+      const r = await importFolderItem(item, seen, toSystem);
+      disks += r.disks; roms += r.roms; skipped += r.skipped;
+    } catch { fail++; }
   }
-  await openDiskBrowser(true); renderDiskList();
-  $('diskfolderinfo').textContent = `✓ ${added}枚をライブラリにインポート${fail ? `（${fail}件失敗）` : ''}`;
+  await openDiskBrowser(true); renderDiskList(); refreshStore(); refreshDiskList();
+  $('diskfolderinfo').textContent = `✓ ディスク ${disks}枚 / ROM ${roms}個をインポート`
+    + `${skipped ? `（PC-8001/8801用でない ${skipped} 件は除外）` : ''}${fail ? `（${fail}件失敗）` : ''}`
+    + `${toSystem ? ' — システムにも保存' : ''}`;
 }
 function ensureDiskBrowser() {
   if ($('diskbrowser')) return;
@@ -740,7 +782,8 @@ function ensureDiskBrowser() {
        </div>
        <div style="display:flex;gap:8px;align-items:center;padding:6px 12px;border-bottom:1px solid #23232f;font-size:12px">
          <button id="diskpick" title="D88の入ったフォルダを選ぶ（例 C:\\var\\emulator）。中身は端末に残ったまま、ブラウザが直接読む">📁 フォルダを開く</button>
-         <button id="diskimportall" title="スキャン済みの全ディスクを保存済みライブラリ(💾)へ一括インポート（zipは展開、重複はスキップ）">💾 全部インポート</button>
+         <button id="diskimportall" title="スキャン済みの全ディスク/ROMを保存済みライブラリ(💾)へ一括インポート（zipは展開、重複はスキップ、PC-8001/8801用でないファイルは除外）">💾 全部インポート</button>
+         <label id="disktosystem-l" style="display:none;align-items:center;gap:3px;color:#8fd;font-size:11px" title="インポートしたROM/ディスクを、認証ユーザのシステム領域にも保存する（別のブラウザからも取り込めるようになる）"><input type="checkbox" id="disktosystem" checked>🖧 システムにも保存</label>
          <span id="diskfolderinfo" style="color:#778"></span>
        </div>
        <div id="disklist" style="overflow:auto;padding:6px"></div>
@@ -754,6 +797,9 @@ function ensureDiskBrowser() {
     try { const dir = await window.showDirectoryPicker(); await useFolder(dir); } catch {}
   };
   $('diskimportall').onclick = () => importAllFolderDisks();
+  // the "also save to the system" option only makes sense on an authenticated
+  // host where /api/store answers — hidden entirely on the public deploy.
+  sysStore.available().then((ok) => { const l = $('disktosystem-l'); if (l && ok) l.style.display = 'inline-flex'; });
 }
 let _idbItems = [];
 async function renderDiskList() {
@@ -942,15 +988,212 @@ async function restoreFromStore() {
   } catch {}
   refreshStore();
 }
+// ---- ROM/disk library: a summary line + a separate searchable screen ------
+// The library can hold a thousand disk images. Dumping them all inline buried
+// the page (issue #20), so the row carries COUNTS only and the full list lives
+// in an overlay with a filter — same pattern as the disk browser above.
+const fmtSize = (n) => (n < 1024 ? n + 'B'
+  : n < 1048576 ? (n / 1024).toFixed(n < 102400 ? 1 : 0) + 'KB'
+  : (n / 1048576).toFixed(1) + 'MB');
+
 async function refreshStore() {
   const el = $('romstore'); if (!el) return;
   let items = []; try { items = await listRoms(); } catch {}
-  if (!items.length) { el.innerHTML = '<span style="color:#667">このブラウザに保存されたROMはまだ無い（一度選べば次回から自動起動）</span>'; return; }
-  const kb = (n) => (n / 1024 < 1 ? n + 'B' : (n / 1024).toFixed(n < 102400 ? 1 : 0) + 'KB');
-  el.innerHTML = '💾 保存済み(このブラウザのみ): ' +
-    items.map((i) => `<b style="color:#8fd">${i.role}</b> ${i.name} <span style="color:#778">${kb(i.size)}</span>`).join(' / ') +
-    ' <button id="romclear" style="font-size:11px;padding:2px 8px;margin-left:6px">消す</button>';
-  $('romclear').onclick = async () => { await clearRoms(); refreshStore(); };
+  const disks = items.filter((i) => i.role.startsWith('disk:'));
+  const roms = items.filter((i) => !i.role.startsWith('disk:'));
+  const total = items.reduce((s, i) => s + i.size, 0);
+  const sysOn = await sysStore.available();
+  const parts = [];
+  parts.push(items.length
+    ? `💾 <b style="color:#8fd">ROM ${roms.length}</b> / <b style="color:#8fd">ディスク ${disks.length}</b> <span style="color:#778">計 ${fmtSize(total)}（このブラウザ）</span>`
+    : '<span style="color:#667">このブラウザに保存されたROMはまだ無い（一度選べば次回から自動起動）</span>');
+  parts.push('<button id="rombrowse" title="保存済みROM/ディスクを検索して見る・消す（千本でも画面が埋まらない別画面）" style="font-size:11px;padding:2px 8px">📚 ROM一覧</button>');
+  if (sysOn) {
+    parts.push('<span style="color:#778;font-size:11px;margin-left:6px">🖧 システム:</span>'
+      + '<button id="syspush" title="このブラウザの保存済みROM/ディスクを、認証ユーザのシステム領域へ保存する（他のブラウザから取り込めるようになる）" style="font-size:11px;padding:2px 8px">⬆ 保存</button>'
+      + '<button id="syspull" title="システムに保存されているROM/ディスクを、このブラウザのIndexedDBへ取り込む（ブラウザを変えた時の復元）" style="font-size:11px;padding:2px 8px">⬇ 取り込み</button>'
+      + '<span id="sysinfo" style="color:#778;font-size:11px"></span>');
+  }
+  if (items.length) parts.push('<button id="romclear" style="font-size:11px;padding:2px 8px;margin-left:6px">消す</button>');
+  el.innerHTML = parts.join(' ');
+  $('rombrowse').onclick = () => openRomBrowser();
+  if ($('romclear')) {
+    $('romclear').onclick = async () => {
+      if (!confirm('このブラウザの保存済みROM/ディスクを全部消す？（システム側は消えない）')) return;
+      await clearRoms(); refreshStore(); refreshDiskList();
+    };
+  }
+  if (sysOn) { $('syspush').onclick = pushAllToSystem; $('syspull').onclick = pullAllFromSystem; updateSysInfo(); }
+  addStoredMachines(items);
+}
+
+// ---- system (server-side) library sync ------------------------------------
+async function updateSysInfo() {
+  const el = $('sysinfo'); if (!el) return;
+  const p = await sysStore.ping();
+  el.textContent = p ? ` ${p.count}件 / ${fmtSize(p.total)}` : '';
+}
+// Push everything in this browser to the authenticated user's server library.
+async function pushAllToSystem() {
+  const btn = $('syspush'); if (btn) btn.disabled = true;
+  const note = $('dipnote');
+  try {
+    const items = await listRoms();
+    const have = new Set((await sysStore.list()).map((i) => i.role));
+    let sent = 0, skip = 0, fail = 0, i = 0;
+    for (const it of items) {
+      if (note) note.textContent = `⬆ システムへ保存中… ${++i}/${items.length}（送信 ${sent} / 既存 ${skip}${fail ? ` / 失敗 ${fail}` : ''}）`;
+      if (have.has(it.role)) { skip++; continue; } // already there — don't re-upload GBs
+      const rec = await getRom(it.role);
+      if (!rec) { fail++; continue; }
+      try { (await sysStore.put(it.role, rec.name || it.role, rec.bytes)) ? sent++ : fail++; }
+      catch (err) { fail++; if (note) note.textContent = '⬆ 中断: ' + err.message; break; }
+    }
+    if (note) note.textContent = `✓ システムへ保存: 新規 ${sent} / 既存 ${skip}${fail ? ` / 失敗 ${fail}` : ''}`;
+  } catch (err) { if (note) note.textContent = '⬆ 失敗: ' + err.message; }
+  if (btn) btn.disabled = false;
+  updateSysInfo();
+}
+// Pull the server library into this browser — the "changed browser" recovery.
+async function pullAllFromSystem() {
+  const btn = $('syspull'); if (btn) btn.disabled = true;
+  const note = $('dipnote');
+  try {
+    const remote = await sysStore.list();
+    if (!remote.length) { if (note) note.textContent = 'システムに保存されたROMは無い'; }
+    const have = new Set((await listRoms()).map((i) => i.role));
+    let got = 0, skip = 0, fail = 0, i = 0;
+    for (const it of remote) {
+      if (note) note.textContent = `⬇ システムから取り込み中… ${++i}/${remote.length}（取得 ${got} / 既存 ${skip}${fail ? ` / 失敗 ${fail}` : ''}）`;
+      if (have.has(it.role)) { skip++; continue; }
+      const rec = await sysStore.get(it.role);
+      if (!rec || !rec.bytes.length) { fail++; continue; }
+      try { await putRom(it.role, it.name || it.role, rec.bytes); got++; } catch { fail++; }
+    }
+    if (note) note.textContent = `✓ システムから取り込み: 新規 ${got} / 既存 ${skip}${fail ? ` / 失敗 ${fail}` : ''}`;
+    await refreshStore(); refreshDiskList();
+    if (got) await restoreFromStore(); // a freshly pulled BIOS set can boot now
+  } catch (err) { if (note) note.textContent = '⬇ 失敗: ' + err.message; }
+  if (btn) btn.disabled = false;
+  updateSysInfo();
+}
+
+// ---- ROM library browser (separate screen, searchable) --------------------
+let _romItems = [];
+const ROM_ROW_CAP = 300; // render ceiling; the filter box is how you reach the rest
+function ensureRomBrowser() {
+  if ($('rombrowser')) return;
+  const ov = document.createElement('div');
+  ov.id = 'rombrowser';
+  ov.style.cssText = 'display:none;position:fixed;inset:0;z-index:60;background:rgba(4,4,10,0.92);'
+    + 'flex-direction:column;padding:14px;gap:8px';
+  ov.innerHTML = `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <b style="color:#8fd">📚 保存済みROM / ディスク</b>
+      <input id="romfilter" placeholder="🔍 名前・役割で絞り込み" style="flex:1;min-width:180px;background:#181820;color:#cde;border:1px solid #446;border-radius:5px;padding:5px 8px">
+      <span id="rominfo" style="color:#778;font-size:12px"></span>
+      <button id="romclose">閉じる</button>
+    </div>
+    <div id="romrows" style="flex:1;overflow:auto;background:#0b0b12;border:1px solid #2a2a3a;border-radius:6px"></div>`;
+  document.body.appendChild(ov);
+  $('romfilter').oninput = () => renderRomRows();
+  $('romclose').onclick = () => { ov.style.display = 'none'; };
+  ov.addEventListener('click', (e) => { if (e.target === ov) ov.style.display = 'none'; });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && ov.style.display === 'flex') ov.style.display = 'none';
+  });
+}
+function renderRomRows() {
+  const box = $('romrows'); if (!box) return;
+  const q = ($('romfilter').value || '').trim().toLowerCase();
+  const hit = q ? _romItems.filter((i) => (i.name + ' ' + i.role).toLowerCase().includes(q)) : _romItems;
+  const shown = hit.slice(0, ROM_ROW_CAP);
+  box.innerHTML = '';
+  for (const i of shown) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:4px 8px;border-bottom:1px solid #1c1c28;font-size:12px';
+    const isDisk = i.role.startsWith('disk:');
+    row.innerHTML = `<span style="width:16px">${isDisk ? '💽' : '🧩'}</span>`
+      + `<b style="color:#8fd;min-width:90px">${isDisk ? 'disk' : i.role}</b>`
+      + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cde">${i.name}</span>`
+      + `<span style="color:#778;width:64px;text-align:right">${fmtSize(i.size)}</span>`;
+    if (isDisk) {
+      const go = document.createElement('button');
+      go.textContent = '起動'; go.style.cssText = 'padding:2px 8px;font-size:11px';
+      go.onclick = () => { loadSavedDisk(i.role); $('rombrowser').style.display = 'none'; };
+      row.appendChild(go);
+    }
+    const del = document.createElement('button');
+    del.textContent = '🗑'; del.title = 'このブラウザから消す（システム側は消えない）';
+    del.style.cssText = 'padding:2px 8px;font-size:11px';
+    del.onclick = async () => {
+      if (!confirm(`「${i.name}」を消す？`)) return;
+      try { await deleteRom(i.role); } catch {}
+      await openRomBrowser(true); refreshStore(); refreshDiskList();
+    };
+    row.appendChild(del);
+    box.appendChild(row);
+  }
+  const more = hit.length - shown.length;
+  $('rominfo').textContent = `${hit.length}/${_romItems.length} 件`
+    + (more > 0 ? `（先頭 ${ROM_ROW_CAP} 件を表示。絞り込んで）` : '');
+}
+async function openRomBrowser(keepOpen = false) {
+  ensureRomBrowser();
+  let items = []; try { items = await listRoms(); } catch {}
+  _romItems = items.sort((a, b) => a.role.localeCompare(b.role) || a.name.localeCompare(b.name));
+  if (!keepOpen) { $('rombrowser').style.display = 'flex'; $('romfilter').value = ''; $('romfilter').focus(); }
+  renderRomRows();
+}
+
+// ---- machines constituted from the STORED ROMs ----------------------------
+// The picker used to list only what roms/manifest.json served. Whatever the user
+// imported is just as real a machine, so offer those too (greyed with a reason
+// when a piece is missing). Values are prefixed 'stored:' — see onMachChange.
+let manifestMachines = [];
+function addStoredMachines(items) {
+  const sel = $('mach'); if (!sel) return;
+  sel.querySelectorAll('optgroup[data-stored]').forEach((g) => g.remove());
+  const roles = new Set((items || []).map((i) => i.role));
+  const built = machinesFromRoles(roles).filter((m) => m.ready || m.missing.length < 3);
+  if (!built.length) return;
+  const g = document.createElement('optgroup');
+  g.label = '保存済みROMから'; g.dataset.stored = '1';
+  for (const m of built) {
+    const o = document.createElement('option');
+    o.value = 'stored:' + m.id;
+    o.textContent = m.label + (m.ready ? ' ✓' : ' （不足）');
+    o.disabled = !m.ready;
+    o.title = m.ready
+      ? (m.optional.length ? '任意: ' + m.optional.join(' / ') : '保存済みROMで起動できる')
+      : '足りない: ' + m.missing.join(' / ');
+    g.appendChild(o);
+  }
+  sel.appendChild(g);
+}
+async function bootStoredMachine(id) {
+  try {
+    if (id === 'pc8801n88') {
+      if (await restore88Set()) { guts.textContent = '保存済みPC-8801 BIOSからN88起動'; switchMode('n88'); }
+      else guts.textContent = 'PC-8801 BIOS一式が揃っていない';
+      return;
+    }
+    const font = await getRom('font');
+    if (font) applyFontRom(cgrom, font.bytes);
+    const rom = await getRom('rom');
+    if (!rom) { guts.textContent = '保存済みのN-BASIC ROMが無い'; return; }
+    romBytes = rom.bytes;
+    guts.textContent = '保存済みROMから起動: ' + rom.name;
+    switchMode('n80');
+    boot();
+    mountDisks(machine);
+  } catch (err) { guts.textContent = 'stored machine: ' + err.message; }
+}
+function onMachChange() {
+  const v = $('mach').value;
+  if (v.startsWith('stored:')) { bootStoredMachine(v.slice(7)); return; }
+  const m = manifestMachines.find((x) => x.name === v);
+  if (m) loadMachine(m);
 }
 
 const stage = $('stage');
