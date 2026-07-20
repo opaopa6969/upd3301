@@ -628,7 +628,11 @@ async function refreshDiskList() {
 }
 // Insert a cassette and tell the user what to do next (CLOAD is a manual step —
 // the tape engine only streams bytes when N-BASIC/N88-BASIC asks for them).
-function insertTapeBytes(name, bytes) {
+// `persist`: also remember it. 'tape' is the LAST-USED slot (restored on reload,
+// mirroring how 'disk' works); 'tape:<name>' puts it in the browsable library so
+// it can be picked again later. Without this a cassette was session-only — it
+// never reached IndexedDB, so the saved list could never offer one.
+async function insertTapeBytes(name, bytes, persist = false) {
   tapeBytes = bytes; tapeName = name;
   if (machine && machine.insertTape) {
     machine.insertTape(bytes);
@@ -637,6 +641,13 @@ function insertTapeBytes(name, bytes) {
     $('tapeinfo').textContent = `📼 ${name} 保持 — 機種を選んで再度どうぞ`;
   }
   try { ensureAudio(); } catch {}
+  if (persist) {
+    try {
+      await putRom('tape', name, bytes);            // last-used → auto-restored
+      await putRom('tape:' + name, name, bytes);    // library entry
+      refreshDiskList(); refreshStore();
+    } catch {}
+  }
 }
 const isTapeRole = (r) => r.startsWith('tape:');
 const isMediaRole = (r) => r.startsWith('disk:') || isTapeRole(r);
@@ -960,14 +971,9 @@ function tapeFileName() {
 }
 $('ftape').onchange = async (e) => {
   const f = e.target.files[0]; if (!f) return;
-  tapeBytes = new Uint8Array(await f.arrayBuffer()); tapeName = f.name;
-  if (machine && machine.insertTape) {
-    machine.insertTape(tapeBytes);
-    $('tapeinfo').textContent = `📼 ${f.name} 挿入 — ▶CLOAD を押す（PC-8001テープは N-BASIC/N80 モード推奨）`;
-  } else {
-    $('tapeinfo').textContent = `📼 ${f.name} 保持 — 機種を選んで再度どうぞ`;
-  }
-  ensureAudio();
+  // persist: a hand-picked cassette now lands in the library (and the last-used
+  // slot), so it comes back after a reload and can be re-picked from 💾/📚.
+  await insertTapeBytes(f.name, new Uint8Array(await f.arrayBuffer()), true);
 };
 $('btapecload').onclick = () => {
   if (!tapeBytes) { $('tapeinfo').textContent = 'テープ未挿入（📼テープを選んで）'; return; }
@@ -1046,6 +1052,13 @@ async function restoreFromStore() {
     if (font) applyFontRom(cgrom, font.bytes);
     const disk = await getRom('disk');
     if (disk) { try { ingestDisks(disk.name || 'disk', parseD88All(disk.bytes), disk.bytes); } catch {} }
+    // last-used cassette: just arm tapeBytes — boot()/the rebuild paths already
+    // re-insert it, and CLOAD stays a deliberate press (never auto-run a tape).
+    const tape = await getRom('tape');
+    if (tape) {
+      tapeBytes = tape.bytes; tapeName = tape.name || 'tape';
+      const ti = $('tapeinfo'); if (ti) ti.textContent = `📼 ${tapeName} 復元 — ▶CLOAD を押す`;
+    }
     const have88 = await restore88Set();
     const rom = await getRom('rom');
     if (rom) romBytes = rom.bytes;
