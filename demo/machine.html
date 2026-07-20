@@ -24,7 +24,7 @@
  "/pc8001.js":"/pc8001.js?v=col40","/crt.js":"/crt.js?v=cache1",
  "/tube.js":"/tube.js?v=cache1","/term.js":"/term.js?v=cache1",
  "/semivideo.js":"/semivideo.js?v=cache1","/z80.js":"/z80.js?v=cache1",
- "/romid.js":"/romid.js?v=romid2",
+ "/romid.js":"/romid.js?v=romid3",
  "/demo/font.js":"/demo/font.js?v=cache1"
 }}
 </script>
@@ -614,7 +614,7 @@ async function refreshDiskList() {
   const sel = $('savedisk'); if (!sel) return;
   let items = []; try { items = await listRoms(); } catch {}
   const q = ($('diskquick')?.value || '').trim().toLowerCase();
-  const all = items.filter((i) => i.role.startsWith('disk:'))
+  const all = items.filter((i) => isMediaRole(i.role))
     .sort((a, b) => a.name.localeCompare(b.name));
   const hit = q ? all.filter((i) => i.name.toLowerCase().includes(q)) : all;
   const dl = hit.slice(0, DISK_OPT_CAP);
@@ -623,13 +623,28 @@ async function refreshDiskList() {
     ? `🔍 「${q}」に一致 ${hit.length}/${all.length} 件…`
     : `💾 保存済みディスク… (${all.length})`;
   sel.innerHTML = `<option value="">${head}</option>` +
-    dl.map((i) => `<option value="${i.role}">${i.name} (${kb(i.size)})</option>`).join('') +
+    dl.map((i) => `<option value="${i.role}">${isTapeRole(i.role) ? '📼 ' : ''}${i.name} (${kb(i.size)})</option>`).join('') +
     (hit.length > dl.length ? `<option value="" disabled>… 他 ${hit.length - dl.length} 件は 📚 一覧で</option>` : '');
 }
+// Insert a cassette and tell the user what to do next (CLOAD is a manual step —
+// the tape engine only streams bytes when N-BASIC/N88-BASIC asks for them).
+function insertTapeBytes(name, bytes) {
+  tapeBytes = bytes; tapeName = name;
+  if (machine && machine.insertTape) {
+    machine.insertTape(bytes);
+    $('tapeinfo').textContent = `📼 ${name} 挿入 — ▶CLOAD を押す`;
+  } else {
+    $('tapeinfo').textContent = `📼 ${name} 保持 — 機種を選んで再度どうぞ`;
+  }
+  try { ensureAudio(); } catch {}
+}
+const isTapeRole = (r) => r.startsWith('tape:');
+const isMediaRole = (r) => r.startsWith('disk:') || isTapeRole(r);
 async function loadSavedDisk(role) {
   const rec = await getRom(role);
   if (!rec) return;
   try {
+    if (isTapeRole(role)) { insertTapeBytes(rec.name, rec.bytes); return; }
     await putRom('disk', rec.name, rec.bytes); // last-used / auto-boot disk
     playDisk(rec.name, parseD88All(rec.bytes), rec.bytes); // load → assign drives → boot
   } catch (err) { $('dipnote').textContent = 'saved disk: ' + err.message; }
@@ -656,7 +671,9 @@ async function scanFolder(dir, prefix = '', depth = 0, acc) {
       // most BIOS dumps ship instead of n88_0..3.rom), so a folder full of good
       // ROMs constituted no machine at all (issue #20 follow-up).
       const id = identify({ name: nm });
-      if (/\.(d88|88d|d77|d8u|hdm|tfd|xdf|zip)$/i.test(nm)) acc.disks.push({ name: nm, path: prefix + nm, handle: h }); // .zip is unzipped on load/import
+      // tapes (.t88/.cas/.cmt) are loadable media too — they used to be invisible
+      // to the folder scanner, so a dump folder's cassettes could not be imported.
+      if (/\.(d88|88d|d77|d8u|hdm|tfd|xdf|zip|t88|cas|cmt)$/i.test(nm)) acc.disks.push({ name: nm, path: prefix + nm, handle: h }); // .zip is unzipped on load/import
       else if (id && id.kind === 'rom') acc.roms.push({ name: nm, path: prefix + nm, handle: h });
     } else if (h.kind === 'directory') await scanFolder(h, prefix + nm + '/', depth + 1, acc);
   }
@@ -705,8 +722,11 @@ async function loadFolderDisk(item) {
   try {
     const file = await item.handle.getFile();
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const parts = (await expandDiskFile(item.name, bytes)).filter((p) => p.isDisk); // unzip if needed
-    if (!parts.length) { $('dipnote').textContent = `${item.name}: ディスク画像なし（テープ? issue #11 / 壊れファイル?）`; return; }
+    const all = await expandDiskFile(item.name, bytes); // unzip if needed
+    const tape = all.find((p) => identify({ name: p.name })?.kind === 'tape');
+    if (tape) { insertTapeBytes(tape.name, tape.bytes); return; } // cassette → deck
+    const parts = all.filter((p) => p.isDisk);
+    if (!parts.length) { $('dipnote').textContent = `${item.name}: ディスク画像なし（壊れファイル?）`; return; }
     await putRom('disk', parts[0].name, parts[0].bytes); // last-used = first disk (d88 bytes)
     playDisk(parts[0].name, parseD88All(parts[0].bytes), parts[0].bytes); // resets pool + plays first
     for (let i = 1; i < parts.length; i++) ingestDisks(parts[i].name, parseD88All(parts[i].bytes), parts[i].bytes);
@@ -766,7 +786,9 @@ async function importFolderItem(item, seen, toSystem = false, dupes = null) {
       role = id.role;                       // canonical slot ('rom', 'n88main', …)
       label = p.name;
     } else {
-      role = 'disk:' + (item.path || item.name) + (parts.length > 1 ? '::' + p.name : '');
+      // 'tape:' vs 'disk:' matters — the loader picks insertTape() or parseD88All()
+      // off this prefix. A cassette filed as a disk throws on load.
+      role = (id.kind === 'tape' ? 'tape:' : 'disk:') + (item.path || item.name) + (parts.length > 1 ? '::' + p.name : '');
       label = diskDisplayName(item.path, p.name);
     }
     if (seen && seen.has(role)) { out.dup++; continue; }
@@ -859,7 +881,7 @@ async function renderDiskList() {
   const kb = (n) => (n / 1024 < 1024 ? (n / 1024 | 0) + 'KB' : (n / 1048576).toFixed(1) + 'MB');
   const items = [
     ...folderDisks.map((i) => ({ label: i.path, icon: '📁', load: () => loadFolderDisk(i), save: () => saveFolderDiskToLibrary(i), del: null })),
-    ..._idbItems.map((i) => ({ label: i.name, icon: '💾', sub: kb(i.size), load: () => loadSavedDisk(i.role), del: async () => { if (confirm(`「${i.name}」を保存済みから削除？`)) { try { await deleteRom(i.role); } catch {} await openDiskBrowser(true); refreshDiskList(); } } })),
+    ..._idbItems.map((i) => ({ label: i.name, icon: isTapeRole(i.role) ? '📼' : '💾', sub: kb(i.size), load: () => loadSavedDisk(i.role), del: async () => { if (confirm(`「${i.name}」を保存済みから削除？`)) { try { await deleteRom(i.role); } catch {} await openDiskBrowser(true); refreshDiskList(); } } })),
   ];
   const shown = items.filter((i) => i.label.toLowerCase().includes(q));
   $('diskcount').textContent = `${shown.length}/${items.length}`;
@@ -880,7 +902,7 @@ async function renderDiskList() {
 async function openDiskBrowser(keepOpen) {
   ensureDiskBrowser();
   let items = []; try { items = await listRoms(); } catch {}
-  _idbItems = items.filter((i) => i.role.startsWith('disk:')).sort((a, b) => a.name.localeCompare(b.name));
+  _idbItems = items.filter((i) => isMediaRole(i.role)).sort((a, b) => a.name.localeCompare(b.name));
   // reconnect a previously-granted folder (needs a permission re-grant on some visits)
   if (!folderDisks.length) {
     const h = await loadDirHandle();
@@ -901,9 +923,9 @@ $('bsoftkb').onclick = () => toggleSoftKb();
 // ---- cassette tape (.t88/.cas/.cmt) ---------------------------------------
 // The tape engine lives in Pc8801Machine (machine88.js): it streams bytes into
 // the 8251 (ports 20h/21h) at the block's baud while the motor runs (30h),
-// carrier on 40h — exactly what N88-BASIC's CLOAD polls. So a tape loads in the
-// N88 machine; the plain Pc8001Machine (machine.js) still has an 8251 stub, so
-// tape there is a no-op (switch to N88-BASIC to read PC-8001 tapes via CLOAD).
+// carrier on 40h — exactly what N88-BASIC's CLOAD polls. Pc8001Machine grew the
+// same path (machine.js: 20h/21h RX, 40h b2 carrier, 30h b3 motor), so tapes load
+// in BOTH machines — PC-8001 tapes in N-BASIC/N80, PC-8801 tapes in N88.
 // auto-type a string through the keyboard matrix (press → hold → release → next)
 function autoType(text, done) {
   const map = activeKeymap();
@@ -1051,8 +1073,8 @@ const fmtSize = (n) => (n < 1024 ? n + 'B'
 async function refreshStore() {
   const el = $('romstore'); if (!el) return;
   let items = []; try { items = await listRoms(); } catch {}
-  const disks = items.filter((i) => i.role.startsWith('disk:'));
-  const roms = items.filter((i) => !i.role.startsWith('disk:'));
+  const disks = items.filter((i) => isMediaRole(i.role));
+  const roms = items.filter((i) => !isMediaRole(i.role));
   const total = items.reduce((s, i) => s + i.size, 0);
   const sysOn = await sysStore.available();
   const parts = [];
@@ -1176,9 +1198,9 @@ function renderRomRows() {
   for (const i of shown) {
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;gap:8px;align-items:center;padding:4px 8px;border-bottom:1px solid #1c1c28;font-size:12px';
-    const isDisk = i.role.startsWith('disk:');
-    row.innerHTML = `<span style="width:16px">${isDisk ? '💽' : '🧩'}</span>`
-      + `<b style="color:#8fd;min-width:90px">${isDisk ? 'disk' : i.role}</b>`
+    const isDisk = isMediaRole(i.role), tape = isTapeRole(i.role);
+    row.innerHTML = `<span style="width:16px">${tape ? '📼' : isDisk ? '💽' : '🧩'}</span>`
+      + `<b style="color:#8fd;min-width:90px">${tape ? 'tape' : isDisk ? 'disk' : i.role}</b>`
       + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cde">${i.name}</span>`
       + `<span style="color:#778;width:64px;text-align:right">${fmtSize(i.size)}</span>`;
     if (isDisk) {
@@ -1208,7 +1230,7 @@ function renderRomRows() {
 async function wipeLibrary(kind) {
   const info = $('wipeinfo');
   let items = []; try { items = await listRoms(); } catch {}
-  const isDisk = (i) => i.role.startsWith('disk:');
+  const isDisk = (i) => isMediaRole(i.role);
   const target = kind === 'all' ? items : items.filter((i) => (kind === 'disks' ? isDisk(i) : !isDisk(i)));
   if (!target.length) { if (info) info.textContent = '消すものが無い'; return; }
   const alsoSys = !!$('wipesys')?.checked;
