@@ -1768,8 +1768,12 @@ canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); 
       it('mach', '機種', $('mach')), it('grp-bootmode', '起動モード', $('grp-bootmode')),
       it('sb2', 'SB2', lab('sb2')), it('grp-dip', 'DIPスイッチ', $('grp-dip')),
     ].filter(Boolean) },
-    { label: '💽 ディスク', items: [
+    { label: '💽 ディスク/テープ', items: [
       it('grp-savedisk', '保存済み/一覧', $('grp-savedisk')), it('grp-drive', 'ドライブ割当', $('grp-drive')),
+      // grp-tape lives in row-sys1, which this function hides — without an entry
+      // here the 📼テープ picker and ▶CLOAD button are simply invisible (they were
+      // orphaned when the menu bar took over the rows).
+      it('grp-tape', '📼 テープ/CLOAD', $('grp-tape')),
     ].filter(Boolean) },
     { label: '🎨 表示', items: [
       it('bclean', 'クリーン/CRT', $('bclean'), true), it('dispscale', '表示倍率', lab('dispscale'), true),
