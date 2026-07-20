@@ -24,7 +24,7 @@
  "/pc8001.js":"/pc8001.js?v=col40","/crt.js":"/crt.js?v=cache1",
  "/tube.js":"/tube.js?v=cache1","/term.js":"/term.js?v=cache1",
  "/semivideo.js":"/semivideo.js?v=cache1","/z80.js":"/z80.js?v=cache1",
- "/romid.js":"/romid.js?v=romid1",
+ "/romid.js":"/romid.js?v=romid2",
  "/demo/font.js":"/demo/font.js?v=cache1"
 }}
 </script>
@@ -154,8 +154,8 @@ async function expandDiskFile(fileName, bytes) {
     .sort((a, b) => b.bytes.length - a.bytes.length);
   return members.map((m) => ({ name: m.name, bytes: m.bytes, isDisk: /\.(d88|88d|d8u|hdm|tfd|xdf)$/i.test(m.name) }));
 }
-import { putRom, getRom, listRoms, clearRoms, deleteRom } from './romstore.js?v=2';
-import { identify, machinesFromRoles } from '../romid.js';
+import { putRom, getRom, listRoms, clearRoms, deleteRom } from './romstore.js?v=3';
+import { identify, machinesFromRoles, contentKey } from '../romid.js';
 import * as sysStore from './systemstore.js?v=1';
 
 // OPNA rhythm ROM (the six ADPCM-A drums) — fetched + decoded once, then
@@ -362,34 +362,52 @@ $('ffont').onchange = async (e) => {
 // their roles, assemble the 32KB `ext` from the four 8KB banks at 2000h stride,
 // persist each blob under its R88 role, and boot n88. Filenames are matched
 // loosely (case-insensitive, path-stripped) so a folder pick works too.
-function classify88(name) {
-  const b = name.replace(/^.*[/\\]/, '').toLowerCase();
-  if (/^n88_([0-3])\.rom$/.test(b)) return { role: 'ext', bank: +b.match(/^n88_([0-3])\.rom$/)[1] };
-  if (/^n88\.rom$/.test(b)) return { role: 'main' };
-  if (/^disk\.rom$/.test(b)) return { role: 'sub' };
-  if (/^n80\.rom$/.test(b)) return { role: 'n80' };
-  if (/^kanji1?\.rom$/.test(b)) return { role: 'kanji' };
-  return null;
-}
-async function assemble88(files) {
+// Assemble a PC-8801 BIOS set (and any PC-8001 pieces) out of picked files.
+// Identification is romid.js's job; `dupes` (a Set of content keys already in the
+// library) makes a re-import of the same bytes a no-op.
+async function assemble88(files, dupes = null) {
   const banks = [null, null, null, null];
-  let gotMain = false, gotSub = false, gotN80 = false, unknown = 0;
+  let gotMain = false, gotSub = false, gotN80 = false, unknown = 0, skipped = 0;
+  const keep = async (role, name, bytes) => {
+    const k = contentKey(bytes);
+    if (dupes && dupes.has(k)) { skipped++; return false; }
+    await putRom(role, name, bytes);
+    if (dupes) dupes.add(k);
+    return true;
+  };
   for (const f of files) {
-    const c = classify88(f.name);
-    if (!c) { unknown++; continue; }
+    const id = identify({ name: f.name });
+    if (!id || id.kind !== 'rom') { unknown++; continue; }
     const bytes = new Uint8Array(await f.arrayBuffer());
-    if (c.role === 'main') { rom88.main = bytes; await putRom(R88.main, f.name, bytes); gotMain = true; }
-    else if (c.role === 'sub') { rom88.sub = bytes; await putRom(R88.sub, f.name, bytes); gotSub = true; }
-    else if (c.role === 'n80') { rom88.n80 = bytes; await putRom(R88.n80, f.name, bytes); gotN80 = true; }
-    else if (c.role === 'ext') { banks[c.bank] = bytes; await putRom(R88.ext[c.bank], f.name, bytes); }
-    else if (c.role === 'kanji') { rom88.kanji = bytes; await putRom(R88.kanji, f.name, bytes); }
+    const r = id.role;
+    if (r === 'n88main') { rom88.main = bytes; await keep(R88.main, f.name, bytes); gotMain = true; }
+    else if (r === 'n88sub') { rom88.sub = bytes; await keep(R88.sub, f.name, bytes); gotSub = true; }
+    else if (r === 'rom') {
+      // The N-mode image is BOTH the 8801's optional N80 ROM and the PC-8001's
+      // boot ROM. Store it under both roles, or importing a BIOS folder leaves
+      // the plain PC-8001 unselectable even though its ROM is right there.
+      rom88.n80 = bytes;
+      await keep(R88.n80, f.name, bytes);
+      await putRom('rom', f.name, bytes);
+      gotN80 = true;
+    } else if (/^n88ext[0-3]$/.test(r)) {
+      const i = +r.slice(6); banks[i] = bytes; await keep(R88.ext[i], f.name, bytes);
+    } else if (r === 'n88ext') {
+      // one-piece 32KB extension image → split into the four 8KB banks
+      for (let i = 0; i < 4; i++) {
+        const b = bytes.slice(i * 0x2000, (i + 1) * 0x2000);
+        banks[i] = b; await putRom(R88.ext[i], `${f.name}#${i}`, b);
+      }
+    } else if (r === 'n88kanji') { rom88.kanji = bytes; await keep(R88.kanji, f.name, bytes); }
+    else if (r === 'font') { try { applyFontRom(cgrom, bytes); } catch {} await keep('font', f.name, bytes); }
+    else await keep(r, f.name, bytes); // other recognised 88 ROMs — kept, not booted
   }
   if (banks.some((b) => b)) {
     const ext = new Uint8Array(0x8000);
     banks.forEach((b, i) => { if (b) ext.set(b.subarray(0, 0x2000), i * 0x2000); });
     rom88.ext = ext;
   }
-  return { gotMain, gotSub, gotN80, banks: banks.filter(Boolean).length, unknown };
+  return { gotMain, gotSub, gotN80, banks: banks.filter(Boolean).length, unknown, skipped };
 }
 $('from88').onchange = async (e) => {
   const files = [...e.target.files];
@@ -633,9 +651,13 @@ async function scanFolder(dir, prefix = '', depth = 0, acc) {
   if (depth > 5) return acc;
   for await (const [nm, h] of dir.entries()) {
     if (h.kind === 'file') {
+      // romid.js is the single source of truth for "what is this file?" — the old
+      // classify88() missed N88EXT.ROM (the 32KB one-piece extension image that
+      // most BIOS dumps ship instead of n88_0..3.rom), so a folder full of good
+      // ROMs constituted no machine at all (issue #20 follow-up).
+      const id = identify({ name: nm });
       if (/\.(d88|88d|d77|d8u|hdm|tfd|xdf|zip)$/i.test(nm)) acc.disks.push({ name: nm, path: prefix + nm, handle: h }); // .zip is unzipped on load/import
-      else if (classify88(nm)) acc.roms.push({ name: nm, handle: h });
-      else if (/^font88?\.rom$/i.test(nm) || /font.*\.rom$/i.test(nm)) acc.fonts.push({ name: nm, handle: h });
+      else if (id && id.kind === 'rom') acc.roms.push({ name: nm, path: prefix + nm, handle: h });
     } else if (h.kind === 'directory') await scanFolder(h, prefix + nm + '/', depth + 1, acc);
   }
   return acc;
@@ -648,12 +670,20 @@ async function useFolder(dir) {
   let extra = '';
   if (acc.roms.length) { // assemble + persist the 8801 BIOS set (n88/ext/disk/n80/kanji)
     try {
+      const dupes = await libraryHashes();
       const files = await Promise.all(acc.roms.map((r) => r.handle.getFile()));
-      const r = await assemble88(files); refreshStore();
-      extra += (r.gotMain && r.gotSub && r.banks === 4) ? ' ✓BIOS一式' : ` (ROM${acc.roms.length})`;
+      const r = await assemble88(files, dupes); refreshStore();
+      extra += ` (ROM${acc.roms.length}${r.skipped ? ` / 同一${r.skipped}件スキップ` : ''})`;
     } catch {}
   }
-  if (acc.fonts.length) { try { const b = new Uint8Array(await (await acc.fonts[0].handle.getFile()).arrayBuffer()); applyFontRom(cgrom, b); await putRom('font', acc.fonts[0].name, b); extra += ' +font'; } catch {} }
+  // Say WHAT the ROMs now constitute. "機種選択ができない" is almost always a
+  // missing piece (disk.rom, the ext banks), and silence made that unreadable.
+  try {
+    const roles = new Set((await listRoms()).map((i) => i.role));
+    extra += ' | ' + machinesFromRoles(roles)
+      .map((m) => (m.ready ? `✓${m.label}` : `✗${m.label}[不足: ${m.missing.join(', ')}]`))
+      .join('  ');
+  } catch {}
   if (cnt) cnt.textContent = `📁 ${dir.name}: ${folderDisks.length}枚${extra}`;
   if (has88Set() && bootMode !== 'n88') switchMode('n88'); // BIOS now present → boot N88 so disks run
   renderDiskList();
@@ -713,10 +743,21 @@ function diskDisplayName(path, innerName) {
 // folder holding a BIOS set imports the BIOS too, not just the disks), and
 // anything unrecognised is SKIPPED — that is the "88/80 用以外は import しない"
 // filter (issue #20). Returns per-kind counts so the caller can report honestly.
-async function importFolderItem(item, seen, toSystem = false) {
+// Every content key already in the library — the basis for duplicate skipping.
+async function libraryHashes() {
+  try { return new Set((await listRoms()).map((i) => i.hash).filter(Boolean)); }
+  catch { return new Set(); }
+}
+// Import one scanned item. Two independent skips:
+//   - unrecognised file  → not a PC-8001/8801 image at all (`skipped`)
+//   - content already in the library → the SAME bytes under another path/role
+//     (`dup`). A dump folder is full of these: per-machine copies of the same
+//     ROM, the same game in two collections, "(1)" duplicates. Deduping on path
+//     alone missed all of them, so the key is the content (romid.contentKey).
+async function importFolderItem(item, seen, toSystem = false, dupes = null) {
   const bytes = new Uint8Array(await (await item.handle.getFile()).arrayBuffer());
   const parts = await expandDiskFile(item.name, bytes);
-  const out = { disks: 0, roms: 0, skipped: 0 };
+  const out = { disks: 0, roms: 0, skipped: 0, dup: 0 };
   for (const p of parts) {
     const id = identify({ name: p.name, size: p.bytes.length });
     if (!id) { out.skipped++; continue; }
@@ -728,19 +769,27 @@ async function importFolderItem(item, seen, toSystem = false) {
       role = 'disk:' + (item.path || item.name) + (parts.length > 1 ? '::' + p.name : '');
       label = diskDisplayName(item.path, p.name);
     }
-    if (seen && seen.has(role)) continue;
+    if (seen && seen.has(role)) { out.dup++; continue; }
+    const key = contentKey(p.bytes);
+    if (dupes && dupes.has(key)) { out.dup++; continue; } // same bytes already stored
     await putRom(role, label, p.bytes);
     if (toSystem) { try { await sysStore.put(role, label, p.bytes); } catch { /* quota → reported by caller */ } }
     if (seen) seen.add(role);
+    if (dupes) dupes.add(key);
     if (id.kind === 'rom') out.roms++; else out.disks++;
   }
   return out;
 }
 async function saveFolderDiskToLibrary(item) {
   try {
-    const r = await importFolderItem(item);
+    const r = await importFolderItem(item, null, false, await libraryHashes());
     const n = r.disks + r.roms;
-    if (!n) { $('dipnote').textContent = `${item.name}: PC-8001/8801 用として認識できるファイルなし`; return; }
+    if (!n) {
+      $('dipnote').textContent = r.dup
+        ? `${item.name}: 同じ内容が既に保存済み（スキップ）`
+        : `${item.name}: PC-8001/8801 用として認識できるファイルなし`;
+      return;
+    }
     refreshDiskList(); refreshStore(); await openDiskBrowser(true); // reload the idb list so it shows as 💾
     $('dipnote').textContent = n > 1
       ? `💾 「${item.name}」から ${r.disks}枚 + ROM ${r.roms}個を保存済みに追加した`
@@ -750,21 +799,24 @@ async function saveFolderDiskToLibrary(item) {
 // bulk: import EVERY scanned folder disk into the idb library (dedup + progress).
 async function importAllFolderDisks() {
   if (!folderDisks.length) { $('diskfolderinfo').textContent = '先に📁フォルダを開いてください'; return; }
-  // dedup against EVERY stored role (ROMs too now, not just disk:*)
+  // dedup on BOTH axes: role (same slot/path) and content hash (same bytes
+  // anywhere else in the library) — see importFolderItem.
   let seen; try { seen = new Set((await listRoms()).map((i) => i.role)); } catch { seen = new Set(); }
+  const dupes = await libraryHashes();
   const toSystem = !!$('disktosystem')?.checked;
-  let disks = 0, roms = 0, skipped = 0, fail = 0, i = 0;
+  let disks = 0, roms = 0, skipped = 0, dup = 0, fail = 0, i = 0;
   for (const item of folderDisks) {
     $('diskfolderinfo').textContent = `💾 インポート中… ${++i}/${folderDisks.length}`
-      + `（ディスク ${disks} / ROM ${roms}${skipped ? ` / 対象外 ${skipped}` : ''}${fail ? ` / 失敗 ${fail}` : ''}`
+      + `（ディスク ${disks} / ROM ${roms}${dup ? ` / 重複 ${dup}` : ''}${skipped ? ` / 対象外 ${skipped}` : ''}${fail ? ` / 失敗 ${fail}` : ''}`
       + `${toSystem ? ' 🖧' : ''}）`;
     try {
-      const r = await importFolderItem(item, seen, toSystem);
-      disks += r.disks; roms += r.roms; skipped += r.skipped;
+      const r = await importFolderItem(item, seen, toSystem, dupes);
+      disks += r.disks; roms += r.roms; skipped += r.skipped; dup += r.dup;
     } catch { fail++; }
   }
   await openDiskBrowser(true); renderDiskList(); refreshStore(); refreshDiskList();
   $('diskfolderinfo').textContent = `✓ ディスク ${disks}枚 / ROM ${roms}個をインポート`
+    + `${dup ? `（同一内容 ${dup} 件はスキップ）` : ''}`
     + `${skipped ? `（PC-8001/8801用でない ${skipped} 件は除外）` : ''}${fail ? `（${fail}件失敗）` : ''}`
     + `${toSystem ? ' — システムにも保存' : ''}`;
 }
@@ -1094,10 +1146,22 @@ function ensureRomBrowser() {
       <span id="rominfo" style="color:#778;font-size:12px"></span>
       <button id="romclose">閉じる</button>
     </div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11px;color:#889">
+      <span>🗑 まとめて消す:</span>
+      <button id="wipedisks" title="保存済みディスクを全部消す（ROMは残す）">ディスクを0に</button>
+      <button id="wiperoms" title="保存済みROM(BIOS/font/漢字など)を全部消す（ディスクは残す）">ROMを0に</button>
+      <button id="wipeall" title="このブラウザのIndexedDBに保存したROM/ディスクを全部消して0にする">全部を0に</button>
+      <label id="wipesys-l" style="display:none;align-items:center;gap:3px;color:#f99" title="システム(認証ユーザ領域)側の同じものも一緒に消す。他のブラウザからも取り込めなくなる"><input type="checkbox" id="wipesys">🖧 システム側も消す</label>
+      <span id="wipeinfo" style="color:#778"></span>
+    </div>
     <div id="romrows" style="flex:1;overflow:auto;background:#0b0b12;border:1px solid #2a2a3a;border-radius:6px"></div>`;
   document.body.appendChild(ov);
   $('romfilter').oninput = () => renderRomRows();
   $('romclose').onclick = () => { ov.style.display = 'none'; };
+  $('wipedisks').onclick = () => wipeLibrary('disks');
+  $('wiperoms').onclick = () => wipeLibrary('roms');
+  $('wipeall').onclick = () => wipeLibrary('all');
+  sysStore.available().then((ok) => { const l = $('wipesys-l'); if (l && ok) l.style.display = 'inline-flex'; });
   ov.addEventListener('click', (e) => { if (e.target === ov) ov.style.display = 'none'; });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && ov.style.display === 'flex') ov.style.display = 'none';
@@ -1138,6 +1202,39 @@ function renderRomRows() {
   $('rominfo').textContent = `${hit.length}/${_romItems.length} 件`
     + (more > 0 ? `（先頭 ${ROM_ROW_CAP} 件を表示。絞り込んで）` : '');
 }
+// Wipe the library back to zero. `kind`: 'all' | 'disks' | 'roms'. Optionally
+// the server-side copy too (opt-in checkbox — otherwise ⬇取り込み would just
+// bring everything straight back and look like the wipe failed).
+async function wipeLibrary(kind) {
+  const info = $('wipeinfo');
+  let items = []; try { items = await listRoms(); } catch {}
+  const isDisk = (i) => i.role.startsWith('disk:');
+  const target = kind === 'all' ? items : items.filter((i) => (kind === 'disks' ? isDisk(i) : !isDisk(i)));
+  if (!target.length) { if (info) info.textContent = '消すものが無い'; return; }
+  const alsoSys = !!$('wipesys')?.checked;
+  const what = { all: 'ROMとディスク', disks: 'ディスク', roms: 'ROM' }[kind];
+  const bytes = target.reduce((s, i) => s + i.size, 0);
+  if (!confirm(`${what} ${target.length}件（${fmtSize(bytes)}）を消して0にする。\n`
+    + (alsoSys ? '🖧 システム側の同じものも消す。\n' : 'このブラウザのみ（システム側は残る）。\n')
+    + 'この操作は取り消せない。続ける？')) return;
+  let n = 0, sysN = 0;
+  // 'all' can use the fast store-wide clear; partial wipes go one by one
+  if (kind === 'all' && !alsoSys) { try { await clearRoms(); n = target.length; } catch {} }
+  else {
+    for (const i of target) {
+      if (info) info.textContent = `消去中… ${n + 1}/${target.length}`;
+      try { await deleteRom(i.role); n++; } catch {}
+      if (alsoSys) { try { if (await sysStore.del(i.role)) sysN++; } catch {} }
+    }
+  }
+  // drop the in-memory copies too, so the UI isn't still holding a booted ROM
+  if (kind !== 'disks') {
+    romBytes = null; rom88.main = rom88.ext = rom88.sub = rom88.n80 = rom88.kanji = null;
+  }
+  if (info) info.textContent = `✓ ${n}件を消した${alsoSys ? `（システム側 ${sysN}件）` : ''} — リロードで完全に反映`;
+  await openRomBrowser(true); refreshStore(); refreshDiskList(); updateSysInfo();
+}
+
 async function openRomBrowser(keepOpen = false) {
   ensureRomBrowser();
   let items = []; try { items = await listRoms(); } catch {}
@@ -1155,8 +1252,10 @@ function addStoredMachines(items) {
   const sel = $('mach'); if (!sel) return;
   sel.querySelectorAll('optgroup[data-stored]').forEach((g) => g.remove());
   const roles = new Set((items || []).map((i) => i.role));
-  const built = machinesFromRoles(roles).filter((m) => m.ready || m.missing.length < 3);
-  if (!built.length) return;
+  // Always list BOTH, even when nothing is stored: a disabled entry whose title
+  // names the missing ROM is the only way the user learns why the machine can't
+  // be selected. Hiding them made an incomplete import look like a broken UI.
+  const built = machinesFromRoles(roles);
   const g = document.createElement('optgroup');
   g.label = '保存済みROMから'; g.dataset.stored = '1';
   for (const m of built) {

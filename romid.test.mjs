@@ -1,7 +1,7 @@
 // node --test romid.test.mjs — deterministic, headless.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { identify, classifyAll, machinesFromRoles, basename, DISK_RE, TAPE_RE } from './romid.js';
+import { identify, classifyAll, machinesFromRoles, basename, contentKey, DISK_RE, TAPE_RE } from './romid.js';
 
 test('recognises the PC-8801 N88 BIOS set by filename', () => {
   assert.equal(identify({ name: 'n88.rom' }).role, 'n88main');
@@ -76,6 +76,38 @@ test('machinesFromRoles: PC-8001 needs only the boot ROM', () => {
   assert.equal(machinesFromRoles([]).find((x) => x.id === 'pc8001').ready, false);
 });
 
+test("machinesFromRoles: the 8801's n88n80 also constitutes a PC-8001", () => {
+  // importing a BIOS folder fills 'n88n80', never 'rom' — that used to leave the
+  // machine picker with nothing selectable even though the image was right there.
+  assert.equal(machinesFromRoles(['n88n80']).find((x) => x.id === 'pc8001').ready, true);
+});
+
+test('contentKey: identical bytes match, any difference does not', () => {
+  const a = new Uint8Array([1, 2, 3, 4, 5]);
+  const b = new Uint8Array([1, 2, 3, 4, 5]);
+  const c = new Uint8Array([1, 2, 3, 4, 6]); // last byte differs
+  const d = new Uint8Array([1, 2, 3, 4]);    // shorter
+  assert.equal(contentKey(a), contentKey(b));  // same content → same key (dedup hit)
+  assert.notEqual(contentKey(a), contentKey(c));
+  assert.notEqual(contentKey(a), contentKey(d));
+  assert.match(contentKey(a), /^5:/);          // length is part of the key
+  // order matters (a transposition must not collide)
+  assert.notEqual(contentKey(new Uint8Array([1, 2])), contentKey(new Uint8Array([2, 1])));
+  // deterministic across calls
+  assert.equal(contentKey(a), contentKey(a));
+});
+
+test('contentKey: distinct over a large synthetic set (no collisions)', () => {
+  const keys = new Set();
+  for (let i = 0; i < 3000; i++) {
+    const buf = new Uint8Array(64);
+    for (let j = 0; j < 64; j++) buf[j] = (i * 31 + j * 7) & 0xff;
+    buf[0] = i & 0xff; buf[1] = (i >> 8) & 0xff;
+    keys.add(contentKey(buf));
+  }
+  assert.equal(keys.size, 3000);
+});
+
 test('machinesFromRoles: PC-8801 N88 needs main + 4 banks + sub, banks either shape', () => {
   const split = ['n88main', 'n88ext0', 'n88ext1', 'n88ext2', 'n88ext3', 'n88sub'];
   assert.equal(machinesFromRoles(split).find((x) => x.id === 'pc8801n88').ready, true);
@@ -86,4 +118,31 @@ test('machinesFromRoles: PC-8801 N88 needs main + 4 banks + sub, banks either sh
   const partial = machinesFromRoles(['n88main']).find((x) => x.id === 'pc8801n88');
   assert.equal(partial.ready, false);
   assert.equal(partial.missing.length, 2); // banks + disk.rom
+});
+
+// Regression for the reported bug: a folder full of good dumps constituted no
+// selectable machine, because the old classifier ignored N88EXT.ROM and the
+// N-mode ROM only ever landed in the 8801's 'n88n80' slot.
+test('realistic dump folders constitute a selectable machine', () => {
+  const rolesOf = (names) => new Set(names.map((n) => identify({ name: n })).filter(Boolean)
+    .filter((i) => i.kind === 'rom').map((i) => i.role)
+    // the 8801 assembler also mirrors the N-mode ROM into the PC-8001 slot
+    .flatMap((r) => (r === 'rom' ? ['rom', 'n88n80'] : [r])));
+
+  // "basic-set" shape: one-piece N88EXT.ROM, no disk.rom
+  const basic = machinesFromRoles(rolesOf([
+    'N80.ROM', 'N88.ROM', 'N88EXT.ROM', 'N88MID.ROM', 'font.rom', 'KANJI1.ROM', 'KANJI2.ROM', 'readme.txt',
+  ]));
+  assert.equal(basic.find((m) => m.id === 'pc8001').ready, true);   // ← was false (the bug)
+  const b88 = basic.find((m) => m.id === 'pc8801n88');
+  assert.equal(b88.ready, false);
+  assert.deepEqual(b88.missing, ['disk.rom']);  // one honest, nameable gap
+
+  // "8801MC" shape: split banks + disk.rom → both machines bootable
+  const mc = machinesFromRoles(rolesOf([
+    'n80.rom', 'n88.rom', 'n88_0.rom', 'n88_1.rom', 'n88_2.rom', 'n88_3.rom',
+    'disk.rom', 'kanji1.rom', 'kanji2.rom', 'cdbios.rom', 'jisyo.rom',
+  ]));
+  assert.equal(mc.find((m) => m.id === 'pc8001').ready, true);
+  assert.equal(mc.find((m) => m.id === 'pc8801n88').ready, true);
 });

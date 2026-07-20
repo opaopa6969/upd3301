@@ -14,6 +14,8 @@
 //             'n88n80' (optional n80.rom). Together these auto-boot N88 mode.
 // Extend freely.
 
+import { contentKey } from '../romid.js';
+
 const DB = 'upd3301-roms';
 const STORE = 'blobs';
 
@@ -30,10 +32,15 @@ function tx(db, mode) { return db.transaction(STORE, mode).objectStore(STORE); }
 
 export async function putRom(role, name, bytes) {
   const db = await open();
+  // A content key rides along so the importer can skip a blob it already has
+  // under a DIFFERENT role/path (the same disk lives in many folders). Computed
+  // here so every writer gets it for free; listRoms() hands it back without
+  // loading the bytes.
+  const hash = contentKey(bytes);
   return new Promise((resolve, reject) => {
     // store a copy of the bytes (a Uint8Array view over a transferred buffer
     // can detach); slice() gives IndexedDB a stable ArrayBuffer to clone.
-    const rq = tx(db, 'readwrite').put({ role, name, bytes: bytes.slice(), at: 0 });
+    const rq = tx(db, 'readwrite').put({ role, name, bytes: bytes.slice(), at: 0, hash });
     rq.onsuccess = () => resolve();
     rq.onerror = () => reject(rq.error);
   });
@@ -52,7 +59,7 @@ export async function listRoms() {
   const db = await open();
   return new Promise((resolve, reject) => {
     const rq = tx(db, 'readonly').getAll();
-    rq.onsuccess = () => resolve((rq.result || []).map((r) => ({ role: r.role, name: r.name, size: r.bytes.byteLength })));
+    rq.onsuccess = () => resolve((rq.result || []).map((r) => ({ role: r.role, name: r.name, size: r.bytes.byteLength, hash: r.hash || null })));
     rq.onerror = () => reject(rq.error);
   });
 }

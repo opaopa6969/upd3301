@@ -23,7 +23,7 @@ export const SCHEMA_VERSION = 1;
 
 // Disk and tape containers the emulator can mount (zip.js unpacks archives
 // before we ever see them, so no .zip here).
-export const DISK_RE = /\.(d88|88d|d8u|hdm|tfd|xdf)$/i;
+export const DISK_RE = /\.(d88|88d|d77|d8u|hdm|tfd|xdf)$/i;
 export const TAPE_RE = /\.(t88|cas|cmt)$/i;
 
 // basename (lowercased) → role + label. `supported:false` marks a genuine
@@ -100,6 +100,27 @@ export function classifyAll(files = []) {
   return { accepted, rejected };
 }
 
+// ---- content identity (duplicate detection) -------------------------------
+// A dump folder holds the same disk or ROM under many paths (per-machine copies,
+// "(1)" duplicates, the same game in two collections). Deduping on PATH misses
+// all of those, so the importer dedups on CONTENT: this is the key.
+//
+// FNV-1a in two independent 32-bit lanes (different offset basis) over the whole
+// buffer, prefixed with the exact length — 64 bits of hash plus an exact size
+// match. For libraries of thousands of images that is comfortably collision-free,
+// and unlike crypto.subtle it is synchronous and pure, so it is testable here.
+export function contentKey(bytes) {
+  const b = bytes;
+  let h1 = 0x811c9dc5, h2 = 0x01000193;
+  for (let i = 0; i < b.length; i++) {
+    const v = b[i];
+    h1 = ((h1 ^ v) >>> 0) * 0x01000193 >>> 0;
+    h2 = ((h2 + v) >>> 0) * 0x85ebca6b >>> 0;
+    h2 = (h2 ^ (h2 >>> 13)) >>> 0;
+  }
+  return b.length + ':' + h1.toString(36) + h2.toString(36);
+}
+
 // ---- which machines can be built from what is already stored --------------
 // The machine picker must offer models the STORED ROMs can actually constitute
 // (not just whatever the server manifest lists). Given the set of roles present,
@@ -113,8 +134,11 @@ export function machinesFromRoles(roles = []) {
   const banks = ['n88ext0', 'n88ext1', 'n88ext2', 'n88ext3'];
   const haveBanks = has('n88ext') || banks.every(has);
 
+  // The N-mode ROM is the same image whether it arrived as the PC-8001 boot ROM
+  // ('rom') or as the 8801's optional N80 ROM ('n88n80') — either constitutes a
+  // PC-8001, so accept both (an imported BIOS folder only fills the latter).
   const n80Missing = [];
-  if (!has('rom')) n80Missing.push('n80.rom');
+  if (!has('rom') && !has('n88n80')) n80Missing.push('n80.rom');
 
   const n88Missing = [];
   if (!has('n88main')) n88Missing.push('n88.rom');
