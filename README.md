@@ -117,7 +117,7 @@ const { width, height, pixels } = sys.render({ cgrom }); // 0..7 の色インデ
 完全なシーケンスは `test.mjs` を見て。
 
 ```sh
-node --test              # 決定論テスト30本
+node --test              # 27ファイル・299ケースの決定論テスト
 python3 -m http.server   # リポジトリ直下で実行 → http://localhost:8000/demo/ を開く
 ```
 

@@ -105,7 +105,7 @@ Or drive the bare chip through ports: `crtc.writePort(1, 0x00)` … see
 `test.mjs` for full sequences.
 
 ```sh
-node --test              # 30 deterministic tests
+node --test              # 27 files / 299 deterministic test cases
 python3 -m http.server   # from the repo root, then open http://localhost:8000/demo/
 ```
 

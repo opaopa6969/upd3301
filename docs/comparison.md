@@ -22,7 +22,7 @@ open source).
 | 20-pairs-per-row limit | yes | yes | **no** | variable pair counts (per changelog) | yes |
 | DMA underrun | **not implemented** | **not implemented** (TODO) | yes | **yes** (TRACE ON warns) | yes |
 | Intra-frame DMA timing | none | **none** (TODO: whole screen at frame end) | **per-row** (scheduler) | unverified | none (frame-granular) |
-| FDD / games | works | works | works | works | **does not work** |
+| FDD / games | works | works | works | works | **works for the tested PC-8801 disk boot path** |
 | Phosphor & tube physics | none | none | unverified | none | **yes** |
 
 **The headline: MAME and M88 are chip-level too.** Any claim that "only this
@@ -155,14 +155,15 @@ a color** — the step MAME and M88 leave to your eyes.
 - **j80 is the only pre-existing emulator that documents 27-color support**,
   demo included. The source is unreadable, but the changelog's granularity
   (underrun tracing, variable attribute counts) marks it as chip-level.
-- **Play games on the others.** Our FDD does not work at all.
+- **FDD is implemented here too.** The tested PC-8801 disk boot path works;
+  title-by-title game compatibility is not yet established.
 - What is ours alone is not "chip level" but what lies *below* it:
   1. **The physical layer** — phosphor (P22's blue dies first, P7's
      two-layer afterglow, burn-in), the ∵ shadow mask, beam-spot bleed,
      scanline gaps, deflection collapse, V-HOLD, the 15 kHz whine. *MAME
      emits a 30 Hz flicker; here the phosphor turns it into a color.*
-  2. **Determinism and testability** — 85 headless tests, the 27-color trick
-     among them.
+  2. **Determinism and testability** — 27 test files / 299 headless test cases,
+     including the 27-color trick.
   3. **Readability** — the chips' causality fits in a head.
 
 This is less "a more accurate emulator" than **an executable textbook that

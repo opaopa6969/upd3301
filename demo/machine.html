@@ -2491,8 +2491,8 @@ mountTourButton(document.querySelector('h1'), [
   { el: '#fdisk',
     title: { ja: '.d88 ディスクイメージ', en: '.d88 disk images' },
     body: {
-      ja: 'D88イメージをパースしてマウントする。セクタID・記録密度・<b>不良セクタ</b>（コピープロテクトの住処！）まで読んで要約を出すよ。ここから実際にブートするにはFDDサブCPU＋μPD765が要る — それがissue #4/#5。',
-      en: 'Parses and mounts a D88 image — sector IDs, densities, even the <b>bad sectors</b> where copy protection lives, summarized on load. Actually booting from it needs the FDD sub-CPU + μPD765: issues #4/#5.' } },
+      ja: 'D88イメージをパースしてマウントする。セクタID・記録密度・<b>不良セクタ</b>（コピープロテクトの住処！）まで読んで要約を出すよ。PC-8801 BIOS一式があれば、FDDサブCPU＋μPD765経由で実際にブートできる。',
+      en: 'Parses and mounts a D88 image — sector IDs, densities, even the <b>bad sectors</b> where copy protection lives, summarized on load. With the PC-8801 BIOS set, it can boot from the image through the FDD sub-CPU + μPD765.' } },
   { el: '#breset',
     title: { ja: 'リセット', en: 'Reset' },
     body: {

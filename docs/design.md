@@ -69,7 +69,7 @@ burst mode distinction, composite-video artifact colors.
 
 ## Verification
 
-`node --test` (16 tests): geometry decode, row DMA sizes, underrun, attribute
+`node --test` (27 files, 299 test cases): geometry decode, row DMA sizes, underrun, attribute
 expansion, VRTC interrupt masking, cursor blink determinism, fixed-step
 frame exactness, 8257 flip-flop/autoload, dual-state attribute decode,
 full-system render determinism (bit-identical double run), the Bemaga

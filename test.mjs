@@ -154,6 +154,62 @@ test('μPD8257 autoload: ch2 wraps to ch3 base at terminal count', () => {
   assert.deepEqual([...buf], [0, 1, 2, 3, 4, 5, 6, 7]);
 });
 
+// PC-8001 I/O port boundary: port 0x68 (DMAC mode register) vs 0x67 (ch3
+// terminal-count high byte). pc8001.js routes 0x60..0x68 to dmac.writePort/
+// readPort with port - 0x60; the boundary between the channel-register
+// block (0x60-0x67) and the mode/status port (0x68) must split cleanly —
+// writing 0x68 sets modeReg, writing 0x67 must NOT touch modeReg, and
+// reading 0x68 returns TC status (not ch3 count). Regression guard for
+// issue #24 (the 0x68 boundary had no direct test through pc8001.js).
+test('PC-8001 port 0x68 boundary: DMAC mode reg vs 0x67 ch3 count high', () => {
+  const sys = new Pc8001TextSystem();
+  // 0x68 → writePort(8): mode = autoload + enable ch2. A mode write also
+  // resets the shared low/high flip-flop.
+  sys.out(0x68, 0x84);
+  assert.equal(sys.dmac.modeReg, 0x84);
+  assert.equal(sys.dmac.autoload, true);
+  assert.equal(sys.dmac.enabled(2), true);
+  assert.equal(sys.dmac._flipflop, 0);
+  // 0x67 → writePort(7): ch3 terminal-count low byte (first of the pair,
+  // F/F 0 → 1). Must NOT alter the mode register; the mode/count decode
+  // fires only on the second (high-byte) write. Here we stage 0x80 as the
+  // low byte of ch3's terminal count.
+  const modeBefore = sys.dmac.modeReg;
+  sys.out(0x67, 0x80); // ch3 count low byte
+  assert.equal(sys.dmac.modeReg, modeBefore); // 0x84 unchanged
+  assert.equal(sys.dmac.channels[3].baseCount, 0x80); // low byte staged
+  // 0x68 → readPort(8): TC status bits (one per channel), read-clear.
+  sys.dmac.channels[2].tc = true;
+  assert.equal(sys.in(0x68), 0x04); // bit 2 = ch2 TC
+  assert.equal(sys.dmac.channels[2].tc, false); // cleared on read
+  // 0x67 → readPort(7): ch3 live count. The F/F is at 1 here (the 0x67
+  // high-byte write left it there), so the first read returns the high
+  // byte. Reset the F/F via a mode write, then read the low byte.
+  sys.dmac.channels[3].count = 0x1234;
+  assert.equal(sys.in(0x67), 0x12); // F/F=1 → high byte
+  sys.out(0x68, 0x84); // mode write resets F/F to 0
+  assert.equal(sys.in(0x67), 0x34); // F/F=0 → low byte
+});
+
+// Boundary companion: a full 2-byte ch3 count write through pc8001.js
+// (port 0x67 twice, the shared F/F pairs low→high) decodes the mode from
+// the top 2 bits. Confirms 0x67 is the ch3 count port (not the mode port)
+// and that the flip-flop pair completes the mode/count decode.
+test('PC-8001 port 0x67: ch3 terminal-count pair decodes mode', () => {
+  const sys = new Pc8001TextSystem();
+  sys.out(0x68, 0x84); // mode write resets F/F to 0
+  sys.out(0x67, 0xff); // ch3 count low byte (F/F 0 → 1)
+  sys.out(0x67, 0x80); // ch3 count high byte (F/F 1 → 0): mode=2 (read), count=0xff
+  assert.equal(sys.dmac.channels[3].mode, 2); // top 2 bits of 0x80ff = 10
+  assert.equal(sys.dmac.channels[3].count, 0xff);
+  // And the ch3 address port (0x66) is distinct from the count port.
+  sys.out(0x68, 0x84); // reset F/F
+  sys.out(0x66, 0x34); // ch3 address low byte
+  sys.out(0x66, 0x12); // ch3 address high byte → addr 0x1234
+  assert.equal(sys.dmac.channels[3].baseAddr, 0x1234);
+  assert.equal(sys.dmac.channels[3].addr, 0x1234);
+});
+
 test('PC-8001 attribute pair decoding (color vs function spec)', () => {
   const c = decodeAttrPair(0xe8);
   assert.equal(c.kind, 'color');

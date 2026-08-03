@@ -117,8 +117,13 @@ const PHOSPHORS = Object.freeze({
   P22: {
     name: 'P22 (color TV, short)',
     tau: [0.0015, 0.0008, 0.0004],
-    tailTau: [0.15, 0.08, 0.05],
-    tailFrac: [0.045, 0.02, 0.012],
+    // Short afterglow. The old tail (0.15/0.08/0.05 s ≈ 9 frames at 60 Hz) was
+    // far too long for a color-TV P22: on a vertical scroll it stacked ~9 frames
+    // of already-departed content into a bright ghost mess (gamma 2.2 lifts even
+    // a 4.5% tail to ~23% on screen). Real P22 is medium-short; a ~2-3 frame tail
+    // keeps a faint CRT glow on static art without smearing motion into garbage.
+    tailTau: [0.02, 0.014, 0.01],
+    tailFrac: [0.03, 0.016, 0.01],
     primaries: [[1, 0.22, 0.12], [0.2, 1, 0.16], [0.14, 0.18, 1]],
   },
   LONG: {
@@ -220,8 +225,13 @@ class CrtPhosphor {
   // fieldParity: null = progressive; 0/1 = interlaced field — only lines of
   // that parity are excited, the rest just decay, so each line refreshes at
   // half rate and detail flickers on short phosphor.
-  step(pixels, dt, { fieldParity = null } = {}) {
-    const w = this.width, h = this.height;
+  // `drive`, when given, is a gun-major Float32Array (3·w·h) of per-gun beam
+  // levels in 0..1 — the ANALOG excitation. It lets the CRT reproduce the full
+  // analogue palette (smooth shades) instead of the 8 on/off GRB primaries you
+  // get from the 1-bit `pixels` path. Omit it and each gun is simply on or off
+  // from the index bits, exactly as before (backward compatible).
+  step(pixels, dt, { fieldParity = null, drive = null } = {}) {
+    const w = this.width, h = this.height, n = w * h;
     for (let gun = 0; gun < 3; gun++) {
       const F = this.fast[gun], T = this.tail[gun];
       const D = this.dose ? this.dose[gun] : null;
@@ -229,6 +239,7 @@ class CrtPhosphor {
       const dTail = Math.exp(-dt / this.tailTau[gun]);
       const frac = this.tailFrac[gun];
       const shift = gun === 0 ? 1 : gun === 1 ? 2 : 0; // R=bit1, G=bit2, B=bit0
+      const goff = gun * n;
       for (let y = 0; y < h; y++) {
         const excitable = fieldParity === null || (y & 1) === fieldParity;
         const o = y * w;
@@ -236,8 +247,9 @@ class CrtPhosphor {
           const i = o + x;
           let f = F[i] * dFast;
           let t = T[i] * dTail;
-          if (excitable && ((pixels[i] >> shift) & 1)) {
-            let e = this.drive;
+          const lvl = drive ? drive[goff + i] : ((pixels[i] >> shift) & 1);
+          if (excitable && lvl > 0) {
+            let e = this.drive * lvl;
             if (D) {
               e /= 1 + this.burnRate * D[i];
               D[i] += dt;
@@ -607,8 +619,14 @@ class CrtTube {
           // output row of the band so a 2x raster can actually *show* the
           // gap — otherwise both samples straddle the trace symmetrically
           // and you get two half-lit rows instead of line + black.
+          // Phase off the RAW output row v, NOT the barrel-warped bv: the raster
+          // is a straight physical sweep, so scanlines must stay horizontal and
+          // evenly spaced. Deriving the phase from bv let the barrel locally
+          // stretch the line grid, and where that beat against the beam period a
+          // bright horizontal band appeared (worse under supersampling, and
+          // x-dependent via r2 → it showed up off to one side).
           const rowsPerLine = outHeight / srcHeight;
-          const sy = (bv + 1) / 2 * srcHeight;
+          const sy = (v + 1) / 2 * srcHeight;
           const u = sy - Math.floor(sy); // 0..1 within the band
           const c = 0.5 / rowsPerLine; // trace center on the first row
           const d = Math.min(Math.abs(u - c), Math.abs(u - c - 1), Math.abs(u - c + 1));
