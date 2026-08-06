@@ -43,7 +43,12 @@ cells: u8[rows*cols], attrs: u8[rows*cols], attrPairs: u8[rows*attrsPerRow*2],
 attrsPerRow, attrMode, cursor {x, y, enabled, blink, block, on}, attrBlinkOn}`
 
 `renderScreen()` → `{width, height, pixels: u8[w*h]（0..7 GRBインデックス）,
-schemaVersion}`。
+ink: u8[w*h]（1=そのピクセルに文字ドットが描かれた、0=空白）, schemaVersion}`。
+
+`ink` マスクは色とは独立。黒文字（fg=0）はピクセル0を書くが、色だけでは
+「文字なし」と区別できない。`ink` により PC-8801 側のコンポジタは
+グラフィック面の上に文字を不透明に重ねられる（黒/反転文字でオフスク
+スクラッチを隠せる）。合成しない呼び出し側は無視してよい。
 
 ## 設計判断
 

@@ -43,7 +43,13 @@ cells: u8[rows*cols], attrs: u8[rows*cols], attrPairs: u8[rows*attrsPerRow*2],
 attrsPerRow, attrMode, cursor {x, y, enabled, blink, block, on}, attrBlinkOn}`
 
 `renderScreen()` → `{width, height, pixels: u8[w*h] (0..7 GRB index),
-schemaVersion}`.
+ink: u8[w*h] (1 = a character dot is drawn there, 0 = blank), schemaVersion}`.
+
+The `ink` mask is independent of colour: a black-on-graphics character (fg = 0)
+writes pixel 0, indistinguishable from "no character" by colour alone. `ink`
+lets the PC-8801 compositor make displayed text opaque over the graphics
+plane, so a game can mask its off-screen scratch by writing black/reverse
+text. Callers that don't composite ignore it.
 
 ## Decisions
 

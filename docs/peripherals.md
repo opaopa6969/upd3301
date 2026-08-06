@@ -292,7 +292,7 @@ N88-BASIC sets I = F3h, so the handler table lives at F300h.
 | SIO (8251) | 0 | 00h | 1 | bit 2 | nothing — CLOAD polls RXRDY; SIO IRQ not raised |
 | VSYNC | 1 | 02h | 2 | bit 1 | end of every frame, 60 Hz |
 | RTC | 2 | 04h | 3 | bit 0 | interval timer, 600 Hz |
-| SOUND (OPN) | 4 | 08h | 5 | — (real HW: port 32h side) | nothing — YM2203 is a stub (44h/45h read 00h) |
+| SOUND (OPN) | 4 | 08h | 5 | — (real HW: port 32h side) | YM2203 timer A/B overflow (machine88.js, rising-edge) — ym2203.js is fully implemented; port 44h = status, 45h = register data (joy on 0E/0F) |
 
 Note the two numberings: the *source number* makes the vector, the *8214
 level* fights the threshold. Lower level = higher priority; SIO beats
