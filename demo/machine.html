@@ -288,6 +288,15 @@ async function autoLoad() {
     // don't clobber an N88 auto-boot with the N80 default — the dropdown still
     // lets the user switch to an N80 machine on demand.
     if (!booted88) loadMachine(def);
+  } else if (!booted88) {
+    // No served ROMs (empty manifest) and no N88 auto-boot — fall back to
+    // this browser's IndexedDB, and if that's empty too, the authenticated
+    // user's server-side library (so a fresh login restores a saved BIOS
+    // set on any browser). The public host (no X-Volta-User-Id) silently
+    // 403s at /api/store and stays in BYO-ROM mode.
+    const local = await listRoms();
+    if (local.length) return restoreFromStore();
+    if (await sysStore.available()) await pullAllFromSystem();
   }
 }
 // The CRT's control surface is a component now (demo/crt-panel.js) — the
