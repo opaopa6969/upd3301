@@ -160,6 +160,8 @@ export class Pc8801Machine {
     this._opnClkPerCpu = (clockHz / frameHz) / (Math.round(clockHz / frameHz * (1 - dmaSteal)));
     this._pioLast = -1;
     this._pioPoll = 0;
+    this._subMark = 0;   // main T-state count the sub has already been paid for
+    this._subDebt = 0;   // fractional sub cycles carried between syncs
     this.keys = new Uint8Array(16).fill(0xff);
     // Joystick: PC-8801 wires the pads to the OPN (YM2203) I/O port A/B, read
     // through OPN register 0x0E (pad 1) / 0x0F (pad 2). Active-low bits:
@@ -426,6 +428,7 @@ export class Pc8801Machine {
     // loop expires into BASIC; with one, the two ROMs do the real handshake.
     if (port >= 0xfc && port <= 0xff) {
       if (!this.pio) return 0xff;
+      this._syncSub();  // the sub owns the other side of these latches — let it catch up first
       const v = this.pio.read(port - 0xfc);
       // main spinning on an unchanged answer = it is waiting for the sub.
       // Count it so stepFrame can lend the sub extra time (same trick
@@ -536,7 +539,7 @@ export class Pc8801Machine {
       return;
     }
     if (port >= 0x60 && port <= 0x68) { this.dmac.writePort(port - 0x60, v); return; }
-    if (port >= 0xfc && port <= 0xff && this.pio) { this.pio.write(port - 0xfc, v); return; }
+    if (port >= 0xfc && port <= 0xff && this.pio) { this._syncSub(); this.pio.write(port - 0xfc, v); return; }
   }
 
   // ---- interrupts ---------------------------------------------------------
@@ -558,16 +561,40 @@ export class Pc8801Machine {
   }
 
   // ---- run ----------------------------------------------------------------
-  // Main and sub CPUs interleave in ~100 T-state slices. The 8255 handshake
-  // is level-polled on both sides, so slice granularity only paces the
-  // transfer, it cannot break the protocol.
+  // Main and sub CPUs interleave in ~100 T-state slices — but a slice boundary
+  // is NOT a safe place to be lazy about the 8255. This was originally written
+  // believing the handshake was level-polled on both sides, so that slice
+  // granularity could only pace a transfer and never break it. That is wrong:
+  //
+  //   fca8  OUT (FFh),0Dh     ; raise the strobe
+  //   fcac  IN A,(FEh) / AND 01 / JR NZ fcac   ; wait for the sub to answer
+  //   fcb2  IN A,(FCh)        ; take the byte
+  //
+  // is a whole transaction that fits inside one 100-T-state slice. With the sub
+  // frozen for that slice, the main sees the *previous* level, decides the wait
+  // is already over, and reads a byte the sub has not written yet. Makaimura
+  // loads a decrypt table through exactly this loop, so one stale byte turned
+  // into a corrupt table, garbage code and a runaway CPU (issue #13).
+  //
+  // So every access to FCh-FFh is a synchronisation point: run the sub up to
+  // the main's current time *before* touching the latches. Slices still bound
+  // how far the two drift while neither is talking.
+  _syncSub() {
+    if (!this.sub) return;
+    const dt = this.tInFrame - this._subMark;
+    this._subMark = this.tInFrame;
+    if (dt <= 0) return;
+    this._subDebt += dt * this.subRatio;
+    const n = Math.floor(this._subDebt);
+    if (n > 0) this._subDebt -= this.sub.run(n);
+  }
+
   stepFrame() {
     this._applySteal(); // recompute frameT from this frame's text-DMA activity
     const SLICE = 100;
     // the 1/600s interval timer (level 0) — disk BASIC sleeps on it (EI/HALT),
     // so without these 10 ticks per frame the machine halts forever
     const timerPeriod = this.frameT / 10;
-    let subDebt = 0;
     let nextTimer = this.tInFrame + timerPeriod;
     // raster-accurate text fetch: space the CRTC's per-row DMA + palette
     // snapshot across the frame, so mid-frame VRAM/palette rewrites land on the
@@ -612,13 +639,17 @@ export class Pc8801Machine {
         this._serviceInterrupts();
       }
       if (this.sub) {
-        // polling main donates its wasted bus time to the sub (×16)
-        const boost = this._pioPoll > 32 ? 16 : 1;
-        subDebt += (this.tInFrame - before) * this.subRatio * boost;
-        if (subDebt >= SLICE) subDebt -= this.sub.run(Math.floor(subDebt));
+        // A main stuck polling an unchanged answer is waiting on the sub and
+        // wasting bus time; donate it (×16) so the boot ROM's timeout cannot
+        // beat the sub ROM's motor delay. (Same trick QUASI88 uses.) _syncSub
+        // has already banked the plain 1× time for any slice that touched the
+        // PIO, so only the extra 15× is added here.
+        if (this._pioPoll > 32) this._subDebt += (this.tInFrame - before) * this.subRatio * 15;
+        this._syncSub();
       }
     }
     this.tInFrame -= this.frameT;
+    this._subMark -= this.frameT;
     // any rows not yet reached (short/paused frame) — fetch + snapshot now
     while (this._crtcRow < dispRows) {
       this.crtc.fetchRow(this._crtcRow);

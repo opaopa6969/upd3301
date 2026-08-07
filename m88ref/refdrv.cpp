@@ -52,6 +52,20 @@ static void wrLog(unsigned pc, unsigned addr, unsigned val) {
   if (++g_wrN > g_wrMax) return;
   printf("WR f%-4d pc=%04x [%04x]=%02x\n", g_frame, pc, addr, val);
 }
+
+// Range read-watch. Reads are the better probe when two emulators run the same
+// code over different *data*: this records the bytes the CPU actually saw,
+// already resolved through whatever bank was selected, so it needs no guess
+// about where an address lives.
+unsigned g_rdLo = 0xffffffff, g_rdHi = 0;
+void (*g_rdHook)(unsigned pc, unsigned addr, unsigned val) = nullptr;
+static long g_rdMax = 4000, g_rdWN = 0;
+static unsigned g_rdPcLo = 0, g_rdPcHi = 0xffff;   // M88_RWATCH_PC=<lo>[-<hi>]
+static void rdLog(unsigned pc, unsigned addr, unsigned val) {
+  if (pc < g_rdPcLo || pc > g_rdPcHi) return;
+  if (++g_rdWN > g_rdMax) return;
+  printf("RD f%-4d pc=%04x [%04x]=%02x\n", g_frame, pc, addr, val);
+}
 unsigned g_fdcDataCount=0;
 void (*g_mrdHook)(unsigned,unsigned)=nullptr;
 static void mrdLog(unsigned port,unsigned val){ printf("MRD %02x\n", val); }
@@ -152,6 +166,20 @@ int main(int argc, char** argv) {
     g_wrLo = lo; g_wrHi = hi; g_wrHook = wrLog;
     if (const char* s = getenv("M88_WATCH_MAX")) g_wrMax = atol(s);
     printf("# watching MAIN writes to %04x-%04x (max %ld lines)\n", lo, hi, g_wrMax);
+  }
+  if (const char* w = getenv("M88_RWATCH")) {
+    char* end = nullptr;
+    unsigned lo = (unsigned)strtol(w, &end, 16);
+    unsigned hi = (end && *end == '-') ? (unsigned)strtol(end + 1, 0, 16) : lo;
+    g_rdLo = lo; g_rdHi = hi; g_rdHook = rdLog;
+    if (const char* s = getenv("M88_RWATCH_MAX")) g_rdMax = atol(s);
+    if (const char* s = getenv("M88_RWATCH_PC")) {
+      char* e2 = nullptr;
+      g_rdPcLo = (unsigned)strtol(s, &e2, 16);
+      g_rdPcHi = (e2 && *e2 == '-') ? (unsigned)strtol(e2 + 1, 0, 16) : g_rdPcLo;
+      printf("# ... only reads issued from pc %04x-%04x\n", g_rdPcLo, g_rdPcHi);
+    }
+    printf("# watching MAIN reads of %04x-%04x (max %ld lines)\n", lo, hi, g_rdMax);
   }
   int win0 = argc > 4 ? atoi(argv[4]) : -1, win1 = argc > 5 ? atoi(argv[5]) : -1;
   for (g_frame = 0; g_frame < frames; g_frame++) {
