@@ -52,6 +52,36 @@ refdrv <romDir> <disk.d88> [frames] [win0 win1]
   works as-is.
 - `frames` — 60 Hz frames to run (default 600). ~250 reaches a menu.
 
+### Instrumentation via environment (the workhorse for cross-emulator diffs)
+
+| variable | meaning |
+|----------|---------|
+| `M88_TRACE=<path>` | dump the MAIN CPU instruction trace (one PC per line, consecutive dups collapsed) |
+| `M88_TRACE_ARMPC=<hex>` | start tracing at the **first execution of this PC** (preferred) |
+| `M88_TRACE_FROM=<frame>` | start tracing at a frame (default 0) |
+| `M88_TRACE_ARMFDC=<n>` | start after the n'th FDC result (the old 軽井沢-specific arming) |
+| `M88_TRACE_MAX=<n>` | instruction budget (default 200000) |
+| `M88_WATCH=<lo>-<hi>` | print every MAIN-CPU store into that address range (`WR f… pc=… [addr]=val`) |
+| `M88_WATCH_MAX=<n>` | cap the printed lines (default 400) |
+
+**Use `M88_TRACE_ARMPC`.** Our emulator boots ~20 frames ahead of M88, so frame
+numbers do not name the same program point; "the first time the program reaches
+address X" does, however the timing drifted.
+
+Our side has the matching `tools/pc-trace.mjs` (same format, same arming) and
+`tools/watch-write.mjs`. Diff with `tools/trace-diff.mjs`.
+
+```sh
+# trace both from the same program point, then truncate the longer one
+M88_TRACE=/tmp/m88.txt M88_TRACE_ARMPC=fc11 M88_TRACE_MAX=6000000 \
+  refdrv <romDir> <disk.d88> 300
+node tools/pc-trace.mjs <disk.d88> /tmp/ours.txt 150 --armpc fc11 --max 3000000
+head -n $(wc -l < /tmp/ours.txt) /tmp/m88.txt > /tmp/m88cut.txt
+node tools/trace-diff.mjs /tmp/ours.txt /tmp/m88cut.txt
+```
+**Do truncate the longer trace** — otherwise "PCs only one side executes" just
+means "that side ran longer". M88 needs ~20 extra frames to reach the same point.
+
 Example (the reference run this repo diffs against):
 ```sh
 refdrv /path/to/m88roms /path/to/karuizawa.d88 250

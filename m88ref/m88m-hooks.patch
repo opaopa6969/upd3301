@@ -1,5 +1,5 @@
 diff --git a/src/devices/Z80c.cpp b/src/devices/Z80c.cpp
-index 86c43a4..35da5e2 100644
+index 86c43a4..b74bc75 100644
 --- a/src/devices/Z80c.cpp
 +++ b/src/devices/Z80c.cpp
 @@ -468,8 +468,11 @@ int Z80C::cbase;
@@ -14,15 +14,18 @@ index 86c43a4..35da5e2 100644
  	SingleStep(Fetch8());
  }
  
-@@ -496,9 +499,11 @@ inline uint Z80C::Read8(uint addr)
+@@ -496,9 +499,14 @@ inline uint Z80C::Read8(uint addr)
  	}
  }
  
 +extern void (*g_e6cdHook)(unsigned pc, unsigned addr, unsigned val);
++extern void (*g_wrHook)(unsigned pc, unsigned addr, unsigned val);
++extern unsigned g_wrLo, g_wrHi;
  inline void Z80C::Write8(uint addr, uint data)
  {
  	addr &= 0xffff;
 +	if (g_e6cdHook && (addr == 0xe6cd || addr == 0xec88 || addr == 0xec89)) g_e6cdHook(GetPC(), addr, data);
++	if (g_wrHook && (void*)this == g_mainCpu && addr >= g_wrLo && addr <= g_wrHi) g_wrHook(GetPC(), addr, data);
  	MemoryPage& page = wrpages[addr >> pagebits];
  #ifdef PTR_IDBIT
  	if (!(intpointer(page.ptr) & idbit))

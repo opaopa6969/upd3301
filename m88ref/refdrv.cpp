@@ -24,11 +24,34 @@ static void e6cdLog(unsigned pc, unsigned addr, unsigned val) {
 }
 
 static int g_rdN = 0;
-static int g_traceOn = 0, g_traceN = 0;
-static unsigned g_pcbuf[200000];
+static int g_traceOn = 0, g_traceN = 0, g_traceMax = 0;
+static unsigned* g_pcbuf = nullptr;
 void* g_mainCpu = nullptr;
 void (*g_pcHook)(unsigned pc) = nullptr;
-static void pcLog(unsigned pc) { if (g_traceOn && g_traceN < 200000) g_pcbuf[g_traceN++] = pc; }
+// Arming: by frame (M88_TRACE_FROM) or by first execution of a PC
+// (M88_TRACE_ARMPC). The PC anchor is the useful one for cross-emulator diffs —
+// our emulator boots ~20 frames ahead of M88, so frame numbers do not line up,
+// but "the first time the program reaches address X" does.
+static int g_armFrame = -1, g_armFdc = 0;
+static long g_armPc = -1;
+static void pcLog(unsigned pc) {
+  if (!g_traceOn) {
+    if (g_armPc >= 0 && (long)pc == g_armPc) g_traceOn = 1;
+    else if (g_armFrame >= 0 && g_frame >= g_armFrame) g_traceOn = 1;
+    else return;
+  }
+  if (g_traceN < g_traceMax) g_pcbuf[g_traceN++] = pc;
+}
+
+// Range write-watch, the M88-side mirror of tools/watch-write.mjs.
+// M88_WATCH=<lo>-<hi> (hex) prints every MAIN-CPU store landing in that range.
+unsigned g_wrLo = 0xffffffff, g_wrHi = 0;
+void (*g_wrHook)(unsigned pc, unsigned addr, unsigned val) = nullptr;
+static long g_wrMax = 400, g_wrN = 0;
+static void wrLog(unsigned pc, unsigned addr, unsigned val) {
+  if (++g_wrN > g_wrMax) return;
+  printf("WR f%-4d pc=%04x [%04x]=%02x\n", g_frame, pc, addr, val);
+}
 unsigned g_fdcDataCount=0;
 void (*g_mrdHook)(unsigned,unsigned)=nullptr;
 static void mrdLog(unsigned port,unsigned val){ printf("MRD %02x\n", val); }
@@ -36,9 +59,11 @@ static int g_resN = 0;
 void (*g_fdcResultHook)(unsigned,unsigned,unsigned,unsigned,unsigned,unsigned,unsigned) = nullptr;
 static void fdcResultLog(unsigned st0,unsigned st1,unsigned st2,unsigned c,unsigned h,unsigned r,unsigned n){
   printf("f%-4d RESULT ST[%02x %02x %02x] C%u H%u R%u N%u\n", g_frame, st0,st1,st2,c,h,r,n);
-  if (++g_resN == 6) { g_traceOn = 1; }   // arm MAIN pc trace right after read#6 (cyl20)
-  if (g_traceN > 12000) g_traceOn = 0;     // bound the window
+  // legacy arming: M88_TRACE_ARMFDC=<n> starts the trace after the n'th FDC
+  // result (this was hardcoded to 6 for 軽井沢's cyl20 read).
+  if (g_armFdc > 0 && ++g_resN == g_armFdc) g_traceOn = 1;
 }
+
 void (*g_fdcReadHook)(unsigned c, unsigned h, unsigned r, unsigned n, unsigned eot) = nullptr;
 static void fdcReadLog(unsigned c, unsigned h, unsigned r, unsigned n, unsigned eot) {
   ++g_rdN;
@@ -105,8 +130,29 @@ int main(int argc, char** argv) {
   g_fdcReadHook = fdcReadLog;
   g_fdcResultHook = fdcResultLog;
   g_mainCpu = (void*)pc88.GetCPU1();  // trace MAIN cpu
-  g_pcHook = pcLog;                   // enable MAIN pc trace (armed at 6th FDC result)
   // g_mrdHook = mrdLog;  // (byte log off — capturing pc trace instead)
+
+  // ---- env-configured instrumentation (see m88ref/README.md) ----
+  const char* tracePath = getenv("M88_TRACE");
+  if (tracePath) {
+    if (const char* s = getenv("M88_TRACE_FROM"))  g_armFrame = atoi(s);
+    if (const char* s = getenv("M88_TRACE_ARMPC")) g_armPc = strtol(s, 0, 16);
+    if (const char* s = getenv("M88_TRACE_ARMFDC")) g_armFdc = atoi(s);
+    g_traceMax = (int)((getenv("M88_TRACE_MAX")) ? atol(getenv("M88_TRACE_MAX")) : 200000);
+    if (g_armFrame < 0 && g_armPc < 0 && g_armFdc == 0) g_armFrame = 0;  // default: from boot
+    g_pcbuf = new unsigned[g_traceMax];
+    g_pcHook = pcLog;
+    printf("# trace -> %s  (armFrame=%d armPc=%ld armFdc=%d max=%d)\n",
+           tracePath, g_armFrame, g_armPc, g_armFdc, g_traceMax);
+  }
+  if (const char* w = getenv("M88_WATCH")) {
+    unsigned lo = 0, hi = 0; char* end = nullptr;
+    lo = (unsigned)strtol(w, &end, 16);
+    hi = (end && *end == '-') ? (unsigned)strtol(end + 1, 0, 16) : lo;
+    g_wrLo = lo; g_wrHi = hi; g_wrHook = wrLog;
+    if (const char* s = getenv("M88_WATCH_MAX")) g_wrMax = atol(s);
+    printf("# watching MAIN writes to %04x-%04x (max %ld lines)\n", lo, hi, g_wrMax);
+  }
   int win0 = argc > 4 ? atoi(argv[4]) : -1, win1 = argc > 5 ? atoi(argv[5]) : -1;
   for (g_frame = 0; g_frame < frames; g_frame++) {
     pc88.Proceed(fp, clock, eff);   // full frame = correct M88 timing
@@ -116,13 +162,20 @@ int main(int argc, char** argv) {
   g_e6cdHook = nullptr;
 
   g_pcHook = nullptr;
-  // dump the post-cyl20 instruction trace (dedup consecutive dups) for cross-emu diff
-  { FILE* tf = fopen("/home/opa/.claude/jobs/70f55d65/tmp/m88_trace.txt", "w");
-    unsigned prev = 0xffffffff;
-    for (int i = 0; i < g_traceN; i++) { if (g_pcbuf[i] != prev) { fprintf(tf, "%04x\n", g_pcbuf[i]); prev = g_pcbuf[i]; } }
-    fclose(tf);
-    printf("# traced %d instrs after cyl20 R8\n", g_traceN);
+  // dump the instruction trace (dedup consecutive dups) for cross-emulator diff
+  if (tracePath && g_pcbuf) {
+    FILE* tf = fopen(tracePath, "w");
+    if (!tf) { printf("# ERR cannot write trace to %s\n", tracePath); }
+    else {
+      unsigned prev = 0xffffffff;
+      long n = 0;
+      for (int i = 0; i < g_traceN; i++) { if (g_pcbuf[i] != prev) { fprintf(tf, "%04x\n", g_pcbuf[i]); prev = g_pcbuf[i]; n++; } }
+      fclose(tf);
+      printf("# traced %d instrs (%ld after dedup) -> %s\n", g_traceN, n, tracePath);
+      if (g_traceN >= g_traceMax) printf("# WARNING trace buffer full — raise M88_TRACE_MAX\n");
+    }
   }
+  if (g_wrHook && g_wrN > g_wrMax) printf("# WARNING %ld writes matched, only %ld printed\n", g_wrN, g_wrMax);
 
   printf("# M88 total FDC data bytes served to sub: %u\n", g_fdcDataCount);
   // dump key game-state regions for cross-emulator diff
