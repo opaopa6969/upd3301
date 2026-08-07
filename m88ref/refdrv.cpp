@@ -143,7 +143,13 @@ int main(int argc, char** argv) {
   g_e6cdHook = e6cdLog;
   g_fdcReadHook = fdcReadLog;
   g_fdcResultHook = fdcResultLog;
-  g_mainCpu = (void*)pc88.GetCPU1();  // trace MAIN cpu
+  // Which CPU the pc/read/write hooks follow. The disk sub-system is a second
+  // Z80 running DISK.ROM, and the 8255 handshake between the two is where a
+  // whole class of divergences lives — so it must be traceable too.
+  const char* whichCpu = getenv("M88_CPU");
+  const bool traceSub = whichCpu && (whichCpu[0] == 's' || whichCpu[0] == 'S' || whichCpu[0] == '2');
+  g_mainCpu = traceSub ? (void*)pc88.GetCPU2() : (void*)pc88.GetCPU1();
+  if (traceSub) printf("# hooks follow the SUB cpu (CPU2)\n");
   // g_mrdHook = mrdLog;  // (byte log off — capturing pc trace instead)
 
   // ---- env-configured instrumentation (see m88ref/README.md) ----

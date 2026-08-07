@@ -14,6 +14,7 @@
 //     --armpc <hex>    start tracing at the first execution of this PC
 //     --from <frame>   start tracing at this frame (default 0 if no --armpc)
 //     --max <n>        instruction budget (default 3000000)
+//     --cpu sub      trace the disk sub-system Z80 (pc80s31) instead of the main CPU
 //     --romdir <dir>
 //
 // Then: node tools/trace-diff.mjs ours.txt m88.txt
@@ -48,9 +49,12 @@ const TV = opt('tvram', 'normal');
 if (TV !== 'normal') Object.defineProperty(m, '_tvramOn', { get: () => TV === 'on' });
 parseD88All(rd(resolve(disk))).forEach((img, u) => { if (u < 2) m.insertDisk(u, img); });
 
+const SUB = (opt('cpu', 'main') || 'main').startsWith('s');
+if (SUB && !m.sub) { console.error('no sub CPU on this machine (needs a DISK.ROM)'); process.exit(2); }
+
 const buf = new Uint16Array(MAX);
 let n = 0, on = false, prev = -1, armFrame = -1;
-const c = m.cpu;
+const c = SUB ? m.sub.cpu : m.cpu;
 const os = c.step.bind(c);
 c.step = () => {
   const pc = c.pc;
