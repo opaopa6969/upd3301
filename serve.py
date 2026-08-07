@@ -38,6 +38,12 @@ Neither the user id nor the role is ever used as a path component — both are
 hashed — so a hostile role string cannot escape the store directory.
 Env: USERSTORE_DIR (default ./userdata), USERSTORE_MAX_BLOB, USERSTORE_MAX_TOTAL.
 
+Liveness probe (GET/HEAD /healthz -> 200 "ok"): external monitoring could only
+ever see the gateway's auth redirect (302), so a dead backend still looked
+green. This path is answered before any auth gate and before static file
+lookup, and deliberately reveals NOTHING about the host - no ROM inventory, no
+paths, no versions - so it is safe to expose unauthenticated.
+
 Usage: python3 serve.py [port]
 """
 import hashlib
@@ -105,6 +111,19 @@ def _is_gated(path):
 
 
 class NoCacheHandler(SimpleHTTPRequestHandler):
+    def _healthz(self, body=True):
+        """Answer GET/HEAD /healthz. Return True if this request was ours."""
+        if self.path.split('?', 1)[0] != '/healthz':
+            return False
+        payload = b'ok\n'
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Length', str(len(payload)))
+        self.end_headers()  # Cache-Control: no-cache added by the override below
+        if body:
+            self.wfile.write(payload)
+        return True
+
     def _gate_ok(self):
         if not _is_gated(self.path):
             return True
@@ -212,6 +231,8 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
         return True
 
     def do_GET(self):
+        if self._healthz():  # before any gate: monitoring is never authenticated
+            return
         if self._store():
             return
         # No server-side ROM manifest? Return an empty one (200 {}) instead of a
@@ -242,6 +263,8 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
             self._json(405, {'error': 'method not allowed'})
 
     def do_HEAD(self):
+        if self._healthz(body=False):
+            return
         if self._gate_ok():
             super().do_HEAD()
 
