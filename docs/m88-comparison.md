@@ -177,3 +177,56 @@ node tools/batch-compare.mjs <romDir> <diskDir> 250
 ```
 See [`../m88ref/README.md`](../m88ref/README.md) for the full method and a
 paste-ready sub-agent prompt. Add rows/divergences here as they're found.
+
+## Correction (2026-08-08): "low-address execution" is not a crash signal
+
+The two remaining divergences were characterised with `tools/crash-trace.mjs`,
+whose verdict is "hot PCs below 0x1000 == executing garbage == CRASH". That
+premise is wrong, and it mis-described both titles:
+
+- **Xanadu — a title that matches M88 exactly — runs 100% of its frames below
+  0x1000** once it is playing (`tools/life-scan.mjs Xanadu.d88 400`). Low RAM is
+  where several titles legitimately put their main loop. The region says nothing.
+- **Makaimura does not settle in low memory at all.** It executes low addresses
+  only transiently around f100-f200 (while loading), then from ~f300 onward runs
+  entirely in 8000-bfff. `crash-trace` happened to sample the transient window.
+
+What actually distinguishes a dead title is **how many distinct PCs it touches**
+and **whether it still talks to devices**:
+
+| title | distinct PCs / 2 frames | I/O while spinning | verdict |
+|-------|------------------------|--------------------|---------|
+| Xanadu (healthy) | ~544 | yes | tight loop |
+| Makaimura | 5972 | **none at all** | runaway |
+
+Makaimura marches *linearly* through a repeating 12-byte pattern (graphics data
+disassembling as `DAA / NOP / LD (8001h),A / SUB E / ADD A,B …`), with `iff1=false`,
+so it can never be rescued by an interrupt. It is a runaway, not a wait — which
+means the bug is **upstream**: something corrupted memory or the return stack
+earlier. Chasing the loop itself is chasing the corpse.
+
+One upstream link is already established (`tools/watch-write.mjs`): at f80 the
+bytes `cd ff 00` (= `CALL 00ff`) are written into `c444` by code at **`fccf`,
+which is inside the F000-FFFF text-VRAM window** — i.e. the CPU was already
+executing from the wrong side of that mapping. M88 gates the same window on
+`!(port32 & 0x10) && (sw31 & 0x40)` (`memory.cpp:836`, `UpdateF0`), where `sw31`
+is latched from input port 31h at reset; ours uses `dipsw[1] & 0x40`
+(`machine88.js` `_tvramOn`). Whether those two agree at that instant is the
+open question. Forcing the routing either way does not change the outcome, so
+the mapping alone is not the whole story.
+
+**Next step (issue #13):** `m88ref/refdrv.cpp` already contains a MAIN-CPU PC
+trace (`g_pcHook`/`pcLog`), but it is armed at "the 6th FDC result" and writes to
+a hardcoded path from a dead session. Generalise it (env-configurable path, and
+arm by frame), dump the same trace from our side, and diff — the first divergent
+instruction is the answer, and no heuristic is needed.
+
+### Tools added for this (all under `tools/`)
+
+| tool | question it answers |
+|------|--------------------|
+| `watch-write.mjs <disk> <addr[-end]> [frames]` | who wrote these bytes, from which PC, with what banking |
+| `life-scan.mjs <disk> [last] [tvram] [step]` | when did execution move, and did it ever recover |
+| `loop-profile.mjs <disk> [settle]` | is it waiting on a device, or running away |
+
+Note: these need **node ≥ 20** (the system `node` here is v12 and fails on `??`).
