@@ -687,3 +687,23 @@ test('machine: keyboard bytes arrive a few per frame, not all at once', () => {
   m.stepFrame();
   assert.ok(m.keyQueue.length >= 6, 'the serial link is not a firehose');
 });
+
+test('machine: the host\'s indexed/analog render path answers', () => {
+  // demo/machine.html asks every machine for render({indexed, analog}) to feed
+  // its phosphor simulation. A machine that only answers RGB drops out of the
+  // CRT pipeline silently.
+  const m = machine([0x60fe]);
+  m.stepFrame();
+  const f = m.render({ indexed: true, analog: true });
+  assert.equal(f.width * f.height, f.pixels.length);
+  assert.equal(f.drive.length, f.pixels.length * 3);
+  const g = m.render();
+  assert.equal(g.rgb.length, g.width * g.height * 3);
+});
+
+test('machine: the CRTC is not the 8801\'s CRTC', () => {
+  // The host probes for hsyncHz() rather than for a property called `crtc`,
+  // because both machines have one and they are different parts.
+  const m = machine([0x60fe]);
+  assert.equal(typeof m.crtc.hsyncHz, 'undefined');
+});

@@ -528,7 +528,14 @@ $('breset').onclick = () => boot();
 // satisfies the contract (stepFrame / frame / snapshot / restore) drops in
 // with the time-travel machinery already working.
 const hasOwnRender = (m) => !!m && typeof m.render === 'function';
-const crtcOf = (m) => (m && (m.crtc || (m.sys && m.sys.crtc))) || null;
+// "Has a CRTC the status line can read", not "has a property called crtc".
+// The X68000 has a `crtc` too and it is a completely different part — asking
+// it for hsyncHz() throws. Probing for the method rather than the name is what
+// keeps this a capability check.
+const crtcOf = (m) => {
+  const c = (m && (m.crtc || (m.sys && m.sys.crtc))) || null;
+  return c && typeof c.hsyncHz === 'function' ? c : null;
+};
 // One render call for every machine. Machines that render themselves take the
 // options (and ignore the ones that mean nothing to them); the PC-8001 renders
 // through its text system. `extra` picks the indexed/analog path.
