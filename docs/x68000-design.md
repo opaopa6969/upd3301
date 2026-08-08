@@ -25,7 +25,7 @@ jog-shuttle without knowing anything about it.
 | `x68fdd.js` | `.XDF`/`.IMG`, `.DIM` and `.D88` images, and the drive side of the floppy controller |
 | `ym2151.js` | The OPM: eight four-operator FM channels, LFO, noise, stereo, two timers |
 | `msm6258.js` | The OKI ADPCM chip |
-| `test-x68.mjs` | 46 `node --test` cases. No ROM required — every one builds its own IPL |
+| `test-x68.mjs` | 48 `node --test` cases. No ROM required — every one builds its own IPL |
 | `x68tools/boot.mjs` | Run a disk headlessly and report the picture |
 | `x68tools/sweep.mjs` | Run a directory of disks and classify each one |
 

@@ -24,7 +24,7 @@
 | `x68fdd.js` | `.XDF`/`.IMG`・`.DIM`・`.D88` の読み込みと、FDCのドライブ側 |
 | `ym2151.js` | OPM。8ch×4オペレータ、LFO、ノイズ、ステレオ、タイマ2本 |
 | `msm6258.js` | OKI の ADPCM |
-| `test-x68.mjs` | `node --test` 46件。**ROM不要** — すべて自前のIPLを組み立てて走る |
+| `test-x68.mjs` | `node --test` 48件。**ROM不要** — すべて自前のIPLを組み立てて走る |
 | `x68tools/boot.mjs` | ディスクを headless で走らせて画を報告する |
 | `x68tools/sweep.mjs` | ディレクトリ内のディスクを一斉に走らせて分類する |
 
