@@ -230,3 +230,67 @@ instruction is the answer, and no heuristic is needed.
 | `loop-profile.mjs <disk> [settle]` | is it waiting on a device, or running away |
 
 Note: these need **node ≥ 20** (the system `node` here is v12 and fails on `??`).
+
+## Resolved (2026-08-08): both remaining divergences were one missing µPD765 feature
+
+**Makaimura and GAZZEL were the same bug, and both now match M88 exactly.**
+
+| title | before | after | M88@1500 |
+|---|---|---|---|
+| Makaimura | 07/1987 | **09/3126** | 09/3126 ✔ |
+| GAZZEL | 00/2048 | **b7/3077** | b7/3077 ✔ |
+
+Bit 7 of a READ command is **MT (multi-track)**. When it is set, finishing the
+EOT sector on head 0 does *not* end the command: the FDC crosses to **head 1 of
+the same cylinder and continues at R=1**. A 2D loader uses this to pull both
+sides — 32 sectors, 8192 bytes — in a single command.
+
+We stopped at EOT, so we delivered **half** the requested data (16 sectors,
+4096 bytes) and the caller's buffer kept whatever the *previous* transfer left
+there. Makaimura decrypted that stale sector (C39 H1 R2) as its key table,
+then executed the resulting garbage.
+
+The result phase needed the same correction: under MT the two sides count as one
+cylinder, so C←C+1, H←0, R←1 happens only after head 1's EOT.
+
+### What found it, and what hid it
+
+- **Found it:** putting the byte streams side by side — what the sub read, and
+  what main received (`tools/watch-read.mjs`, `M88_RWATCH`). The first 2688 bytes
+  matched exactly and only the last 2048 (one read's worth) differed, which
+  pointed straight at the FDC. Then identifying the delivered sector by searching
+  the disk image for its content settled it: we were serving C39 H1 R2 — the
+  previous read — while M88 served C11 H1 R1.
+- **Hid it:** the FDC's command *and result phase* agreed byte for byte
+  (`C12 H0 R1 N1` on both sides) while the payload was half wrong. This is exactly
+  the "matching result header ≠ matching payload" caveat already recorded above
+  (credit: codex). A matching header is not evidence.
+
+## Harness defect (2026-08-08): the two emulators were running different ROM revisions
+
+M88 prefers a **combined image** and only falls back to the separate files:
+
+- `Memory::LoadROM()` — tries `pc88.rom`, else `n88.rom` / `n88_0..3.rom`
+- `SubSystem::LoadROM()` — tries `PC88.ROM` at **0x14000**, else `DISK.ROM`
+
+The m88204 set ships *both*, and `/mnt/c` is case-insensitive, so `PC88.ROM`
+resolves to `Pc88.rom`. M88 ran the combined image while our harness read the
+separate files — and they are not the same revision:
+
+| ROM | bytes differing |
+|---|---|
+| main N88 | 107 / 32768 |
+| N88 extension | 141 / 32768 |
+| sub (DISK) | **2021 / 8192** |
+
+Every comparison before this is contaminated by that. `tools/romset.mjs` loads a
+ROM directory in M88's own order — **use it in any harness from now on**.
+
+### M88 is not faithful everywhere — do not take the gold at face value
+
+`SubSystem::PatchROM()` rewrites the sub ROM: it NOPs the `CALL 02B4h` at `00fb`
+and `0105` — the 65536-iteration motor-spin-up delay. The original comment says
+it just makes booting slower if you leave it in. **We are the faithful one
+there**, and M88 is deliberately not. That is why our sub-CPU trace showed us
+spinning `02bb` 262144 times while M88 never touched it: not a bug. (Applying
+M88's patch on our side changes neither Makaimura nor GAZZEL — measured.)

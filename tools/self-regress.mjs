@@ -6,10 +6,15 @@
 // titles that were already fine? It boots every disk twice — once on the current
 // machine88.js, once on a copy of a previous revision — and diffs the fingerprint.
 //
-// Setup (the old copy must sit in the repo root so its relative imports resolve):
-//   git show HEAD:machine88.js > machine88.base.mjs        # or any revision
-//   node tools/self-regress.mjs <diskDir> [frames=400] [--limit n] [--romdir dir]
-//   rm machine88.base.mjs
+// The baseline must be a whole *checkout*, not a single file: a change to
+// upd765.js or i8255.js moves behaviour just as much as one to machine88.js,
+// and swapping only machine88.js would silently compare a revision against
+// itself and report a reassuring zero. (It did exactly that once.)
+//
+// Setup:
+//   git worktree add /tmp/upd3301-base HEAD~1
+//   node tools/self-regress.mjs <diskDir> [frames=400] --base /tmp/upd3301-base
+//   git worktree remove /tmp/upd3301-base
 //
 // A title that differs is not automatically a regression — many are mid-animation
 // at the sample frame, so a one-frame phase shift changes E6CD. Treat the *list*
@@ -31,11 +36,13 @@ const FRAMES = Number(argv[1] && !argv[1].startsWith('--') ? argv[1] : 400);
 const LIMIT = Number(opt('limit', 0));
 const ROMDIR = opt('romdir', '/mnt/c/var/emulator/エミュレーター本体/PC88/m88204');
 
-const BASE = resolve(new URL('..', import.meta.url).pathname, 'machine88.base.mjs');
-if (!existsSync(BASE)) {
-  console.error(`missing ${BASE}\n  create it with:  git show HEAD:machine88.js > machine88.base.mjs`);
+const baseDir = opt('base', null);
+if (!baseDir) {
+  console.error('missing --base <dir>\n  create one with:  git worktree add /tmp/upd3301-base HEAD~1');
   process.exit(2);
 }
+const BASE = resolve(baseDir, 'machine88.js');
+if (!existsSync(BASE)) { console.error(`no machine88.js in ${baseDir}`); process.exit(2); }
 const { Pc8801Machine: New } = await import('../machine88.js');
 const { Pc8801Machine: Old } = await import(BASE);
 
@@ -63,7 +70,7 @@ function fingerprint(Klass, bytes) {
 
 let files = readdirSync(DIR).filter((f) => /\.d88$/i.test(f)).sort();
 if (LIMIT) files = files.slice(0, LIMIT);
-console.log(`# ${files.length} disks, ${FRAMES}f, new=machine88.js vs base=machine88.base.mjs`);
+console.log(`# ${files.length} disks, ${FRAMES}f, new=. vs base=${baseDir}`);
 
 let same = 0, phase = 0; const moved = [];
 for (const f of files) {
