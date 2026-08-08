@@ -25,18 +25,20 @@
 // performs (page-cross, read-modify-write) advance the PPU exactly as they do
 // on hardware.
 //
-// ## What is not here yet (stage 3)
+// ## The APU and the CPU
 //
-// The APU. There is a small frame-counter + length-counter model below,
-// because those are not sound: the frame counter is an IRQ source games use
-// as a timer, and $4015's length-counter bits are polled by music drivers
-// that hang without them. It produces no audio and has no DMC — nesapu.js
-// replaces it. See docs/nes-design.md §7.
+// nesapu.js is clocked from the same _tick3() as the PPU, one APU tick per CPU
+// cycle. Two of its outputs are not sound at all and have to be wired here: the
+// frame counter's IRQ (games use it as a timer) and the DMC's DMA, which halts
+// the CPU for four cycles while it fetches a sample byte. The halt is done the
+// same way OAM DMA does it — by spending the cycles on the machine's clock
+// while the CPU is not executing.
 
 import { M6502 } from './m6502.js';
 import { NesPpu, SCREEN_W, SCREEN_H, buildNesPaletteRgb } from './nesppu.js';
 import { createMapper } from './nesmapper.js';
 import { parseINes, MIRRORING } from './ines.js';
+import { NesApu } from './nesapu.js';
 
 export const SCHEMA_VERSION = 1;
 
@@ -52,19 +54,11 @@ export const BUTTON = Object.freeze({
   A: 0, B: 1, SELECT: 2, START: 3, UP: 4, DOWN: 5, LEFT: 6, RIGHT: 7,
 });
 
-// APU length counter table. Values are frame counts, and the odd/even split
-// is the hardware's: the odd entries are a linear 1..30 ramp, the even ones a
-// musical set of note lengths.
-const LENGTH_TABLE = Uint8Array.from([
-  10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14,
-  12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30,
-]);
-
 const PALETTE_RGB = buildNesPaletteRgb();
 
 export class NesMachine {
   // Either `cart` (already parsed by ines.js) or `rom` (raw .nes bytes).
-  constructor({ cart = null, rom = null, frameHz = NTSC_FRAME_HZ } = {}) {
+  constructor({ cart = null, rom = null, frameHz = NTSC_FRAME_HZ, sampleRate = 48000 } = {}) {
     if (!cart && rom) cart = parseINes(rom);
     if (!cart) throw new Error('NesMachine needs a cartridge (cart or rom)');
     this.cart = cart;
@@ -86,8 +80,9 @@ export class NesMachine {
     this._openBus = 0;
     this._nmiPrev = false;
     this._dmaActive = false;
+    this._inDmcDma = false;
 
-    this._apuReset();
+    this.apu = new NesApu({ sampleRate, cpuHz: NTSC_CPU_HZ });
 
     // The bus is a closure so the CPU sees a plain { read, write } and stays a
     // general 6502. Every access ticks the clock first (see the header).
@@ -102,7 +97,7 @@ export class NesMachine {
 
   reset() {
     this.ppu.reset();
-    this._apuReset();
+    this.apu.reset();
     this._nmiPrev = false;
     this.cpu.setNmi(false);
     this.cpu.reset();
@@ -112,6 +107,7 @@ export class NesMachine {
   powerOn() {
     this.ram.fill(0);
     this.ppu.powerOn();
+    this.apu.powerOn();
     this.mapper.reset();
     this.frame = 0;
     this._acc = 0;
@@ -135,6 +131,12 @@ export class NesMachine {
     // in the other (the granularity of a CPU cycle is three dots, so the
     // sample point has to sit inside).
     const ppu = this.ppu;
+    // Boards whose IRQ counter runs off the CPU clock rather than the PPU's
+    // address bus (Sunsoft FME-7, the VRC family) get told the cycle first, so
+    // the line they raise is on the wire by this cycle's sample point below.
+    // MMC3-class boards do not use this — they count PPU A12 rises — and the
+    // flag keeps the call off the hot path for every board that needs neither.
+    if (this.mapper.wantsCpuCycle) this.mapper.cpuCycle(1);
     ppu.tick();
     this.cpu.setNmi(ppu.nmiLine());
     ppu.tick();
@@ -145,9 +147,35 @@ export class NesMachine {
     // 4-scanline_timing measures — it asks, to a single PPU clock, whether the
     // IRQ lands before or after one more instruction.
     this.cpu.setIrqSource(0, this.mapper.irq);
-    this.cpu.setIrqSource(1, this._frameIrq);
+    this.cpu.setIrqSource(1, this.apu.irq);
     ppu.tick();
-    this._apuTick();
+    this.apu.tick();
+    // The DMC has run out of shift-register bits and wants the next sample
+    // byte. It cannot ask the bus itself — the bus belongs to the machine —
+    // so the stall happens here, outside the APU, in the same way OAM DMA
+    // does it. The guard is not paranoia: _dmcDma() spends cycles, each of
+    // which comes back through _tick3().
+    if (this.apu.dmc.needByte && !this._inDmcDma) this._dmcDma();
+  }
+
+  // ---- DMC DMA -------------------------------------------------------------
+  // Four cycles of the CPU doing nothing while the sound hardware reads one
+  // byte of sample data. Those cycles are *stolen*, not shared: an instruction
+  // in progress is suspended between its own cycles, which is why a raster
+  // split timed by counting instructions drifts when a sample is playing, and
+  // why blargg's 4-irq_and_dma exists. The cost is charged to cpu.cycles
+  // directly because the CPU is halted and cannot charge it itself.
+  _dmcDma() {
+    this._inDmcDma = true;
+    this.cpu.stallForDma();
+    const addr = this.apu.dmc.curAddr;
+    for (let i = 0; i < 3; i++) this._dmaCycle();  // halt + alignment + dummy
+    this.cpu.cycles++;
+    this._tick3();
+    const v = this._read(addr);
+    this._openBus = v;
+    this.apu.dmc.fill(v);
+    this._inDmcDma = false;
   }
 
   // ---- CPU bus -------------------------------------------------------------
@@ -156,7 +184,7 @@ export class NesMachine {
     let v;
     if (addr < 0x2000) v = this.ram[addr & 0x7ff];              // 2KB, mirrored x4
     else if (addr < 0x4000) v = this.ppu.readReg(addr & 7);     // 8 registers, mirrored
-    else if (addr === 0x4015) v = this._apuStatus();
+    else if (addr === 0x4015) v = this.apu.readStatus(this._openBus);
     else if (addr === 0x4016) v = this._padRead(0);
     else if (addr === 0x4017) v = this._padRead(1);
     else if (addr < 0x4020) v = this._openBus;                  // write-only / test regs
@@ -173,7 +201,7 @@ export class NesMachine {
     if (addr < 0x4000) { this.ppu.writeReg(addr & 7, value); return; }
     if (addr === 0x4014) { this._oamDma(value); return; }
     if (addr === 0x4016) { this._padStrobe(value); return; }
-    if (addr < 0x4018) { this._apuWrite(addr, value); return; }
+    if (addr < 0x4018) { this.apu.write(addr, value); return; }
     if (addr < 0x4020) return; // CPU test registers, disabled on a retail NES
     this.mapper.cpuWrite(addr, value, this.cpu.cycles);
   }
@@ -186,6 +214,7 @@ export class NesMachine {
   // count by hand because the CPU is not executing during them.
   _oamDma(page) {
     this._dmaActive = true;
+    this.cpu.stallForDma();
     this._dmaCycle();                          // the halt cycle
     if (this.cpu.cycles & 1) this._dmaCycle(); // alignment: DMA reads on even cycles
     const base = (page & 0xff) << 8;
@@ -224,85 +253,12 @@ export class NesMachine {
   padUp(bit, pad = 0) { this.pads[pad] &= ~(1 << bit); return this; }
   setPad(mask, pad = 0) { this.pads[pad] = mask & 0xff; return this; }
 
-  // ---- APU (placeholder: timing only, no sound — see the header) ----------
-  _apuReset() {
-    this._apuCycle = 0;
-    this._apuMode5 = false;
-    this._apuIrqInhibit = false;
-    this._frameIrq = false;
-    this._apuEnable = 0;
-    this._apuLength = new Uint8Array(4); // pulse1, pulse2, triangle, noise
-    this._apuHalt = 0;                   // per-channel "halt length counter" bit
-  }
-
-  _apuTick() {
-    this._apuCycle++;
-    if (!this._apuMode5) {
-      // 4-step sequence, in CPU cycles. The quarter-frame steps clock the
-      // envelopes (no sound here, so they are elided); the half-frame steps
-      // clock the length counters, and the last step raises the frame IRQ.
-      switch (this._apuCycle) {
-        case 14913: this._clockLength(); break;
-        case 29829:
-          this._clockLength();
-          if (!this._apuIrqInhibit) this._frameIrq = true;
-          break;
-        case 29830: this._apuCycle = 0; break;
-        default: break;
-      }
-    } else {
-      switch (this._apuCycle) {
-        case 14913: this._clockLength(); break;
-        case 37281: this._clockLength(); break;
-        case 37282: this._apuCycle = 0; break;
-        default: break;
-      }
-    }
-  }
-
-  _clockLength() {
-    for (let i = 0; i < 4; i++) {
-      if (this._apuLength[i] && !(this._apuHalt & (1 << i))) this._apuLength[i]--;
-    }
-  }
-
-  _apuStatus() {
-    let v = 0;
-    for (let i = 0; i < 4; i++) if (this._apuLength[i]) v |= 1 << i;
-    if (this._frameIrq) v |= 0x40;
-    this._frameIrq = false; // reading $4015 acknowledges the frame IRQ
-    return v | (this._openBus & 0x20);
-  }
-
-  _apuWrite(addr, value) {
-    switch (addr) {
-      case 0x4000: this._setHalt(0, value & 0x20); break;
-      case 0x4004: this._setHalt(1, value & 0x20); break;
-      case 0x4008: this._setHalt(2, value & 0x80); break; // triangle uses bit 7
-      case 0x400c: this._setHalt(3, value & 0x20); break;
-      case 0x4003: this._loadLength(0, value); break;
-      case 0x4007: this._loadLength(1, value); break;
-      case 0x400b: this._loadLength(2, value); break;
-      case 0x400f: this._loadLength(3, value); break;
-      case 0x4015:
-        this._apuEnable = value;
-        for (let i = 0; i < 4; i++) if (!(value & (1 << i))) this._apuLength[i] = 0;
-        break;
-      case 0x4017:
-        this._apuMode5 = (value & 0x80) !== 0;
-        this._apuIrqInhibit = (value & 0x40) !== 0;
-        if (this._apuIrqInhibit) this._frameIrq = false;
-        this._apuCycle = 0;
-        // Setting the 5-step mode clocks the sequence immediately — games use
-        // that to force a length-counter tick at a known moment.
-        if (this._apuMode5) this._clockLength();
-        break;
-      default: break;
-    }
-  }
-
-  _setHalt(ch, on) { if (on) this._apuHalt |= 1 << ch; else this._apuHalt &= ~(1 << ch); }
-  _loadLength(ch, value) { if (this._apuEnable & (1 << ch)) this._apuLength[ch] = LENGTH_TABLE[value >> 3]; }
+  // ---- audio ---------------------------------------------------------------
+  // Same signature as machine88.renderAudio(): fill a mono Float32Array at the
+  // APU's sample rate. The host pump in demo/machine.html calls this and does
+  // not care which machine it is talking to. Unlike the OPN, the samples were
+  // already produced while the CPU ran (see nesapu.js) — this only drains them.
+  renderAudio(out, n = out.length) { return this.apu.render(out, n); }
 
   // ---- run -----------------------------------------------------------------
   // One video frame = "run until the PPU enters vblank". That boundary is the
@@ -390,11 +346,10 @@ export class NesMachine {
       strobe: this._strobe,
       openBus: this._openBus,
       nmiPrev: this._nmiPrev,
-      apu: {
-        cycle: this._apuCycle, mode5: this._apuMode5, inhibit: this._apuIrqInhibit,
-        frameIrq: this._frameIrq, enable: this._apuEnable,
-        length: this._apuLength.slice(), halt: this._apuHalt,
-      },
+      // Arrays of numbers and booleans, no sample ring (see nesapu.js's header):
+      // ~90 numbers, which is why adding the whole APU did not move the
+      // snapshot size measurably.
+      apu: this.apu.getState(),
       frame: this.frame,
       acc: this._acc,
     };
@@ -410,17 +365,14 @@ export class NesMachine {
     this._strobe = s.strobe;
     this._openBus = s.openBus;
     this._nmiPrev = s.nmiPrev;
-    const a = s.apu;
-    this._apuCycle = a.cycle; this._apuMode5 = a.mode5; this._apuIrqInhibit = a.inhibit;
-    this._frameIrq = a.frameIrq; this._apuEnable = a.enable;
-    this._apuLength.set(a.length); this._apuHalt = a.halt;
+    this.apu.setState(s.apu);
     this.frame = s.frame;
     this._acc = s.acc ?? 0;
     // The CPU's own interrupt lines are part of its state, but the levels the
     // machine drives them with are ours; re-assert them so the first cycle
     // after a restore sees the same wires as the first cycle before it.
     this.cpu.setIrqSource(0, this.mapper.irq);
-    this.cpu.setIrqSource(1, this._frameIrq);
+    this.cpu.setIrqSource(1, this.apu.irq);
     return this;
   }
 

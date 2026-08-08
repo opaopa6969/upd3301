@@ -13,8 +13,9 @@
 // is an ordinary answer (`{ ok:false }` from `tryCreateMapper`), not a crash,
 // because a ROM library is full of boards nobody implemented yet.
 //
-// Boards implemented here (the five the issue asks for, plus AxROM which is
-// three lines and covers Rare's catalogue):
+// Boards implemented here. The first group is Nintendo's own and covers most
+// of the licensed library on its own; the rest is the long tail, ordered by how
+// many cartridges use it rather than by how interesting it is.
 //
 //   0  NROM   — no banking at all. The board IS the wires.
 //   1  MMC1   — Nintendo's first ASIC. A 5-bit SERIAL shift register, because
@@ -26,6 +27,22 @@
 //               bus (see A12 below); it is what makes split-screen status
 //               bars possible, and half the classics use it.
 //   7  AxROM  — 32KB PRG bank + single-screen mirroring select.
+//   9  MMC2   — Punch-Out!!: CHR banks switched by watching PPU fetches.
+//  10  MMC4   — MMC2 with a 16KB PRG window (Fire Emblem, Famicom Wars).
+//  21/22/23/25 VRC2 + VRC4 — Konami. One chip, four numbers, because the
+//               register address lines are wired differently per revision.
+//  24/26 VRC6  — Akumajou Densetsu. Banking only; the expansion audio is not
+//               implemented (see docs/nes-design.md §11).
+//  69  FME-7   — Sunsoft. CPU-clocked down-counter IRQ (Gimmick!, Batman RotJ).
+//  73  VRC3    — Salamander. A 16-bit IRQ counter.
+//  75  VRC1    — Ganbare Goemon.
+//  206 Namcot 108 / DxROM — MMC3's ancestor, no IRQ.
+//  11/34/66/71/79/87/180/232 — discrete-logic and unlicensed boards, one
+//               register each. Cheap in code, and a long tail of cartridges.
+//
+// Together these cover roughly 90% of the licensed NTSC/JP library by title
+// count. The biggest remaining gap is MMC5 (5) and Namco 163 (19); see
+// docs/nes-design.md §11 for the list and why they are harder.
 //
 // Contract: pure, dependency-free, deterministic, plain-data state. No
 // Math.random. `getState()`/`setState()` are exact inverses, and immutable
@@ -77,6 +94,10 @@ export class Mapper {
     // dot. 89,000 calls a frame is worth paying for a scanline counter and
     // not worth paying for NROM, so the PPU tests this flag instead.
     this.wantsPpuBus = false;
+    // The other opt-in: boards whose IRQ counter is clocked by the CPU rather
+    // than by PPU fetches (FME-7, the VRCs). Same reasoning — a flag test per
+    // cycle instead of a call every board would ignore.
+    this.wantsCpuCycle = false;
     this.chrMask = this._mask(this.chr.length);
     this.prgMask = this._mask(this.prg.length);
     this.reset();
@@ -454,6 +475,722 @@ class Mmc3 extends Mapper {
 }
 
 // ---------------------------------------------------------------------------
+// The second wave of boards. Everything above is Nintendo's own; most of what
+// follows is either a licensee's cheap discrete-logic board (one register, one
+// bank) or a Konami ASIC (banking plus a real interrupt timer). Coverage per
+// line of code is very different between the two, and both are worth having:
+// the discrete boards are a long tail of budget carts, the VRCs are most of
+// Konami's Famicom catalogue.
+
+// 9 — MMC2 (PxROM). Punch-Out!! and nothing else, but it is the only board
+// that switches CHR banks *by watching what the PPU fetches*. Two 4KB windows,
+// each with two banks, and a latch per window that flips when the PPU reads a
+// tile numbered $FD or $FE. Punch-Out!! puts the opponent's face in those
+// tiles, so the sprite is drawn from one bank at the top and another at the
+// bottom with no CPU involvement at all — a 128-tile character on a board that
+// can only address 8KB at a time.
+class Mmc2 extends Mapper {
+  reset() {
+    this.prgBank = 0;
+    this.latch0 = 1; this.latch1 = 1;
+    this.chrBanks = [0, 0, 0, 0]; // [lo-FD, lo-FE, hi-FD, hi-FE]
+    this.prg8 = Math.max(1, (this.prg.length / 0x2000) | 0);
+  }
+
+  regWrite(addr, v) {
+    switch (addr & 0xf000) {
+      case 0xa000: this.prgBank = v & 0x0f; break;
+      case 0xb000: this.chrBanks[0] = v & 0x1f; break;
+      case 0xc000: this.chrBanks[1] = v & 0x1f; break;
+      case 0xd000: this.chrBanks[2] = v & 0x1f; break;
+      case 0xe000: this.chrBanks[3] = v & 0x1f; break;
+      case 0xf000: this.mirroring = (v & 1) ? MIRROR.HORIZONTAL : MIRROR.VERTICAL; break;
+      default: break;
+    }
+  }
+
+  // $8000 is the only switchable window; the last three 8KB banks are fixed.
+  prgOffset(addr) {
+    const n = this.prg8;
+    const bank = addr < 0xa000 ? (this.prgBank % n) : (n - 3 + ((addr - 0xa000) >> 13));
+    return ((bank + n) % n) * 0x2000 + (addr & 0x1fff);
+  }
+
+  chrOffset(addr) {
+    const a = addr & 0x1fff;
+    const banks = Math.max(1, (this.chr.length / 0x1000) | 0);
+    const bank = a < 0x1000
+      ? this.chrBanks[this.latch0 ? 1 : 0]
+      : this.chrBanks[this.latch1 ? 3 : 2];
+    return (bank % banks) * 0x1000 + (a & 0xfff);
+  }
+
+  // The latch flips AFTER the fetch it was triggered by, which is why the tile
+  // that does the switching is itself drawn from the old bank. MMC2 triggers on
+  // the single addresses $?FD8/$?FE8; MMC4 (below) on the whole $?FD8-$?FDF
+  // range, because it latches one PPU cycle later.
+  _latch(addr, wide) {
+    if (!wide && (addr & 7) !== 0) return; // MMC2 wants the exact address
+    const a = addr & 0x1ff8;
+    if (a === 0x0fd8) this.latch0 = 0;
+    else if (a === 0x0fe8) this.latch0 = 1;
+    else if (a === 0x1fd8) this.latch1 = 0;
+    else if (a === 0x1fe8) this.latch1 = 1;
+  }
+
+  ppuRead(addr) {
+    const v = this.chr[this.chrOffset(addr)];
+    this._latch(addr, false);
+    return v;
+  }
+
+  saveRegs(s) {
+    s.prgBank = this.prgBank; s.latch0 = this.latch0; s.latch1 = this.latch1;
+    s.chrBanks = this.chrBanks.slice();
+  }
+  loadRegs(s) {
+    this.prgBank = s.prgBank; this.latch0 = s.latch0; this.latch1 = s.latch1;
+    this.chrBanks = s.chrBanks.slice();
+  }
+}
+
+// 10 — MMC4 (FxROM). Fire Emblem, Famicom Wars. MMC2 with a 16KB PRG window
+// instead of 8KB, work RAM, and a latch that matches a range rather than a
+// single address.
+class Mmc4 extends Mmc2 {
+  prgOffset(addr) {
+    const n = this.prg16;
+    const bank = addr < 0xc000 ? (this.prgBank % n) : (n - 1);
+    return bank * 0x4000 + (addr & 0x3fff);
+  }
+  ppuRead(addr) {
+    const v = this.chr[this.chrOffset(addr)];
+    this._latch(addr, true);
+    return v;
+  }
+}
+
+// 11 — Color Dreams. The unlicensed workhorse: one write sets a 32KB PRG bank
+// in the low bits and an 8KB CHR bank in the high ones. No fixed window at
+// all, which is fine because the whole program is in the bank.
+class ColorDreams extends Mapper {
+  reset() { this.prgBank = 0; this.chrBank = 0; }
+  regWrite(_a, v) { this.prgBank = v & 3; this.chrBank = (v >> 4) & 0x0f; }
+  prgOffset(addr) {
+    const n = Math.max(1, (this.prg.length / 0x8000) | 0);
+    return (this.prgBank % n) * 0x8000 + (addr & 0x7fff);
+  }
+  chrOffset(addr) {
+    const n = Math.max(1, (this.chr.length / 0x2000) | 0);
+    return (this.chrBank % n) * 0x2000 + (addr & 0x1fff);
+  }
+  saveRegs(s) { s.prgBank = this.prgBank; s.chrBank = this.chrBank; }
+  loadRegs(s) { this.prgBank = s.prgBank; this.chrBank = s.chrBank; }
+}
+
+// 34 — two unrelated boards sharing a number, told apart by whether the
+// cartridge has CHR-ROM. BNROM (Deadly Towers) has none and takes a 32KB PRG
+// bank from any write above $8000; NINA-001 (Impossible Mission II) has CHR
+// and puts its three registers at $7FFD-$7FFF, inside the work RAM window.
+class Mapper34 extends Mapper {
+  reset() { this.prgBank = 0; this.chrLo = 0; this.chrHi = 1; this.nina = !!this.chrRom; }
+  cpuWrite(addr, value) {
+    if (this.nina && addr >= 0x7ffd && addr <= 0x7fff) {
+      if (addr === 0x7ffd) this.prgBank = value;
+      else if (addr === 0x7ffe) this.chrLo = value;
+      else this.chrHi = value;
+      return;
+    }
+    super.cpuWrite(addr, value);
+  }
+  regWrite(_a, v) { if (!this.nina) this.prgBank = v; }
+  prgOffset(addr) {
+    const n = Math.max(1, (this.prg.length / 0x8000) | 0);
+    return (this.prgBank % n) * 0x8000 + (addr & 0x7fff);
+  }
+  chrOffset(addr) {
+    if (!this.nina) return super.chrOffset(addr);
+    const n = Math.max(1, (this.chr.length / 0x1000) | 0);
+    const a = addr & 0x1fff;
+    const bank = a < 0x1000 ? this.chrLo : this.chrHi;
+    return (bank % n) * 0x1000 + (a & 0xfff);
+  }
+  saveRegs(s) { s.prgBank = this.prgBank; s.chrLo = this.chrLo; s.chrHi = this.chrHi; }
+  loadRegs(s) { this.prgBank = s.prgBank; this.chrLo = s.chrLo; this.chrHi = s.chrHi; }
+}
+
+// 66 — GxROM / MHROM. Doraemon, Dragon Ball, Super Mario Bros. + Duck Hunt.
+// 32KB PRG and 8KB CHR from one byte, the simplest board that switches both.
+class Gxrom extends Mapper {
+  reset() { this.prgBank = 0; this.chrBank = 0; }
+  regWrite(_a, v) { this.prgBank = (v >> 4) & 3; this.chrBank = v & 3; }
+  prgOffset(addr) {
+    const n = Math.max(1, (this.prg.length / 0x8000) | 0);
+    return (this.prgBank % n) * 0x8000 + (addr & 0x7fff);
+  }
+  chrOffset(addr) {
+    const n = Math.max(1, (this.chr.length / 0x2000) | 0);
+    return (this.chrBank % n) * 0x2000 + (addr & 0x1fff);
+  }
+  saveRegs(s) { s.prgBank = this.prgBank; s.chrBank = this.chrBank; }
+  loadRegs(s) { this.prgBank = s.prgBank; this.chrBank = s.chrBank; }
+}
+
+// 71 — Camerica BF9093/BF9097 (Codemasters). UxROM's layout with the bank
+// register moved to $C000, plus — on the BF9097 half — a single-screen
+// mirroring bit at $9000 that Fire Hawk uses and no other Camerica game does.
+class Camerica71 extends Mapper {
+  reset() { this.bank = 0; this.single = false; }
+  regWrite(addr, v) {
+    if (addr >= 0x9000 && addr < 0xa000) {
+      this.single = true;
+      this.mirroring = (v & 0x10) ? MIRROR.SINGLE_B : MIRROR.SINGLE_A;
+    } else if (addr >= 0xc000) this.bank = v & 0x0f;
+  }
+  prgOffset(addr) {
+    const n = this.prg16;
+    const bank = addr < 0xc000 ? (this.bank % n) : (n - 1);
+    return bank * 0x4000 + (addr & 0x3fff);
+  }
+  saveRegs(s) { s.bank = this.bank; s.single = this.single; }
+  loadRegs(s) { this.bank = s.bank; this.single = !!s.single; }
+}
+
+// 79 — NINA-003/006 (AVE, Sachen). The register sits at $4100-$5FFF, i.e.
+// BELOW the cartridge's usual window, which is why it needs its own cpuWrite:
+// the address decoder on these boards only looks at A13 and A8.
+class Nina003 extends Mapper {
+  reset() { this.prgBank = 0; this.chrBank = 0; }
+  cpuWrite(addr, value) {
+    if ((addr & 0xe100) === 0x4100) {
+      this.prgBank = (value >> 3) & 1;
+      this.chrBank = value & 7;
+      return;
+    }
+    super.cpuWrite(addr, value);
+  }
+  prgOffset(addr) {
+    const n = Math.max(1, (this.prg.length / 0x8000) | 0);
+    return (this.prgBank % n) * 0x8000 + (addr & 0x7fff);
+  }
+  chrOffset(addr) {
+    const n = Math.max(1, (this.chr.length / 0x2000) | 0);
+    return (this.chrBank % n) * 0x2000 + (addr & 0x1fff);
+  }
+  saveRegs(s) { s.prgBank = this.prgBank; s.chrBank = this.chrBank; }
+  loadRegs(s) { this.prgBank = s.prgBank; this.chrBank = s.chrBank; }
+}
+
+// 87 — Jaleco/Konami's CHR-only board (Argus, City Connection). One register
+// in the work-RAM window, and its two bits arrive in the wrong order — a
+// wiring accident preserved in every emulator because the games depend on it.
+class Mapper87 extends Mapper {
+  reset() { this.chrBank = 0; }
+  cpuWrite(addr, value) {
+    if (addr >= 0x6000 && addr < 0x8000) {
+      this.chrBank = ((value & 1) << 1) | ((value >> 1) & 1);
+      return;
+    }
+    super.cpuWrite(addr, value);
+  }
+  chrOffset(addr) {
+    const n = Math.max(1, (this.chr.length / 0x2000) | 0);
+    return (this.chrBank % n) * 0x2000 + (addr & 0x1fff);
+  }
+  saveRegs(s) { s.chrBank = this.chrBank; }
+  loadRegs(s) { this.chrBank = s.chrBank; }
+}
+
+// 180 — UNROM with the windows the other way round (Crazy Climber). The FIXED
+// bank is the first one and the SWITCHABLE window is at $C000, because the
+// board's designer wired the bank register to the high half.
+class Unrom180 extends Mapper {
+  reset() { this.bank = 0; }
+  regWrite(_a, v) { this.bank = v & 0x0f; }
+  prgOffset(addr) {
+    const n = this.prg16;
+    const bank = addr < 0xc000 ? 0 : (this.bank % n);
+    return bank * 0x4000 + (addr & 0x3fff);
+  }
+  saveRegs(s) { s.bank = this.bank; }
+  loadRegs(s) { this.bank = s.bank; }
+}
+
+// 206 — Namcot 108 / Nintendo's DxROM. MMC3's ancestor: the same select/data
+// register pair, but no IRQ, no mirroring control (it is soldered) and narrower
+// bank fields. Implementing it separately rather than as a crippled MMC3 keeps
+// the field widths honest — Gauntlet writes bits the 108 ignores and MMC3 does
+// not, and a shared implementation would switch to a bank that does not exist.
+class Namcot108 extends Mapper {
+  reset() {
+    this.select = 0;
+    this.banks = new Uint8Array(8);
+    this.prg8 = Math.max(1, (this.prg.length / 0x2000) | 0);
+  }
+  regWrite(addr, v) {
+    if ((addr & 1) === 0) this.select = v & 7;
+    else this.banks[this.select] = v;
+  }
+  prgOffset(addr) {
+    const n = this.prg8;
+    let bank;
+    if (addr < 0xa000) bank = this.banks[6] & 0x0f;
+    else if (addr < 0xc000) bank = this.banks[7] & 0x0f;
+    else if (addr < 0xe000) bank = n - 2;
+    else bank = n - 1;
+    return (bank % n) * 0x2000 + (addr & 0x1fff);
+  }
+  chrOffset(addr) {
+    const a = addr & 0x1fff;
+    const n = Math.max(1, (this.chr.length / 0x400) | 0);
+    let bank;
+    if (a < 0x0800) bank = (this.banks[0] & 0x3e) + ((a >> 10) & 1);
+    else if (a < 0x1000) bank = (this.banks[1] & 0x3e) + ((a >> 10) & 1);
+    else bank = this.banks[2 + ((a - 0x1000) >> 10)] & 0x3f;
+    return (bank % n) * 0x400 + (a & 0x3ff);
+  }
+  saveRegs(s) { s.select = this.select; s.banks = this.banks.slice(); }
+  loadRegs(s) { this.select = s.select; this.banks.set(s.banks); }
+}
+
+// 232 — Camerica Quattro. Four games on one cartridge: the high register picks
+// a 64KB block, the low one a 16KB bank inside it, and the last bank of the
+// block is always at $C000 so the menu can jump back out.
+class Quattro extends Mapper {
+  reset() { this.block = 0; this.bank = 0; }
+  regWrite(addr, v) {
+    if (addr < 0xc000) this.block = (v >> 3) & 3;
+    else this.bank = v & 3;
+  }
+  prgOffset(addr) {
+    const n = this.prg16;
+    const bank = this.block * 4 + (addr < 0xc000 ? this.bank : 3);
+    return (bank % n) * 0x4000 + (addr & 0x3fff);
+  }
+  saveRegs(s) { s.block = this.block; s.bank = this.bank; }
+  loadRegs(s) { this.block = s.block; this.bank = s.bank; }
+}
+
+// ---------------------------------------------------------------------------
+// The Konami VRC family shares one interrupt timer, so it lives here once.
+//
+// Two modes. In cycle mode the counter is clocked every CPU cycle; in scanline
+// mode a prescaler divides by 341 PPU dots — i.e. by 113 and two thirds CPU
+// cycles, which the hardware achieves by subtracting 3 from a 341-step counter
+// each cycle. That fraction is the point: a raster split timed by a whole
+// number of CPU cycles drifts across the screen over a frame, and Konami's
+// games do not drift.
+class VrcIrq {
+  constructor() { this.reset(); }
+  reset() {
+    this.latch = 0; this.counter = 0; this.prescaler = 341;
+    this.enabled = false; this.enableAfterAck = false; this.cycleMode = false;
+    this.out = false;
+  }
+  setLatch(v) { this.latch = v & 0xff; }
+  setControl(v) {
+    this.enableAfterAck = (v & 1) !== 0;
+    this.enabled = (v & 2) !== 0;
+    this.cycleMode = (v & 4) !== 0;
+    if (this.enabled) { this.counter = this.latch; this.prescaler = 341; }
+    this.out = false;
+  }
+  ack() { this.out = false; this.enabled = this.enableAfterAck; }
+  tick() {
+    if (!this.enabled) return;
+    if (this.cycleMode) { this._clock(); return; }
+    this.prescaler -= 3;
+    if (this.prescaler <= 0) { this.prescaler += 341; this._clock(); }
+  }
+  // The counter counts UP to $FF and reloads from the latch, so a latch of
+  // $FF fires every clock and a latch of 0 fires every 256.
+  _clock() {
+    if (this.counter === 0xff) { this.counter = this.latch; this.out = true; }
+    else this.counter++;
+  }
+  save() {
+    return [this.latch, this.counter, this.prescaler, this.enabled ? 1 : 0,
+      this.enableAfterAck ? 1 : 0, this.cycleMode ? 1 : 0, this.out ? 1 : 0];
+  }
+  load(a) {
+    this.latch = a[0]; this.counter = a[1]; this.prescaler = a[2];
+    this.enabled = !!a[3]; this.enableAfterAck = !!a[4];
+    this.cycleMode = !!a[5]; this.out = !!a[6];
+  }
+}
+
+// 21/22/23/25 — VRC2 and VRC4. Gradius II, Contra (JP), Ganbare Goemon 2,
+// Crisis Force, Teenage Mutant Ninja Turtles (JP).
+//
+// One chip, four iNES numbers, because Konami wired the two low register
+// address lines differently on each board revision and the .nes format has no
+// room to say which. The registers are at $x000 plus a two-bit index, and that
+// index arrives on A0/A1, or A1/A0 swapped, or A2/A3, or A6/A7 depending on the
+// revision. Emulators resolve it by OR-ing the candidate lines together: a game
+// only ever drives the pair its own board uses, so the others read as zero and
+// the union is unambiguous in practice.
+class Vrc24 extends Mapper {
+  reset() {
+    this.prgBanks = [0, 1];
+    this.chrBanks = new Uint16Array(8);
+    this.swapMode = false;
+    this.irqUnit = new VrcIrq();
+    this.wantsCpuCycle = true;
+    this.prg8 = Math.max(1, (this.prg.length / 0x2000) | 0);
+    // VRC2a addresses CHR in 2KB units (it has one fewer address pin), so its
+    // bank numbers must be doubled. Mapper 22 is the only VRC2a.
+    this.chrShift = this.cart.mapper === 22 ? 1 : 0;
+    // VRC2 has no IRQ and no PRG swap mode; treating a VRC2 game's writes to
+    // $F000 as IRQ registers is harmless because it never makes them.
+    this.mapperNo = this.cart.mapper;
+  }
+
+  _index(addr) {
+    switch (this.mapperNo) {
+      case 21: return (((addr >> 1) & 3) | ((addr >> 6) & 3)) & 3;  // VRC4a (A1,A2) | VRC4c (A6,A7)
+      case 22: return (((addr >> 1) & 1) | ((addr & 1) << 1)) & 3;  // VRC2a: A0 and A1 are crossed
+      case 25: return ((((addr & 1) << 1) | ((addr >> 1) & 1))      // VRC4b/VRC2c: A0/A1 swapped
+        | (((addr >> 2) & 1) << 1) | ((addr >> 3) & 1)) & 3;        // VRC4d (A3,A2)
+      default: return ((addr & 3) | ((addr >> 2) & 3)) & 3;         // 22/23: A0,A1 (| A2,A3 for VRC4e)
+    }
+  }
+
+  regWrite(addr, v) {
+    const base = addr & 0xf000;
+    const i = this._index(addr);
+    switch (base) {
+      case 0x8000: this.prgBanks[0] = v & 0x1f; break;
+      case 0x9000:
+        if (i < 2) {
+          // Mirroring: VRC2 has one bit, VRC4 two. Reading only bit 0 on a
+          // VRC4 game that selects single-screen puts both nametables on the
+          // same page and the status bar ends up drawn over the playfield.
+          this.mirroring = [MIRROR.VERTICAL, MIRROR.HORIZONTAL, MIRROR.SINGLE_A, MIRROR.SINGLE_B][v & 3];
+        } else this.swapMode = (v & 2) !== 0;
+        break;
+      case 0xa000: this.prgBanks[1] = v & 0x1f; break;
+      case 0xb000: case 0xc000: case 0xd000: case 0xe000: {
+        const slot = ((base - 0xb000) >> 12) * 2 + (i >> 1);
+        const hi = (i & 1) !== 0;
+        const cur = this.chrBanks[slot];
+        this.chrBanks[slot] = hi ? ((cur & 0x0f) | ((v & 0x1f) << 4)) : ((cur & ~0x0f) | (v & 0x0f));
+        break;
+      }
+      default: // $F000
+        if (i === 0) this.irqUnit.setLatch((this.irqUnit.latch & 0xf0) | (v & 0x0f));
+        else if (i === 1) this.irqUnit.setLatch((this.irqUnit.latch & 0x0f) | ((v & 0x0f) << 4));
+        else if (i === 2) this.irqUnit.setControl(v);
+        else this.irqUnit.ack();
+        this.irq = this.irqUnit.out;
+        break;
+    }
+  }
+
+  prgOffset(addr) {
+    const n = this.prg8;
+    let bank;
+    // The swap bit exchanges the $8000 window with the fixed second-to-last
+    // bank, so a game can run its bank-switching code from either end.
+    if (addr < 0xa000) bank = this.swapMode ? n - 2 : this.prgBanks[0];
+    else if (addr < 0xc000) bank = this.prgBanks[1];
+    else if (addr < 0xe000) bank = this.swapMode ? this.prgBanks[0] : n - 2;
+    else bank = n - 1;
+    return (bank % n) * 0x2000 + (addr & 0x1fff);
+  }
+
+  chrOffset(addr) {
+    const a = addr & 0x1fff;
+    const n = Math.max(1, (this.chr.length / 0x400) | 0);
+    const bank = this.chrBanks[a >> 10] >> this.chrShift;
+    return (bank % n) * 0x400 + (a & 0x3ff);
+  }
+
+  cpuCycle() { this.irqUnit.tick(); this.irq = this.irqUnit.out; }
+
+  saveRegs(s) {
+    s.prgBanks = this.prgBanks.slice();
+    s.chrBanks = Array.from(this.chrBanks);
+    s.swapMode = this.swapMode;
+    s.irqUnit = this.irqUnit.save();
+  }
+  loadRegs(s) {
+    this.prgBanks = s.prgBanks.slice();
+    this.chrBanks.set(s.chrBanks);
+    this.swapMode = !!s.swapMode;
+    this.irqUnit.load(s.irqUnit);
+  }
+}
+
+// 24/26 — VRC6. Akumajou Densetsu (the Japanese Castlevania III) and Madara.
+// The banking is straightforward; what makes this chip famous is the two extra
+// pulse channels and a sawtooth mixed into the console's audio pin. Those are
+// NOT implemented: the board's sound registers are accepted and ignored, so
+// the games run and the music plays with the 2A03 channels only. See
+// docs/nes-design.md §11 — expansion audio is a separate piece of work, and a
+// silent expansion is a better answer than a wrong one.
+//
+// The two numbers differ only in that 26 swaps A0 and A1.
+class Vrc6 extends Mapper {
+  reset() {
+    this.prgBank16 = 0;
+    this.prgBank8 = 0;
+    this.chrBanks = new Uint8Array(8);
+    this.irqUnit = new VrcIrq();
+    this.wantsCpuCycle = true;
+    this.prg8 = Math.max(1, (this.prg.length / 0x2000) | 0);
+    this.swapLines = this.cart.mapper === 26;
+  }
+
+  regWrite(addr, v) {
+    const a0 = this.swapLines ? ((addr >> 1) & 1) : (addr & 1);
+    const a1 = this.swapLines ? (addr & 1) : ((addr >> 1) & 1);
+    const i = (a1 << 1) | a0;
+    switch (addr & 0xf000) {
+      case 0x8000: this.prgBank16 = v & 0x0f; break;
+      case 0xc000: this.prgBank8 = v & 0x1f; break;
+      case 0xb000:
+        if (i === 3) this.mirroring = [MIRROR.VERTICAL, MIRROR.HORIZONTAL, MIRROR.SINGLE_A, MIRROR.SINGLE_B][(v >> 2) & 3];
+        break;                                  // i 0-2 are the sawtooth channel
+      case 0x9000: case 0xa000: break;          // pulse 1 / pulse 2 — see the note above
+      case 0xd000: this.chrBanks[i] = v; break;
+      case 0xe000: this.chrBanks[4 + i] = v; break;
+      default: // $F000
+        if (i === 0) this.irqUnit.setLatch(v);
+        else if (i === 1) this.irqUnit.setControl(v);
+        else this.irqUnit.ack();
+        this.irq = this.irqUnit.out;
+        break;
+    }
+  }
+
+  prgOffset(addr) {
+    const n = this.prg8;
+    let bank;
+    if (addr < 0xc000) bank = (this.prgBank16 & 0x0f) * 2 + ((addr - 0x8000) >> 13);
+    else if (addr < 0xe000) bank = this.prgBank8;
+    else bank = n - 1;
+    return (bank % n) * 0x2000 + (addr & 0x1fff);
+  }
+
+  chrOffset(addr) {
+    const a = addr & 0x1fff;
+    const n = Math.max(1, (this.chr.length / 0x400) | 0);
+    return (this.chrBanks[a >> 10] % n) * 0x400 + (a & 0x3ff);
+  }
+
+  cpuCycle() { this.irqUnit.tick(); this.irq = this.irqUnit.out; }
+
+  saveRegs(s) {
+    s.prgBank16 = this.prgBank16; s.prgBank8 = this.prgBank8;
+    s.chrBanks = this.chrBanks.slice(); s.irqUnit = this.irqUnit.save();
+  }
+  loadRegs(s) {
+    this.prgBank16 = s.prgBank16; this.prgBank8 = s.prgBank8;
+    this.chrBanks.set(s.chrBanks); this.irqUnit.load(s.irqUnit);
+  }
+}
+
+// 75 — VRC1. Ganbare Goemon, Tetsuwan Atom. Konami's first custom board:
+// three 8KB PRG banks and two 4KB CHR banks, with the CHR banks' top bits
+// stranded in the mirroring register because the chip ran out of pins.
+class Vrc1 extends Mapper {
+  reset() {
+    this.prgBanks = [0, 1, 2];
+    this.chrLo = 0; this.chrHi = 0; this.chrHiBits = 0;
+    this.prg8 = Math.max(1, (this.prg.length / 0x2000) | 0);
+  }
+  regWrite(addr, v) {
+    switch (addr & 0xf000) {
+      case 0x8000: this.prgBanks[0] = v & 0x0f; break;
+      case 0x9000:
+        this.mirroring = (v & 1) ? MIRROR.HORIZONTAL : MIRROR.VERTICAL;
+        this.chrHiBits = (v >> 1) & 3;
+        break;
+      case 0xa000: this.prgBanks[1] = v & 0x0f; break;
+      case 0xc000: this.prgBanks[2] = v & 0x0f; break;
+      case 0xe000: this.chrLo = v & 0x0f; break;
+      case 0xf000: this.chrHi = v & 0x0f; break;
+      default: break;
+    }
+  }
+  prgOffset(addr) {
+    const n = this.prg8;
+    const bank = addr < 0xe000 ? this.prgBanks[(addr - 0x8000) >> 13] : n - 1;
+    return (bank % n) * 0x2000 + (addr & 0x1fff);
+  }
+  chrOffset(addr) {
+    const a = addr & 0x1fff;
+    const n = Math.max(1, (this.chr.length / 0x1000) | 0);
+    const bank = a < 0x1000
+      ? (this.chrLo | ((this.chrHiBits & 1) << 4))
+      : (this.chrHi | ((this.chrHiBits & 2) << 3));
+    return (bank % n) * 0x1000 + (a & 0xfff);
+  }
+  saveRegs(s) {
+    s.prgBanks = this.prgBanks.slice();
+    s.chrLo = this.chrLo; s.chrHi = this.chrHi; s.chrHiBits = this.chrHiBits;
+  }
+  loadRegs(s) {
+    this.prgBanks = s.prgBanks.slice();
+    this.chrLo = s.chrLo; this.chrHi = s.chrHi; this.chrHiBits = s.chrHiBits;
+  }
+}
+
+// 73 — VRC3. Salamander, and only Salamander. A 16-bit interrupt counter (the
+// rest of the family uses 8) and CHR-RAM, which is why the board has no CHR
+// banking at all.
+class Vrc3 extends Mapper {
+  reset() {
+    this.bank = 0;
+    this.latch = 0; this.counter = 0;
+    this.enabled = false; this.enableAfterAck = false; this.eightBit = false;
+    this.wantsCpuCycle = true;
+  }
+  regWrite(addr, v) {
+    switch (addr & 0xf000) {
+      case 0x8000: this.latch = (this.latch & 0xfff0) | (v & 0x0f); break;
+      case 0x9000: this.latch = (this.latch & 0xff0f) | ((v & 0x0f) << 4); break;
+      case 0xa000: this.latch = (this.latch & 0xf0ff) | ((v & 0x0f) << 8); break;
+      case 0xb000: this.latch = (this.latch & 0x0fff) | ((v & 0x0f) << 12); break;
+      case 0xc000:
+        this.enableAfterAck = (v & 1) !== 0;
+        this.enabled = (v & 2) !== 0;
+        this.eightBit = (v & 4) !== 0;
+        if (this.enabled) this.counter = this.latch;
+        this.irq = false;
+        break;
+      case 0xd000: this.irq = false; this.enabled = this.enableAfterAck; break;
+      case 0xf000: this.bank = v & 0x0f; break;
+      default: break;
+    }
+  }
+  cpuCycle() {
+    if (!this.enabled) return;
+    if (this.eightBit) {
+      if ((this.counter & 0xff) === 0xff) { this.counter = (this.counter & 0xff00) | (this.latch & 0xff); this.irq = true; }
+      else this.counter = (this.counter & 0xff00) | ((this.counter + 1) & 0xff);
+    } else if (this.counter === 0xffff) { this.counter = this.latch; this.irq = true; }
+    else this.counter = (this.counter + 1) & 0xffff;
+  }
+  prgOffset(addr) {
+    const n = this.prg16;
+    const bank = addr < 0xc000 ? (this.bank % n) : (n - 1);
+    return bank * 0x4000 + (addr & 0x3fff);
+  }
+  saveRegs(s) {
+    s.bank = this.bank; s.latch = this.latch; s.counter = this.counter;
+    s.enabled = this.enabled; s.enableAfterAck = this.enableAfterAck; s.eightBit = this.eightBit;
+  }
+  loadRegs(s) {
+    this.bank = s.bank; this.latch = s.latch; this.counter = s.counter;
+    this.enabled = !!s.enabled; this.enableAfterAck = !!s.enableAfterAck; this.eightBit = !!s.eightBit;
+  }
+}
+
+// 69 — Sunsoft FME-7 / 5B. Batman: Return of the Joker, Gimmick!, Hebereke.
+// Command/parameter pair (write the register number to $8000, the value to
+// $A000) covering eight 1KB CHR banks, three 8KB PRG banks, a work-RAM window
+// that can also be ROM, mirroring, and a 16-bit DOWN counter clocked by the
+// CPU — which is what lets Gimmick! keep its parallax bands stable.
+//
+// The 5B variant adds a YM2149 for expansion audio (Gimmick!'s soundtrack).
+// Not implemented; the registers are accepted and ignored, same as VRC6.
+class Fme7 extends Mapper {
+  reset() {
+    this.command = 0;
+    this.chrBanks = new Uint8Array(8);
+    this.prgBanks = new Uint8Array(4); // [$6000, $8000, $A000, $C000]
+    this.prgRamAt6000 = false;
+    this.prgRamEnabled = false;
+    this.irqEnabled = false; this.irqCounterEnabled = false;
+    this.irqCounter = 0;
+    this.wantsCpuCycle = true;
+    this.prg8 = Math.max(1, (this.prg.length / 0x2000) | 0);
+  }
+
+  regWrite(addr, v) {
+    if (addr < 0xa000) { this.command = v & 0x0f; return; }
+    if (addr < 0xc000) {
+      const c = this.command;
+      if (c < 8) this.chrBanks[c] = v;
+      else if (c === 8) {
+        this.prgRamAt6000 = (v & 0x40) !== 0;
+        this.prgRamEnabled = (v & 0x80) !== 0;
+        this.prgBanks[0] = v & 0x3f;
+      } else if (c < 12) this.prgBanks[c - 8] = v & 0x3f;
+      else if (c === 12) this.mirroring = [MIRROR.VERTICAL, MIRROR.HORIZONTAL, MIRROR.SINGLE_A, MIRROR.SINGLE_B][v & 3];
+      else if (c === 13) {
+        this.irqEnabled = (v & 1) !== 0;
+        this.irqCounterEnabled = (v & 0x80) !== 0;
+        this.irq = false;
+      } else if (c === 14) this.irqCounter = (this.irqCounter & 0xff00) | v;
+      else this.irqCounter = (this.irqCounter & 0x00ff) | (v << 8);
+      return;
+    }
+    // $C000-$FFFF is the audio chip on a 5B; ignored (see the note above).
+  }
+
+  cpuRead(addr) {
+    if (addr >= 0x6000 && addr < 0x8000) {
+      // The $6000 window is RAM or ROM depending on a bit, which is how
+      // Gimmick! gets 8KB more program space than the address map allows.
+      if (this.prgRamAt6000) return this.prgRamEnabled ? this.prgRam[(addr - 0x6000) % this.prgRam.length] : 0;
+      const n = this.prg8;
+      return this.prg[(this.prgBanks[0] % n) * 0x2000 + (addr & 0x1fff)];
+    }
+    return super.cpuRead(addr);
+  }
+
+  cpuWrite(addr, value) {
+    if (addr >= 0x6000 && addr < 0x8000) {
+      if (this.prgRamAt6000 && this.prgRamEnabled) {
+        this.prgRam[(addr - 0x6000) % this.prgRam.length] = value;
+        this.prgRamDirty = true;
+      }
+      return;
+    }
+    super.cpuWrite(addr, value);
+  }
+
+  prgOffset(addr) {
+    const n = this.prg8;
+    const bank = addr < 0xe000 ? this.prgBanks[1 + ((addr - 0x8000) >> 13)] : n - 1;
+    return (bank % n) * 0x2000 + (addr & 0x1fff);
+  }
+
+  chrOffset(addr) {
+    const a = addr & 0x1fff;
+    const n = Math.max(1, (this.chr.length / 0x400) | 0);
+    return (this.chrBanks[a >> 10] % n) * 0x400 + (a & 0x3ff);
+  }
+
+  // Counts DOWN, and fires when it passes through zero — the opposite of the
+  // VRCs. It keeps counting when the IRQ is disabled; only the output is gated.
+  cpuCycle() {
+    if (!this.irqCounterEnabled) return;
+    this.irqCounter = (this.irqCounter - 1) & 0xffff;
+    if (this.irqCounter === 0xffff && this.irqEnabled) this.irq = true;
+  }
+
+  saveRegs(s) {
+    s.command = this.command;
+    s.chrBanks = this.chrBanks.slice();
+    s.prgBanks = this.prgBanks.slice();
+    s.prgRamAt6000 = this.prgRamAt6000; s.prgRamEnabled = this.prgRamEnabled;
+    s.irqEnabled = this.irqEnabled; s.irqCounterEnabled = this.irqCounterEnabled;
+    s.irqCounter = this.irqCounter;
+  }
+  loadRegs(s) {
+    this.command = s.command;
+    this.chrBanks.set(s.chrBanks);
+    this.prgBanks.set(s.prgBanks);
+    this.prgRamAt6000 = !!s.prgRamAt6000; this.prgRamEnabled = !!s.prgRamEnabled;
+    this.irqEnabled = !!s.irqEnabled; this.irqCounterEnabled = !!s.irqCounterEnabled;
+    this.irqCounter = s.irqCounter;
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 // The registry. Adding a board is adding a line here plus a class — the
 // machine never learns a mapper number.
@@ -464,6 +1201,22 @@ export const MAPPERS = Object.freeze({
   3: Cnrom,
   4: Mmc3,
   7: Axrom,
+  9: Mmc2,
+  10: Mmc4,
+  11: ColorDreams,
+  21: Vrc24, 22: Vrc24, 23: Vrc24, 25: Vrc24,
+  24: Vrc6, 26: Vrc6,
+  34: Mapper34,
+  66: Gxrom,
+  69: Fme7,
+  71: Camerica71,
+  73: Vrc3,
+  75: Vrc1,
+  79: Nina003,
+  87: Mapper87,
+  180: Unrom180,
+  206: Namcot108,
+  232: Quattro,
 });
 
 export function supportedMappers() {

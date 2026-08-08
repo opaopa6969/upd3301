@@ -17,6 +17,7 @@
     "./ines": "./ines.js",
     "./nesppu": "./nesppu.js",
     "./nesmapper": "./nesmapper.js",
+    "./nesapu": "./nesapu.js",
     "./machinenes": "./machinenes.js",
     "./z80dis": "./z80dis.js",
     "./machine": "./machine.js",

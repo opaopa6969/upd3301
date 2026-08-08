@@ -55,6 +55,16 @@ export function runTestRom(bytes, { frames = 2400, name = 'rom' } = {}) {
       // stop as soon as they are done instead of burning the frame budget.
       if (f % 15 === 14) {
         const screen = nametableText(m);
+        // blargg's 2005 APU/frame-counter suite predates the $6000 protocol
+        // AND the word "passed": it prints a single hex result code, where 1
+        // means every subtest passed and anything else names the failure (see
+        // blargg_apu_2005.07.30/tests.txt). Without this rule the whole suite
+        // reads as a timeout, which is a worse lie than a fail.
+        const code = /^\s*\$([0-9A-F]{2})\s*$/i.exec(screen);
+        if (code) {
+          const n = parseInt(code[1], 16);
+          return { name, ok: n === 1, status: n, text: `result code $${code[1]}`, frames: f + 1, codeOnly: true };
+        }
         if (/passed|failed|error/i.test(screen)) {
           return { name, ok: /passed/i.test(screen) && !/failed|error/i.test(screen), status: null, text: screen.trim(), frames: f + 1 };
         }

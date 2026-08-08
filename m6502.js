@@ -74,6 +74,19 @@ export class M6502 {
     this.irqLine = 0;        // level-triggered: how many sources hold it low
     this.jammed = false;     // a KIL/JAM opcode froze the chip
     this._iHold = -1;        // SEI/CLI/PLP defer their effect by one instruction
+    // Per-cycle shadow of "an IRQ would be taken right now". The chip samples
+    // the interrupt lines every cycle, not only between instructions; the two
+    // places where that is observable are the taken-branch delay below and the
+    // vector hijacking in _interrupt(). Keeping a one-cycle history is enough
+    // for both, and far cheaper than threading a poll point through every
+    // addressing mode.
+    this._runIrq = false;
+    this._runIrqPrev = false;
+    this._irqSeen = 0;       // the lines as the CPU last saw them (not during DMA)
+    this._nmiSeen = false;
+    this._stallSeen = false; this._stallIrq = 0; this._stallNmi = false;
+    this._irqDelay = false;  // one instruction of IRQ suppression (taken branch)
+    this._nmiDelay = false;  // one instruction of NMI suppression (after BRK)
     return this;
   }
 
@@ -91,6 +104,9 @@ export class M6502 {
     this.jammed = false;
     this.nmiPending = false;
     this._iHold = -1;
+    this._irqDelay = false;
+    this._nmiDelay = false;
+    this._nmiSeen = false;
     return this;
   }
 
@@ -99,26 +115,71 @@ export class M6502 {
   // and holds it, so a level-based check would fire every instruction until
   // the handler read $2002. Callers that model the line use setNmi(level);
   // callers that just want "fire one NMI" use nmi().
-  nmi() { this.nmiPending = true; }
+  // Driving a line also updates what the CPU "has seen" (see _endCycle): a
+  // caller with no bus — a unit test, or a machine asserting a line from
+  // outside a cycle — must not have to know about the DMA bookkeeping. The
+  // stall latch in _endCycle() still wins where it matters.
+  nmi() { this.nmiPending = true; this._nmiSeen = true; }
 
   setNmi(level) {
-    if (level && !this.nmiLine) this.nmiPending = true;
+    if (level && !this.nmiLine) { this.nmiPending = true; this._nmiSeen = true; }
     this.nmiLine = !!level;
   }
 
   // IRQ is level-triggered and wire-ORed between sources (APU frame counter,
   // DMC, mapper). Track it as a count so one source releasing does not clear
   // another's request.
-  irq(level = true) { this.irqLine = level ? 1 : 0; }
+  irq(level = true) { this.irqLine = level ? 1 : 0; this._irqSeen = this.irqLine; }
   setIrqSource(bit, level) {
     this.irqLine = level ? (this.irqLine | (1 << bit)) : (this.irqLine & ~(1 << bit));
+    this._irqSeen = this.irqLine;
   }
 
   // ---- bus -----------------------------------------------------------------
   // One access = one cycle. Nothing else in this core increments `cycles`,
   // which is what makes the totals match hardware for free.
-  _rd(a) { this.cycles++; return this.bus.read(a & 0xffff) & 0xff; }
-  _wr(a, v) { this.cycles++; this.bus.write(a & 0xffff, v & 0xff); }
+  _rd(a) { this.cycles++; const v = this.bus.read(a & 0xffff) & 0xff; this._endCycle(); return v; }
+  _wr(a, v) { this.cycles++; this.bus.write(a & 0xffff, v & 0xff); this._endCycle(); }
+
+  // Called after every bus access, i.e. once per cycle. The machine drives the
+  // interrupt lines from inside bus.read/bus.write (that is where the PPU and
+  // APU advance), so by the time we get here the lines carry this cycle's
+  // level. Remembering the previous cycle's answer is what lets _branch() tell
+  // "the IRQ was already there" from "it arrived during this instruction".
+  // It also latches what the interrupt logic actually saw. That matters
+  // because the CPU does NOT run these on every machine cycle: while a DMA
+  // controller holds RDY low (OAM DMA, DMC sample fetch) the processor is
+  // halted and polls nothing, so a line that asserts inside the halt is
+  // invisible until the *next* instruction polls for itself — one whole
+  // instruction later than a naive "look at the wire at the boundary" model.
+  // blargg's 4-irq_and_dma measures exactly that instruction.
+  _endCycle() {
+    this._runIrqPrev = this._runIrq;
+    this._runIrq = this.irqLine !== 0 && !(this.p & FI);
+    if (this._stallSeen) {
+      this._irqSeen = this._stallIrq;
+      this._nmiSeen = this._stallNmi;
+      this._stallSeen = false;
+    } else {
+      this._irqSeen = this.irqLine;
+      this._nmiSeen = this.nmiPending;
+    }
+  }
+
+  // The machine calls this when a DMA controller is about to take the bus:
+  // OAM DMA ($4014, 513 cycles) or a DMC sample fetch (4). RDY goes low and
+  // the processor stops — it does not execute and it does not poll. So the
+  // boundary that ends the halted cycle must report the lines as they were
+  // BEFORE the stall, not after; the interrupt is picked up one instruction
+  // later, by the next instruction's own poll. Latched here because the
+  // machine performs the stall from inside the very bus access that triggered
+  // it, so by the time _endCycle() runs the wire has already changed.
+  stallForDma() {
+    if (this._stallSeen) return; // a DMC fetch nested inside an OAM DMA
+    this._stallSeen = true;
+    this._stallIrq = this.irqLine;
+    this._stallNmi = this.nmiPending;
+  }
   _fetch() { const v = this._rd(this.pc); this.pc = (this.pc + 1) & 0xffff; return v; }
   _push(v) { this._wr(0x0100 | this.s, v); this.s = (this.s - 1) & 0xff; }
   _pull() { this.s = (this.s + 1) & 0xff; return this._rd(0x0100 | this.s); }
@@ -237,9 +298,27 @@ export class M6502 {
   _branch(taken) {
     const off = this._fetch();
     if (!taken) return;
+    // "A taken non-page-crossing branch ignores IRQ during its last clock, so
+    // the next instruction executes before the IRQ." The chip polls at the
+    // second-to-last cycle; on a 3-cycle branch that is the operand fetch, so
+    // an IRQ that only asserted during that fetch is not seen and slips a whole
+    // instruction. blargg's 5-branch_delays_irq measures exactly this, and a
+    // core that takes the IRQ one instruction early breaks raster splits that
+    // are timed off an IRQ landing inside a delay loop.
+    const before = this._runIrq;
     this._rd(this.pc); // the chip already started fetching the next opcode
+    // "During its last clock": the comparison is against the level as it was
+    // before that clock, so only an IRQ that arrived *inside* it is ignored.
+    const late = this._runIrq && !before;
     const target = (this.pc + sign8(off)) & 0xffff;
-    if ((target & 0xff00) !== (this.pc & 0xff00)) this._rd((this.pc & 0xff00) | (target & 0xff));
+    if ((target & 0xff00) !== (this.pc & 0xff00)) {
+      // The page-cross fixup cycle gives the chip another poll, so the delay
+      // does not apply — which is why the quirk is specific to branches that
+      // stay inside a page.
+      this._rd((this.pc & 0xff00) | (target & 0xff));
+    } else if (late) {
+      this._irqDelay = true;
+    }
     this.pc = target;
   }
 
@@ -250,14 +329,33 @@ export class M6502 {
   _deferI(oldI) { this._iHold = oldI; }
 
   // ---- interrupt entry -----------------------------------------------------
+  // The sequence is the same seven cycles for BRK, IRQ and NMI; only the two
+  // vector fetches at the end differ. That is not a simplification, it is the
+  // hardware: the chip does not decide which vector to use until it is about to
+  // fetch it. So an NMI that arrives while a BRK or an IRQ is already pushing
+  // state "hijacks" the sequence — the stack ends up looking like a BRK/IRQ
+  // entry but control goes to the NMI handler. blargg's 2-nmi_and_brk and
+  // 3-nmi_and_irq exist for this and nothing else.
   _interrupt(vector, fromBrk) {
     if (!fromBrk) { this._rd(this.pc); this._rd(this.pc); } // two dummy fetches
     this._push((this.pc >> 8) & 0xff);
     this._push(this.pc & 0xff);
     this._push((this.p | FU | (fromBrk ? FB : 0)) & (fromBrk ? 0xff : ~FB));
+    // The vector is chosen here, after the status push and just before the
+    // fetch — five cycles into the sequence. That window width is what
+    // 2-nmi_and_brk prints: five of its ten delays must hijack, and moving this
+    // check one cycle either way turns it into four or six.
+    if (this.nmiPending && vector === IRQ_VECTOR) { this.nmiPending = false; vector = NMI_VECTOR; }
     this.p |= FI;
     this.pc = this._rd(vector) | (this._rd(vector + 1) << 8);
     this._iHold = -1;
+    // An interrupt sequence does not poll for interrupts itself, so at least
+    // one instruction of the handler always runs before the next one is taken.
+    // Without this, an NMI arriving during a BRK or IRQ entry re-enters
+    // immediately and the handler never sees its own first instruction — which
+    // is the difference 3-nmi_and_irq prints as "the NMI saw the flags before
+    // the handler's SEC" instead of after it.
+    this._nmiDelay = true;
   }
 
   // ---- execution -----------------------------------------------------------
@@ -271,13 +369,17 @@ export class M6502 {
     // instruction just retired may have deferred its change (see _deferI).
     const iMask = this._iHold >= 0 ? this._iHold : (this.p & FI);
     this._iHold = -1;
+    // Both suppressions last exactly one instruction boundary; consume them
+    // here so a second boundary sees the interrupt normally.
+    const nmiDelay = this._nmiDelay, irqDelay = this._irqDelay;
+    this._nmiDelay = false; this._irqDelay = false;
 
-    if (this.nmiPending) {
+    if (this._nmiSeen && this.nmiPending && !nmiDelay) {
       this.nmiPending = false;
       this._interrupt(NMI_VECTOR, false);
       return this.cycles - start;
     }
-    if (this.irqLine && !iMask) {
+    if (this._irqSeen && !iMask && !irqDelay) {
       this._interrupt(IRQ_VECTOR, false);
       return this.cycles - start;
     }
@@ -694,6 +796,14 @@ export class M6502 {
       cycles: this.cycles,
       nmiPending: this.nmiPending, nmiLine: this.nmiLine, irqLine: this.irqLine,
       jammed: this.jammed, iHold: this._iHold,
+      // Two booleans and a two-bit history, but leaving them out would make a
+      // restore diverge only when a rewind happened to land on the cycle after
+      // a taken branch or a BRK — the kind of bug that looks like "rewind is
+      // flaky" rather than "the CPU state is incomplete".
+      runIrq: this._runIrq, runIrqPrev: this._runIrqPrev,
+      irqDelay: this._irqDelay, nmiDelay: this._nmiDelay,
+      irqSeen: this._irqSeen, nmiSeen: this._nmiSeen,
+      stallSeen: this._stallSeen, stallIrq: this._stallIrq, stallNmi: this._stallNmi,
     };
   }
 
@@ -707,6 +817,13 @@ export class M6502 {
     this.irqLine = s.irqLine ?? 0;
     this.jammed = !!s.jammed;
     this._iHold = s.iHold ?? -1;
+    this._runIrq = !!s.runIrq;
+    this._runIrqPrev = !!s.runIrqPrev;
+    this._irqDelay = !!s.irqDelay;
+    this._nmiDelay = !!s.nmiDelay;
+    this._irqSeen = s.irqSeen ?? this.irqLine;
+    this._nmiSeen = s.nmiSeen ?? this.nmiPending;
+    this._stallSeen = !!s.stallSeen; this._stallIrq = s.stallIrq ?? 0; this._stallNmi = !!s.stallNmi;
     return this;
   }
 

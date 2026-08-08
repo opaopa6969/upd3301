@@ -1777,7 +1777,11 @@ let audioSetupStarted = false;
 let audioSamplesPushed = 0;        // play-cursor tracking for the push pump
 let pumpBuf = new Float32Array(AUDIO_MAXCHUNK);
 function renderAudioInto(buf, n) {
-  if (!machine || !machine.opn || rewinding || paused || scrubIndex !== null || shuttleX !== 0) { buf.fill(0, 0, n); return buf; } // silent while scrubbing / shuttling / paused
+  // Capability, not machine identity: anything that offers renderAudio() gets
+  // played (the 8801's OPN, the Famicom's APU). Testing for `machine.opn` here
+  // silently muted the Famicom, which is exactly the kind of instanceof-in-
+  // disguise the rest of this host was cleaned of.
+  if (!machine || typeof machine.renderAudio !== 'function' || rewinding || paused || scrubIndex !== null || shuttleX !== 0) { buf.fill(0, 0, n); return buf; } // silent while scrubbing / shuttling / paused
   machine.renderAudio(buf, n);
   return buf;
 }
