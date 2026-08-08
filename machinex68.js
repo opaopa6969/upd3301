@@ -25,11 +25,14 @@
 //
 // ## Memory
 //
-// RAM is 1 to 12 MB and reads above the installed amount are bus errors,
-// which is how software sizes the machine. The default here is 2 MB, and the
-// reason is the rewind ring rather than any hardware fact: a snapshot carries
-// the RAM, and 12 MB per frame would give a rewind buffer measured in seconds
-// per gigabyte. docs/x68000-design.md has the measurements and the argument.
+// RAM is 1 to 12 MB and reads above the installed amount are bus errors, which
+// is how software sizes the machine. The default here is 1 MB — the stock
+// ACE/EXPERT — and the reason is the rewind ring as much as the hardware: a
+// snapshot carries the RAM, so 12 MB of it is 12.8 MB per frame of history and
+// a rewind buffer measured in seconds per gigabyte. At 1 MB a snapshot is
+// 1564 KB. docs/x68000-design.md has the measurements and the argument, and
+// also the one thing this default is working around: declaring more than 1 MB
+// in SRAM stops the IPL programming the display, and that is unresolved.
 //
 // Deterministic: no Math.random, no Date.now. The real-time clock counts from
 // a fixed epoch supplied at construction, because a machine whose clock reads
@@ -127,7 +130,7 @@ export class X68000Machine {
     // output pins are wired to other chips entirely — CT1 forces the floppy
     // controller ready, CT2 halves the ADPCM's crystal.
     this.opm.onIrq = () => this.mfp.request(SRC.GPIP3);
-    this.opm.onCtrl = (ct1, ct2) => { this.fdcForceReady = ct1 !== 0; this.adpcm.setBaseClock(ct2); };
+    this.opm.onCtrl = (ct1, ct2) => { this.fdd.forceReady = ct1 !== 0; this.adpcm.setBaseClock(ct2); };
     this.adpcm = new Msm6258({ sampleRate, cpuHz: CPU_HZ });
 
     // The bus the DMAC drives. It is the same map the CPU sees minus the

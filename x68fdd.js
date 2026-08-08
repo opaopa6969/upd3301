@@ -263,6 +263,10 @@ export class X68Fdd {
     // machine posts it a few frames after insertion the way the real drive's
     // ready line settles. Zero means nothing pending.
     this.insertDelay = [0, 0, 0, 0];
+    // The OPM's CT1 pin is wired to the controller's READY input on this
+    // machine. A few loaders assert it to read a disk the drive says is not
+    // there, which is one of the cheaper copy protections.
+    this.forceReady = false;
     return this;
   }
 
@@ -282,7 +286,9 @@ export class X68Fdd {
   }
 
   isReady(unit) {
-    return unit >= 0 && unit < DRIVES && !!this.disks[unit] && this.insertDelay[unit] === 0;
+    if (unit < 0 || unit >= DRIVES) return false;
+    if (this.forceReady) return true;
+    return !!this.disks[unit] && this.insertDelay[unit] === 0;
   }
 
   // Called once per frame: the ready line comes up a moment after the door
@@ -409,7 +415,7 @@ export class X68Fdd {
                    format: !!m.format, rc: m.rc, rr: m.rr, rAddr: !!m.rAddr,
                    secCyl: m.sec ? m.sec.c : -1, secHead: m.sec ? m.sec.h : -1,
                    secR: m.sec ? m.sec.r : -1, secN: m.sec ? m.sec.n : -1 } : null,
-      ctrl: this.ctrl, select: this.select, motor: this.motor,
+      ctrl: this.ctrl, select: this.select, motor: this.motor, forceReady: this.forceReady,
       ejectMask: [...this.ejectMask], ledBlink: [...this.ledBlink],
       insertDelay: [...this.insertDelay],
     };
@@ -454,6 +460,7 @@ export class X68Fdd {
     }
     if (!f._multi) f.execBuf = s.execBufOwn ? Uint8Array.from(s.execBufOwn) : null;
     this.ctrl = s.ctrl; this.select = s.select; this.motor = s.motor;
+    this.forceReady = !!s.forceReady;
     this.ejectMask = [...s.ejectMask]; this.ledBlink = [...s.ledBlink];
     this.insertDelay = [...s.insertDelay];
     return this;
