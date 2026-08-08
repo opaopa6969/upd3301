@@ -59,6 +59,7 @@
   <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="ファミコン(NES)のカートリッジ(.nes)を読み込む。読み込むと機種がファミコンに切り替わる">🎮 ファミコン(.nes): <input type="file" id="fnes" accept=".nes,.NES" style="font-size:11px"></label>
+  <label style="color:#778;font-size:12px" title="メガドライブのカートリッジ(.md/.bin/.gen/.smd)を読み込む。読み込むと機種がメガドライブに切り替わる">🕹 メガドライブ: <input type="file" id="fmd" accept=".md,.MD,.bin,.BIN,.gen,.GEN,.smd,.SMD,.68k" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <span id="grp-tape" style="display:inline-flex;gap:4px;align-items:center">
     <label style="color:#778;font-size:12px" title="カセットテープ(.t88/.cas/.cmt)を読み込む。N88モードで CLOAD するとテープから読める">📼 テープ: <input type="file" id="ftape" accept=".t88,.cas,.cmt,.T88,.CAS,.CMT" style="font-size:11px"></label>
@@ -99,7 +100,8 @@
 <div class="row" id="row-sys2"><span class="lbl">起動モード:</span>
   <span id="grp-bootmode"><button id="mn80" class="on">N-BASIC (N80)</button>
   <button id="mn88">N88-BASIC</button>
-  <button id="mnes" title="ファミコン(NES)。.nes を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">ファミコン</button></span>
+  <button id="mnes" title="ファミコン(NES)。.nes を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">ファミコン</button>
+  <button id="mmd" title="メガドライブ。.md/.bin/.gen/.smd を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">メガドライブ</button></span>
   <label style="color:#778;font-size:12px" title="サウンドボードII (OPNA/YM2608) を有効にする">SB2 <input type="checkbox" id="sb2" style="vertical-align:middle"></label>
   <label style="color:#778;font-size:12px" title="エミュレーション速度。倍速・早送り（実CPUが追いつく範囲まで）">速度 <select id="speed" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
     <option value="0.25">×0.25</option><option value="0.5">×0.5</option>
@@ -142,6 +144,8 @@ import { Pc8801Machine } from '../machine88.js';
 import { NesMachine, BUTTON as NES_BUTTON } from '../machinenes.js';
 import { tryParseINes, summarizeINes } from '../ines.js';
 import { tryCreateMapper } from '../nesmapper.js';
+import { MegaDriveMachine, BUTTON as MD_BUTTON } from '../machinemd.js';
+import { tryParseMdRom, summarizeMdRom } from '../mdrom.js';
 import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 import { parseD88All, summarize } from '../d88.js';
@@ -383,6 +387,23 @@ $('fnes').onchange = async (e) => {
   switchMode('nes');
   if (nesCart.warnings.length) guts.textContent = `${f.name}: ${nesCart.warnings.join(' / ')}`;
 };
+// ---- Mega Drive cartridge (.md / .bin / .gen / .smd) -----------------------
+// Same shape as the Famicom picker: the parse answers with data, not an
+// exception, because a file picker meets junk. A Mega Drive dump also arrives
+// in three different byte orders (see mdrom.js) and the ones that were
+// un-mangled say so on screen rather than silently.
+$('fmd').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  const parsed = tryParseMdRom(bytes, { name: f.name });
+  if (!parsed.ok) { guts.textContent = `${f.name}: ${parsed.error}`; return; }
+  mdCart = parsed.cart;
+  mdInfo = summarizeMdRom(mdCart);
+  mdName = f.name;
+  switchMode('md');
+  if (mdCart.warnings.length) guts.textContent = `${f.name}: ${mdCart.warnings.join(' / ')}`;
+};
 $('ffont').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
@@ -481,7 +502,7 @@ function renderMachine(extra = {}) {
   if (hasOwnRender(machine)) return machine.render({ cgrom, ...renderOpts(), ...extra });
   return machine.sys.render({ cgrom });
 }
-const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES' };
+const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', md: 'メガドライブ/MD' };
 // Raw-frame PNG: the machine's OWN render() (full 512-colour palette), with NO
 // phosphor / tube / interlace / line-double and no CSS scaling — the emulation's
 // ground truth at 640×200. Lets a corrupted scene be diagnosed as emulation vs
@@ -542,18 +563,21 @@ $('bpng').onclick = () => {
 // defaults (the user can still override before reset).
 function switchMode(mode) {
   bootMode = mode;
-  const is88 = mode === 'n88', isNes = mode === 'nes';
+  const is88 = mode === 'n88', isNes = mode === 'nes', isMd = mode === 'md';
   $('mn88').classList.toggle('on', is88);
   $('mn80').classList.toggle('on', mode === 'n80');
   $('mnes').classList.toggle('on', isNes);
-  // The Famicom has no DIP switches; leave the fields where they are so
+  $('mmd').classList.toggle('on', isMd);
+  // The consoles have no DIP switches; leave the fields where they are so
   // switching away and back does not lose the user's PC-88 setup.
-  if (!isNes) {
+  if (!isNes && !isMd) {
     $('dip1').value = is88 ? 'DB' : 'FF';
     $('dip2').value = is88 ? '79' : 'FF';
   }
   if (isNes && !nesCart) {
     $('dipnote').textContent = 'ファミコンのROM(.nes)を選ぶと起動する';
+  } else if (isMd && !mdCart) {
+    $('dipnote').textContent = 'メガドライブのROM(.md/.bin/.gen/.smd)を選ぶと起動する';
   } else if (is88 && !has88Set()) {
     $('dipnote').textContent = t('PC-8801 BIOS一式(n88.rom+n88_0..3.rom+disk.rom)を選ぶとN88で起動する');
   } else {
@@ -566,6 +590,7 @@ function switchMode(mode) {
 $('mn80').onclick = () => switchMode('n80');
 $('mn88').onclick = () => switchMode('n88');
 $('mnes').onclick = () => switchMode('nes');
+$('mmd').onclick = () => switchMode('md');
 for (const id of ['dip1', 'dip2']) $(id).onchange = () => boot();
 
 // Disk pool + drive assignment. A .d88 file can hold SEVERAL disk images, and a
@@ -1648,6 +1673,11 @@ let bootMode = 'n80';
 // it (that is what keeps a NES snapshot in the low kilobytes).
 let nesCart = null, nesInfo = null, nesName = '';
 let nesPad = 0; // live Famicom button mask (see NES_KEYMAP), ORed with the gamepad
+// The parsed Mega Drive cartridge, held for the same reason as the Famicom's:
+// it is immutable, so the machine keeps it by reference and no snapshot ever
+// copies it. A 4 MB cartridge in the rewind ring would be the end of rewind.
+let mdCart = null, mdInfo = null, mdName = '';
+let mdPad = 0;  // live 3-button pad mask (see MD_KEYMAP), ORed with the gamepad
 const dipOf = (id, dflt) => {
   const v = parseInt($(id).value.trim(), 16);
   return Number.isFinite(v) ? (v & 0xff) : dflt;
@@ -1705,6 +1735,16 @@ function boot() {
     // forward, rewind, jog-shuttle — runs on the same contract as the PC-88s.
     machine = new NesMachine({ cart: nesCart });
     nesPad = 0;
+    canvas.focus();
+    return;
+  }
+  if (bootMode === 'md') {
+    if (!mdCart) { guts.textContent = 'メガドライブのROM(.md/.bin/.gen/.smd)を選んでね'; return; }
+    // The cartridge header decides the region, and with it 60 Hz or 50 Hz —
+    // nothing here to configure. Fast forward, rewind and jog-shuttle run on
+    // the same contract as every other machine in this host.
+    machine = new MegaDriveMachine({ cart: mdCart });
+    mdPad = 0;
     canvas.focus();
     return;
   }
@@ -1777,7 +1817,10 @@ let audioSetupStarted = false;
 let audioSamplesPushed = 0;        // play-cursor tracking for the push pump
 let pumpBuf = new Float32Array(AUDIO_MAXCHUNK);
 function renderAudioInto(buf, n) {
-  if (!machine || !machine.opn || rewinding || paused || scrubIndex !== null || shuttleX !== 0) { buf.fill(0, 0, n); return buf; } // silent while scrubbing / shuttling / paused
+  // Capability, not class: any machine that can render audio does, and one
+  // that cannot (the PC-8001) stays silent. This used to test `machine.opn`,
+  // which meant every new machine needed the host taught about its sound chip.
+  if (!machine || typeof machine.renderAudio !== 'function' || rewinding || paused || scrubIndex !== null || shuttleX !== 0) { buf.fill(0, 0, n); return buf; } // silent while scrubbing / shuttling / paused
   machine.renderAudio(buf, n);
   return buf;
 }
@@ -1840,7 +1883,7 @@ function ensureAudio() {
     startScriptProcessor();
   }
 }
-canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); });
+canvas.addEventListener('click', () => { if (machine && typeof machine.renderAudio === 'function') ensureAudio(); });
 
 // ---- fold the piecemeal control rows into a grouped menu bar + pinnable dock ---
 {
@@ -2053,10 +2096,25 @@ function applyPad() {
   }
   if (machine.keys) for (let i = 0; i < 16; i++) machine.keys[i] = kbMatrix[i] & padM[i];
   if (machine.joy) machine.joy[0] = kbdJoy & padJoy; // 8001 has no joystick port
+  // Mega Drive: three buttons plus start, same translation of the 8801
+  // joystick bits as the Famicom below (the pad config panel keeps working for
+  // every family because nothing is mapped twice).
+  if (bootMode === 'md' && machine.pads) {
+    const j = ~padJoy & 0x3f;
+    let b = mdPad;
+    if (j & 0x01) b |= 1 << MD_BUTTON.UP;
+    if (j & 0x02) b |= 1 << MD_BUTTON.DOWN;
+    if (j & 0x04) b |= 1 << MD_BUTTON.LEFT;
+    if (j & 0x08) b |= 1 << MD_BUTTON.RIGHT;
+    if (j & 0x10) b |= 1 << MD_BUTTON.A;
+    if (j & 0x20) b |= 1 << MD_BUTTON.B;
+    machine.pads[0] = b;
+    return;
+  }
   // Famicom: no key matrix, eight buttons. The gamepad's 8801 joystick bits
   // (active LOW) are translated rather than mapped a second time, so the pad
   // config panel keeps working for both families.
-  if (machine.pads) {
+  if (bootMode === 'nes' && machine.pads) {
     const j = ~padJoy & 0x3f;
     let b = nesPad;
     if (j & 0x01) b |= 1 << NES_BUTTON.UP;
@@ -2075,6 +2133,21 @@ const NES_KEYMAP = {
   z: 'B', x: 'A', a: 'B', s: 'A',
   Enter: 'START', ' ': 'SELECT', Shift: 'SELECT',
 };
+// Keyboard -> Mega Drive 3-button pad. Z/X/C sit under the fingers in the
+// order the console prints on the pad, and Enter is START.
+const MD_KEYMAP = {
+  ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT',
+  z: 'A', x: 'B', c: 'C', a: 'A', s: 'B', d: 'C',
+  Enter: 'START', ' ': 'START',
+};
+function mdKeySet(e, down) {
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const name = MD_KEYMAP[key];
+  if (!name) return false;
+  const bit = 1 << MD_BUTTON[name];
+  mdPad = down ? (mdPad | bit) : (mdPad & ~bit);
+  return true;
+}
 function nesKeySet(e, down) {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const name = NES_KEYMAP[key];
@@ -2100,8 +2173,10 @@ function matrixKey(e) {
 const isFormFocused = () => { const el = document.activeElement; return el && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName); };
 window.addEventListener('keydown', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (bootMode === 'nes') {
-    if (!nesKeySet(e, true)) return;
+  if (bootMode === 'nes' || bootMode === 'md') {
+    const hit = bootMode === 'md' ? mdKeySet(e, true) : nesKeySet(e, true);
+    if (!hit) return;
+    ensureAudio(); // a keypress is a user gesture -> unblock autoplay
     if (frozen()) resumePlay();
     e.preventDefault();
     return;
@@ -2118,6 +2193,7 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
   if (bootMode === 'nes') { if (nesKeySet(e, false)) e.preventDefault(); return; }
+  if (bootMode === 'md') { if (mdKeySet(e, false)) e.preventDefault(); return; }
   const k = matrixKey(e);
   if (!e.shiftKey) kbSet([[8, 6]], false);
   const jb = joyBitFor(e);
@@ -2481,7 +2557,9 @@ function loop(now) {
     workMs = workMs * 0.9 + (nowP - t0) * 0.1;
     perfAccountRender(nowP - tEmu, nowP);
     guts.textContent = `${MACHINE_LABEL[bootMode] || 'machine'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
-      + (crtc ? `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz` : (nesInfo ? `  ${nesName} · ${nesInfo.board}` : ''))
+      + (crtc ? `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz`
+        : bootMode === 'md' && mdInfo ? `  ${mdName} · ${mdInfo.title || '(no title)'} · ${mdInfo.regions}`
+        : (nesInfo ? `  ${nesName} · ${nesInfo.board}` : ''))
       + (machine.effectiveCpuPct !== undefined ? `  CPU ${machine.effectiveCpuPct}%` : '')
       + (perfHud ? `\n${perfHud}` : '');
     updatePlayerBar();
