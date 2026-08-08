@@ -59,6 +59,11 @@
   <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="ファミコン(NES)のカートリッジ(.nes)を読み込む。読み込むと機種がファミコンに切り替わる">🎮 ファミコン(.nes): <input type="file" id="fnes" accept=".nes,.NES" style="font-size:11px"></label>
+  <span id="grp-fds" style="display:inline-flex;gap:4px;align-items:center">
+    <label style="color:#778;font-size:12px" title="ファミコンディスクシステムのディスク(.fds)を読み込む。先にディスクシステムBIOS(disksys.rom, 8KB)が要る">💽 ディスクシステム(.fds): <input type="file" id="ffds" accept=".fds,.FDS" style="font-size:11px"></label>
+    <label style="color:#778;font-size:12px" title="ディスクシステムBIOS disksys.rom（8192バイト）。一度選ぶとこのブラウザに保存される">BIOS: <input type="file" id="ffdsbios" accept=".rom,.ROM,.bin" style="font-size:11px"></label>
+    <select id="fdsside" title="ディスクの面を入れ替える（ゲームが『ディスクカードを裏返してください』と言ったとき）" style="display:none;background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px"></select>
+  </span>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <span id="grp-tape" style="display:inline-flex;gap:4px;align-items:center">
     <label style="color:#778;font-size:12px" title="カセットテープ(.t88/.cas/.cmt)を読み込む。N88モードで CLOAD するとテープから読める">📼 テープ: <input type="file" id="ftape" accept=".t88,.cas,.cmt,.T88,.CAS,.CMT" style="font-size:11px"></label>
@@ -141,6 +146,7 @@ import { Pc8001Machine } from '../machine.js';
 import { Pc8801Machine } from '../machine88.js';
 import { NesMachine, BUTTON as NES_BUTTON } from '../machinenes.js';
 import { tryParseINes, summarizeINes } from '../ines.js';
+import { tryParseFds, makeFdsCart } from '../fds.js';
 import { tryCreateMapper } from '../nesmapper.js';
 import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
@@ -380,9 +386,56 @@ $('fnes').onchange = async (e) => {
   nesCart = parsed.cart;
   nesInfo = summarizeINes(nesCart);
   nesName = f.name;
+  nesDisk = null;
   switchMode('nes');
   if (nesCart.warnings.length) guts.textContent = `${f.name}: ${nesCart.warnings.join(' / ')}`;
 };
+// ---- Famicom Disk System (.fds + disksys.rom) ------------------------------
+// Two files, not one: the game is on the disk and the program that boots it is
+// in the drive's BIOS, which Nintendo never put on the disks. The BIOS is
+// remembered in this browser (role 'fdsbios') so it only has to be picked once;
+// the disk is not, because disks are what the user swaps.
+$('ffdsbios').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const b = new Uint8Array(await f.arrayBuffer());
+  if (b.length !== 8192) { guts.textContent = `${f.name}: ディスクシステムBIOSは8192バイト（これは${b.length}バイト）`; return; }
+  fdsBios = b;
+  try { await putRom('fdsbios', f.name, b); refreshStore(); } catch {}
+  guts.textContent = `ディスクシステムBIOS: ${f.name} を記憶した`;
+  if (nesDisk) switchMode('nes');
+};
+$('ffds').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  const parsed = tryParseFds(bytes);
+  if (!parsed.ok) { guts.textContent = `${f.name}: ${parsed.error}`; return; }
+  if (!fdsBios) { guts.textContent = `${f.name}: 先にディスクシステムBIOS(disksys.rom, 8192バイト)を選んでね`; return; }
+  nesDisk = parsed.image;
+  nesCart = makeFdsCart(nesDisk, fdsBios);
+  nesInfo = { board: `FDS ${nesDisk.gameName} (${nesDisk.sideCount}面)` };
+  nesName = f.name;
+  buildFdsSideUI();
+  switchMode('nes');
+  if (nesDisk.warnings.length) guts.textContent = `${f.name}: ${nesDisk.warnings.join(' / ')}`;
+};
+// The side selector is the "turn the disk over" the game asks for. Changing it
+// ejects and re-inserts so the BIOS sees the disk leave, which is how it knows
+// a new side arrived — a silent swap would look like nothing happened.
+function buildFdsSideUI() {
+  const sel = $('fdsside');
+  sel.innerHTML = '';
+  if (!nesDisk || nesDisk.sideCount < 2) { sel.style.display = 'none'; return; }
+  for (let i = 0; i < nesDisk.sideCount; i++) {
+    const o = document.createElement('option');
+    o.value = String(i);
+    o.textContent = `💽 ディスク${((i >> 1) + 1)} ${i & 1 ? 'B面' : 'A面'}`;
+    sel.appendChild(o);
+  }
+  sel.style.display = '';
+  sel.onchange = () => { if (machine && machine.hasDisk) machine.setDiskSide(+sel.value); };
+}
 $('ffont').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
@@ -553,7 +606,9 @@ function switchMode(mode) {
     $('dip2').value = is88 ? '79' : 'FF';
   }
   if (isNes && !nesCart) {
-    $('dipnote').textContent = 'ファミコンのROM(.nes)を選ぶと起動する';
+    $('dipnote').textContent = fdsBios
+      ? 'ファミコンのROM(.nes)かディスク(.fds)を選ぶと起動する'
+      : 'ファミコンのROM(.nes)、またはディスクシステムBIOS(disksys.rom)＋ディスク(.fds)を選ぶと起動する';
   } else if (is88 && !has88Set()) {
     $('dipnote').textContent = t('PC-8801 BIOS一式(n88.rom+n88_0..3.rom+disk.rom)を選ぶとN88で起動する');
   } else {
@@ -1647,6 +1702,16 @@ let bootMode = 'n80';
 // immutable, so the machine holds it by reference and no snapshot ever copies
 // it (that is what keeps a NES snapshot in the low kilobytes).
 let nesCart = null, nesInfo = null, nesName = '';
+// The Disk System half. `nesDisk` is the parsed .fds image (immutable — the
+// drive keeps its own writable copy), `fdsBios` the 8KB disksys.rom. Neither is
+// in this repository; the BIOS is remembered in IndexedDB between visits.
+let nesDisk = null, fdsBios = null;
+// Picked once, kept for good. Unlike a disk, the BIOS is not something anyone
+// wants to choose twice, and this runs whether or not the PC-88 side of the
+// store had anything in it.
+(async () => {
+  try { const r = await getRom('fdsbios'); if (r && r.bytes && r.bytes.length === 8192) fdsBios = r.bytes; } catch {}
+})();
 let nesPad = 0; // live Famicom button mask (see NES_KEYMAP), ORed with the gamepad
 const dipOf = (id, dflt) => {
   const v = parseInt($(id).value.trim(), 16);
@@ -1699,11 +1764,15 @@ buildDipUI();
 function boot() {
   resetRewind(); // a fresh machine invalidates the old snapshot ring
   if (bootMode === 'nes') {
-    if (!nesCart) { guts.textContent = 'ファミコンのROM(.nes)を選んでね'; return; }
+    if (!nesCart) { guts.textContent = 'ファミコンのROM(.nes)かディスク(.fds＋disksys.rom)を選んでね'; return; }
     // Nothing to configure: the cartridge IS the configuration (board, banking,
     // nametable wiring, CHR). Everything the host does from here — fast
     // forward, rewind, jog-shuttle — runs on the same contract as the PC-88s.
     machine = new NesMachine({ cart: nesCart });
+    // A rebuilt machine gets a fresh drive, so the side the user had selected
+    // has to be put back — otherwise switching modes silently turns the disk
+    // back over to side A.
+    if (machine.hasDisk && $('fdsside').value) machine.insertDiskSide(+$('fdsside').value);
     nesPad = 0;
     canvas.focus();
     return;
@@ -1854,6 +1923,11 @@ canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); 
     { label: '📁 ファイル', items: [
       it('from', 'ROM', lab('from')), it('fdisk', 'ディスク', lab('fdisk')),
       it('ffont', 'FONT', lab('ffont')), it('from88', 'BIOS一式', lab('from88')),
+      // The Famicom pickers live in row-sys1, which this menu bar hides. Without
+      // an entry here they are invisible — the same way 📼テープ was orphaned
+      // when the bar took over the rows.
+      it('fnes', '🎮 ファミコン(.nes)', lab('fnes')),
+      it('grp-fds', '💽 ディスクシステム(.fds)', $('grp-fds')),
       it('romstore', '保存済ROM', $('romstore')),
     ].filter(Boolean) },
     { label: '🖥 システム', items: [

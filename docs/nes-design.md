@@ -4,7 +4,7 @@
 
 Adding the Famicom (NES) as a *machine* in this emulator, next to PC-8001 and PC-8801. The point is not "another emulator": it is that the host in `demo/machine.html` already implements deterministic fast-forward, rewind and jog-shuttle on top of a `snapshot()` / `restore()` contract that has nothing machine-specific in it. **Satisfy the contract and time travel comes for free.**
 
-Built in stages. **Stage 1** was the cartridge (`ines.js`) and the CPU (`m6502.js`). **Stage 2** was the PPU (`nesppu.js`), the mapper boards (`nesmapper.js`), the machine class (`machinenes.js`) and the host integration. **Stage 3** — the current state of this document — is the APU (`nesapu.js`), the CPU's mid-instruction interrupt behaviour, and twenty more boards. What is still missing is listed in [§11](#11-what-is-not-here-yet).
+Built in stages. **Stage 1** was the cartridge (`ines.js`) and the CPU (`m6502.js`). **Stage 2** was the PPU (`nesppu.js`), the mapper boards (`nesmapper.js`), the machine class (`machinenes.js`) and the host integration. **Stage 3** was the APU (`nesapu.js`), the CPU's mid-instruction interrupt behaviour, and twenty more boards. **Stage 4** — the current state of this document — is the **Famicom Disk System** (`fds.js`) and the 192-disk sweep that it made possible: see [§12](#12-fdsjs--the-famicom-disk-system). What is still missing is listed in [§11](#11-what-is-not-here-yet).
 
 ## 1. Contract (suite-contract)
 
@@ -23,11 +23,14 @@ Built in stages. **Stage 1** was the cartridge (`ines.js`) and the CPU (`m6502.j
 | `nesppu.js` | RP2C02 picture processing unit. Per-dot raster, loopy v/t/x/w scrolling, cycle-accurate sprite evaluation, sprite 0 hit, sprite overflow (bug included), vblank/NMI timing, palette + emphasis. |
 | `nesmapper.js` | The cartridge boards — 26 of them, from NROM to the Konami VRCs. A registry, so adding a board is adding a class and a line. See [§6](#6-nesmapperjs--the-boards). |
 | `nesapu.js` | The RP2A03's sound half: two pulses, triangle, noise, DMC, and the frame counter that clocks them all (and interrupts the CPU). Produces a plain `Float32Array`; no DOM, no WebAudio. |
-| `machinenes.js` | The machine class: `stepFrame()` / `frame` / `snapshot()` / `restore()` / `schemaVersion` / `renderAudio()`, CPU↔PPU↔APU synchronisation, OAM DMA, DMC DMA, controllers. |
-| `test-ines.mjs`, `test-6502.mjs`, `test-nes.mjs`, `test-nesapu.mjs` | Unit tests + determinism tests. |
+| `fds.js` | The Famicom Disk System: `.fds` image parsing, the drive (`FdsDrive`) and the RAM adapter's wavetable sound channel (`FdsAudio`). Pure and import-free; `nesmapper.js` builds mapper 20 out of it. Also `buildFds()` for tests. See [§12](#12-fdsjs--the-famicom-disk-system). |
+| `machinenes.js` | The machine class: `stepFrame()` / `frame` / `snapshot()` / `restore()` / `schemaVersion` / `renderAudio()`, CPU↔PPU↔APU synchronisation, OAM DMA, DMC DMA, controllers, and the disk-side API (`hasDisk` / `diskSides` / `setDiskSide()`). |
+| `test-ines.mjs`, `test-6502.mjs`, `test-nes.mjs`, `test-nesapu.mjs`, `test-fds.mjs` | Unit tests + determinism tests. |
 | `nestools/nestest.mjs` | Verification against the nestest reference log (bring your own ROM). |
 | `nestools/blargg.mjs` | Runs blargg's test ROMs headless and reports pass/fail (bring your own ROMs). |
 | `nestools/screenshot.mjs` | Runs any `.nes` headless and reports what came out — colour counts plus an ASCII thumbnail. |
+| `nestools/fdsrun.mjs` | The same for a `.fds` disk, plus what the drive did (how far the head got, how many seeks, how many side changes). |
+| `nestools/sweep.mjs` | Runs a whole directory of disks and sorts the results into buckets. [§12.6](#126-the-192-disk-sweep). |
 
 ## 3. `ines.js` — the cartridge
 
@@ -255,7 +258,9 @@ The host now picks machines by **capability**, not by class. It used to ask `mac
 
 Everything else — the snapshot ring, the rewind button, the jog-shuttle, the speed multiplier — was already machine-agnostic and needed **no change at all**. That was the bet the issue made, and it held.
 
-What is new for the Famicom specifically: a `ファミコン` boot-mode button, a `.nes` file input (which reports a bad header or an unimplemented board on screen instead of failing silently), and a keyboard→pad map (arrows, Z/X = B/A, Enter = START, Shift/Space = SELECT) that also translates the existing gamepad configuration's joystick bits, so the pad-config panel keeps working for both families.
+What is new for the Famicom specifically: a `ファミコン` boot-mode button, a `.nes` file input (which reports a bad header or an unimplemented board on screen instead of failing silently), a **Disk System group** (`.fds` + `disksys.rom` + a side selector, §12.7), and a keyboard→pad map (arrows, Z/X = B/A, Enter = START, Shift/Space = SELECT) that also translates the existing gamepad configuration's joystick bits, so the pad-config panel keeps working for both families.
+
+One thing stage 4 had to fix rather than add: **the Famicom file pickers were invisible.** They live in `row-sys1`, which the folded menu bar hides, and nothing listed them in the 📁 ファイル menu — the same way 📼テープ was orphaned when the bar took over the rows. `fnes` and the new `grp-fds` are listed now.
 
 The CRT pipeline consumes a GRB index (0-7) per dot plus an optional per-gun `drive` level. The Famicom's `render({ indexed: true, analog: true })` supplies both: the index is a coarse reduction of the 64-colour palette, and `drive` carries the real RGB, so the phosphor sim renders the true palette rather than eight primaries — the same arrangement `machine88.js` uses for its analogue palette.
 
@@ -272,7 +277,9 @@ The CRT pipeline consumes a GRB index (0-7) per dot plus an optional per-gun `dr
 
 - **The APU's sample ring is output too, and is not in the snapshot.** The chip's *state* — dividers, sequencers, envelopes, the DMC's shift register — is, and so are the resampler's phase and filter memory, which is what makes the *sequence of samples* after a restore identical to the original run. Only the handful of samples that had not been drained yet are lost: one audio buffer at the moment you rewind, and nothing after it.
 
-What actually travels: 2KB work RAM, 2KB CIRAM (4KB on a four-screen board), 256B OAM, 32B secondary OAM, 32B palette, the PPU register/latch/pipeline state, the CPU register file, the mapper registers, CHR-RAM if the board has it, and the controller/APU state. **About 3KB for a plain NROM game and ~11KB for a board with CHR-RAM and dirty work RAM** — an order of magnitude smaller than a PC-8801 snapshot (RAM + three GVRAM planes + the sub-CPU), so the ring is bounded by its count, not by memory.
+- **Writable media travels as a difference, not as a copy.** The Disk System is the only machine here whose media can be written; a snapshot carries the bytes a save changed and nothing else (§12.4).
+
+What actually travels: 2KB work RAM, 2KB CIRAM (4KB on a four-screen board), 256B OAM, 32B secondary OAM, 32B palette, the PPU register/latch/pipeline state, the CPU register file, the mapper registers, CHR-RAM if the board has it, and the controller/APU state. **About 3KB for a plain NROM game, ~11KB for a board with CHR-RAM and dirty work RAM, and 46KB for a Disk System game** (whose 32KB of adapter RAM is always live) — an order of magnitude smaller than a PC-8801 snapshot (RAM + three GVRAM planes + the sub-CPU), so the ring is bounded by its count, not by memory.
 
 Adding the whole APU cost **about 90 numbers, under 800 bytes of JSON** — measurably nothing against the 2KB of work RAM, and the tests assert it stays that way.
 
@@ -382,18 +389,157 @@ Verified this way against homebrew and demo ROMs from the same collection (which
 
 A broader sweep — every `.nes` in the test-ROM collection, 263 of them — parses, builds its board, runs 90 frames and survives a snapshot/restore round trip with no exception and no state divergence. Two mapper numbers in that set are still unimplemented: 5 (MMC5, 4 ROMs) and 28 (Action 53, 2 ROMs).
 
-**No commercial cartridge was available on this machine.** The local library is 192 Famicom *Disk System* images (`.fds`) plus the FDS BIOS — see §11, where that is now the leading candidate for the next stage rather than an aside.
+**No commercial cartridge was available on this machine.** The local library is 192 Famicom *Disk System* images (`.fds`) plus the FDS BIOS — which is why stage 4 built the Disk System. See [§12](#12-fdsjs--the-famicom-disk-system).
 
 ## 11. What is not here yet
 
 Stage 4 and beyond, in the order they are worth doing:
 
-- **The Famicom Disk System (mapper 20).** This is the *leading* item, and for a practical reason: this machine has no `.nes` cartridges at all, but it does have **192 `.fds` disk images** and the 8KB FDS BIOS (`disksys.rom`, inside `BIOS/FamicomDiskSystem.zip` in the local BIOS archive). Implementing it turns a library of zero commercial titles into a library of 192 — which means the sweep method this repository already used against 353 PC-8801 disks (`tools/batch-compare.mjs`) becomes available for the Famicom too. The work is: the BIOS at `$E000`, RAM at `$6000`-`$DFFF`, the disk drive's byte-at-a-time transfer and its IRQ, the disk-format layer (`.fds` is a stripped image — the gaps, CRCs and block headers have to be regenerated), and the FDS's own wavetable + modulation sound channel.
+- ~~The Famicom Disk System (mapper 20)~~ — **done in stage 4**, see [§12](#12-fdsjs--the-famicom-disk-system). It was the leading item for a practical reason (this machine has no `.nes` cartridges at all and 192 `.fds` disks), and it paid: 189 of the 192 now load off the disk and run.
 - **MMC5 (5)** and **Namco 163 (19)** — the two biggest remaining gaps in cartridge coverage. MMC5 is a small computer in its own right (ExRAM, a vertical split-screen unit, an 8x8 multiplier, its own IRQ, two extra pulse channels); N163 needs its wavetable audio to be worth much.
-- **Expansion audio.** VRC6, VRC7, Sunsoft 5B, Namco 163 and the FDS each add channels on the cartridge. The boards are implemented without them: the sound registers are accepted and ignored, so the games run and play their 2A03 channels. A silent expansion is a better answer than a wrong one, but it is not the right answer.
+- **Expansion audio.** VRC6, VRC7, Sunsoft 5B and Namco 163 each add channels on the cartridge. Those boards are implemented without them: the sound registers are accepted and ignored, so the games run and play their 2A03 channels. A silent expansion is a better answer than a wrong one, but it is not the right answer. The **FDS channel is implemented** (§12.5) and is the first user of the `nesapu.expansion` hook, which the other four can now plug into.
 - **Length-counter write/clock coincidence** — `blargg_apu_2005` 10 and 11, §10.
 - **PAL / Dendy timing.** NTSC only. `ines.js` parses the timing field; nothing acts on it.
 - **The unstable illegal opcodes** are approximated (§4) — `instr_test-v5`'s `03-immediate` is the visible cost.
 - **Open bus decay.** Reads of unmapped addresses return the last value on the bus, but the latch does not decay. The PPU has its own open-bus latch for `$2000`/`$2001`/`$2003`/`$2005`/`$2006`; it does not decay either. `cpu_exec_space`'s APU half is the visible cost.
 - **`$2007` during rendering**, and the "render the palette entry `v` points at" quirk that `full_palette.nes` uses, are not modelled.
 - **Visual and audible verification in a browser.** Everything is verified headless. The pixels reaching a canvas through the CRT simulation have not been looked at, and **nobody has listened to the APU** — its output is verified as numbers (blargg's suites, the determinism tests, the sample-rate check), not as sound.
+
+## 12. `fds.js` — the Famicom Disk System
+
+Stage 4. This is the part that turns the emulator from something with no games into something with a library, and the reason is arithmetic: this machine has **zero `.nes` cartridges** and **192 `.fds` disk images**.
+
+### 12.1 What the Disk System actually is
+
+Not a cartridge. A **RAM adapter** that plugs into the cartridge slot — 32KB of program RAM at `$6000`-`$DFFF`, 8KB of character RAM, an 8KB BIOS at `$E000`, a general-purpose down-counter that interrupts the CPU, and a wavetable sound channel — plus a drive that reads a Mitsumi **Quick Disk**. iNES calls it "mapper 20" because the file format has nowhere else to put it, but there is no such board: the number names the adapter.
+
+Three consequences run through everything below:
+
+- **The program that boots a game is in the BIOS, not on the disk.** So an `.fds` file alone is not runnable; `disksys.rom` has to be supplied separately (§12.7).
+- **`$E000`-`$FFFF` is ROM and `$6000`-`$DFFF` is RAM**, which is the opposite of a cartridge, so `FdsAdapter` overrides the base `Mapper`'s CPU bus entirely.
+- **The media can be written.** No other machine in this repository has that, and it is the one thing a snapshot could not previously ignore (§12.4).
+
+### 12.2 The image format, and the layer that is missing from it
+
+A Quick Disk track is one long spiral of bits with no sectors. The data on it is a chain of **blocks**:
+
+```
+[ lead-in gap ][1][ block 1: disk header, 56B ][CRC][ gap ][1][ block 2: file count, 2B ][CRC]
+[ gap ][1][ block 3: file header, 16B ][CRC][ gap ][1][ block 4: file data, 1+N B ][CRC] ...
+```
+
+The `.fds` format keeps **only the block bytes** — 65500 of them per side, with an optional 16-byte header on the front. Gaps, start bits and CRCs are gone. So an emulator has to decide what to do about the missing layer, and this is where the stage-3 plan turned out to be half right:
+
+- **The gaps do not need to come back.** This drive never runs through one (§12.3).
+- **The CRC bytes do.** The FDS BIOS reads them through `$4031` exactly like data: after the 56 bytes of the disk header it takes two more transfers. Leave them out and every block after the first starts two bytes early, the BIOS reads `$09` where it expects `$02`, and the load fails at the second block. **This was the first real bug of stage 4, and its symptom — a disk that reads its own header perfectly and then gives up — is worth recognising.**
+
+So `parseFds()` walks the block chain (it does not trust block 2's file count, which disagrees with reality on plenty of real images) and builds a second array per side, the **physical stream**: every block followed by two zero bytes. `exportFds()` is its exact inverse, so a disk a game wrote to can be written back out as an ordinary `.fds`. The CRC *values* are never checked — `$4030` bit 4 never reports an error, because a `.fds` image has no CRCs that could be wrong.
+
+### 12.3 The drive: the head moves when the program moves it
+
+The obvious model is a free-running head: a byte every 149 CPU cycles (the drive reads ~96.4 kbit/s), forever, whether or not anyone is listening. That is what the hardware does. It does not work here, and the reason is the deleted gaps: between two blocks a free-running head has nothing to wait *in*, so while the BIOS is digesting one block the head chews through the next one and the disk desynchronises.
+
+The answer taken here is the one FCEUX has shipped for two decades: **the byte clock is real, the head is not free-running.** A transfer flag (`$4030` bit 1, and its IRQ if `$4025` bit 7 asked for one) arrives 149 cycles after the previous byte and paces the BIOS's transfer loop exactly as hardware does — but the head only steps when the CPU actually moves a byte through it: a read of `$4031` in read mode, a write to `$4024` in write mode. A block boundary can then never be lost.
+
+The cost, stated plainly: a program that timed the drive by counting cycles instead of by watching `$4030` would see a drive that waits for it. No known title does that — the BIOS owns the drive.
+
+Two details that are easy to get wrong and were both wrong here first:
+
+- **`$4031` is a latch.** Reading it with no byte pending returns the previous byte and must **not** step the head. The BIOS reads `$4031` from its vblank-wait NMI handler (`$E1E6`) on *every frame a game spends waiting for the picture*, so a drive that steps on every read walks the disk forward one byte per frame behind the program's back — a desynchronisation with no symptom until, tens of thousands of bytes later, a block starts in the wrong place.
+- **`$4025` bit 6 gates the transfer, bit 1 rewinds.** Clearing bit 6 parks the head between blocks (that is how the BIOS reads block-by-block); setting bit 1 sends it back to the start of the side, because the Quick Disk's head physically returns rather than the disk coming round again.
+
+The two IRQ sources on this adapter share one wire but are **acknowledged separately**: reading `$4030` clears the timer, moving a byte clears the drive.
+
+### 12.4 Writing, and how rewind survives it
+
+Games save to disk. That makes the media part of the machine state, and a rewind that did not put the bytes back would let a player rewind past a save and keep it.
+
+The rule from §9 still holds — **immutable data never travels** — so the snapshot carries neither the disk nor a copy of it. It carries the **difference**: a `Map` from `(side, position)` to the byte written. `restore()` undoes the writes that are not in the snapshot (reading the original byte back out of the parsed image, which stays pristine) and applies the ones that are. The cost is proportional to the number of writes, not to the size of the disk, so a rewind ring never memcpys 65500 bytes per side per frame.
+
+Measured, `とびだせ大作戦` after 1500 frames: **47,220 bytes per snapshot** — 32KB adapter RAM + 8KB CHR-RAM + ~6KB of PPU/CPU/APU/mapper state, and **zero** disk bytes. That is 15× a plain NROM cartridge's 3KB, and it still leaves the host's ring bounded by its 1000-snapshot cap rather than by its 150MB budget (1000 × 46KB = 46MB).
+
+**Getting the write path aligned took measuring the real BIOS, and it is the fiddliest thing in this file.** A written block is not the same length as its stream:
+
+- The first byte the BIOS pushes through `$4024` is `$80` — the block's **start mark**, which is a single bit on the physical disk and has no byte in a `.fds` image. It is swallowed, and it must **not** move the head.
+- At the other end the BIOS pushes the *first* CRC byte like ordinary data and then raises `$4025` bit 4; the drive emits the **second** on its own. So the head has one slot to cross that no `$4024` write accounts for.
+
+Get either one wrong and the write itself still looks fine — the bytes go somewhere — but everything is displaced by one, the BIOS reads the block back to verify it, the compare fails, and it rewrites forever. **光神話パルテナの鏡 (Kid Icarus) does this on boot**, and it is the reason the write path is now measured rather than guessed: with the head shifted it sat in that retry loop for the whole run, and with both rules in place it reaches its title screen. FCEUX swallows *two* bytes here; on this drive that would shift every rewritten block.
+
+### 12.5 The sound channel
+
+One extra voice, and the strangest one on the console: a 64-step wavetable at 6 bits per step, played at a frequency that a *second* table bends up and down while it plays. That is where the Disk System's characteristic wobble comes from — Zelda's title, Metroid's caves, Kid Icarus.
+
+The modulator is not an LFO. It is a 32-entry table of five-way steps (+1, +2, +4, reset, −4, −2, −1) driving a signed 7-bit counter, and the counter becomes a pitch offset through an integer algorithm with two deliberate asymmetries: the rounding step adds +2 going up but −1 going down, and the fold points are 192 and −64 rather than ±128. Both are reproduced exactly; replacing either with the symmetric "obvious" version makes the vibrato lean sharp.
+
+It reaches the speaker through a new hook in `nesapu.js`: **`apu.expansion`**, an object with an `output` getter, summed in `mix()`. Expansion sound is not part of the 2A03 — it is summed into the console's audio pin — so the owner of the chip clocks it and the APU only reads it. `FdsAdapter` owns the channel and clocks it from its own `cpuCycle()`; `nesapu.js` never learns what a disk is. VRC6, VRC7, Sunsoft 5B and Namco 163 can now plug into the same hook.
+
+**Nobody has heard it.** The algorithm is verified as numbers (`test-fds.mjs` pins the wave pointer rate, the halt behaviour, the asymmetric bend, and that the sample stream survives a snapshot bit-identically) and the mixing constant is an ear-free estimate.
+
+### 12.6 The 192-disk sweep
+
+`nestools/sweep.mjs` — the same move `docs/m88-comparison.md` used on 353 PC-8801 disks and `mdtools/sweep.mjs` used on 66 Mega Drive ROMs: run everything, classify mechanically, then only open what failed.
+
+**There is no oracle.** The PC-8801 sweep could diff against M88; this cannot diff against anything — no reference emulator is installed, and none of these disks has a known-good screenshot here.
+
+What rescues it from being pure pixel-guessing is a second, independent thing to look at: **where the CPU is.** The FDS BIOS owns the vblank wait, so a running game and a dead one both park at `$E1C5` between frames — but a running game leaves it and executes its own code in adapter RAM, and a dead one never does. So after the run the sweep steps the machine 200,000 instructions and counts how many land below `$E000`. "Frozen picture **and** no game code" is a fact about the machine, not an opinion about the image.
+
+The probe is not a substitute for running long enough, though: a title that is *still loading* executes no code of its own either, and looks exactly like one that died. 磁界少年メット・マグ reads as stuck at 2400 frames and is playing at 3600.
+
+```sh
+FDS_BIOS=/path/disksys.rom node nestools/sweep.mjs <dir> --frames 3600 --jobs 12
+```
+
+| bucket | meaning |
+|---|---|
+| `reject` | the `.fds` did not parse, or the machine would not build |
+| `noload` | the head never got past the first blocks — the BIOS never read the game off the disk |
+| `stuck` | no code ran below `$E000` at all — the machine gave up. Reported with the BIOS's error byte `$90`. |
+| `black` / `flat` | it loaded and drew one or two colours |
+| `static` | a picture that appeared and never changed again |
+| `ok` | several colours, still moving |
+
+Three things the *sweep* had to learn, each of which moved the numbers more than any emulation fix did:
+
+1. **Judge the best frame, not the last one.** A disk game spends much of its first minute black — the BIOS load, a publisher logo, a second load. Sampling the final frame answers "what was on screen at second 20", which is not the question. Taking the maximum colour count over the run moved 22 `flat` + 4 `black` into `ok` with no emulator change at all.
+2. **Give it enough seconds.** The drive really does move one byte per 149 cycles, so a load takes as long as it took in 1986. At 1200 frames (20s) Castlevania II is still loading; at 2400 it is showing its opening text; 磁界少年メット・マグ needs 3600.
+3. **Turn the disk over.** A two-sided game stops dead and asks. The sweep flips the side when the head has been idle *and* the picture frozen for four seconds — both conditions, because a game being played leaves the drive alone for minutes and ejecting the disk under it would break the thing being measured.
+
+**Result over all 192 disks, 3600 frames (one minute) each:**
+
+| verdict | count |
+|---|---|
+| `ok` — loaded and running | **189** |
+| `stuck` | **3** |
+| `reject` / `noload` / `black` / `flat` / `static` | 0 |
+
+**189 of 192 (98.4%) load off the disk and run.** Nothing in the library fails to parse, no board is missing, no CPU jams, and no disk fails to load: every failure is the same shape — the game loads completely, then stops.
+
+The three that stop:
+
+| disk | what happens |
+|---|---|
+| `きね子 - Kinetic Connection - The Monitor Puzzle` | Reads every block on side A correctly (verified against the block table: 12,482 → 12,497 file header, 12,500 → 12,502 data, 12,505 → 12,520 file header, 12,523 → 45,419 data, all byte-exact), then its own driver writes `$2F` and gives up. Ends parked in the BIOS's vblank wait with a short message on screen and 483 of 200,000 instructions outside BIOS ROM. |
+| `きね子 … Vol. II` | The same game, the same place. |
+| `カリーンの剣` | Same shape: loads, draws a screen, then executes no code of its own (882 / 200,000). |
+
+**What is NOT the cause, in all three:** the disk layer. Every block boundary lines up with `parseFds()`'s block table, no CRC-phase misalignment, no end-of-disk, nothing written. What is left is something the drive presents differently from hardware in a state the other 189 never enter — the most likely candidate being a mid-block pause (clearing `$4025` bit 6 and setting it again inside a block, which this drive resumes exactly and a real drive does not, §12.3).
+
+### 12.7 Getting the BIOS (it is not in this repository, and never will be)
+
+`disksys.rom` is 8192 bytes and copyrighted. On the machine this was developed on it lives inside a BIOS archive, and the trap is worth writing down because stage 3 fell into it: **the `disksys.dat` sitting next to the disk images is not the BIOS.** It is a database — it starts `NEU ;1;0;1;2;…`. The real file is:
+
+```
+(EMU)BIOS(…,FDS,…).zip → BIOS/FamicomDiskSystem.zip → disksys.rom
+```
+
+Check it before using it: **8192 bytes, MD5 `ca30b50f880eb660a320674ed365ef7a`**. `zip.js` in this repository opens both layers, so the browser needs no external tool.
+
+Then:
+
+```sh
+export FDS_BIOS=/path/to/disksys.rom
+node nestools/fdsrun.mjs game.fds --frames 3600 --art     # one disk, with a thumbnail
+node nestools/sweep.mjs /path/to/disks --frames 3600 --jobs 12
+```
+
+In `demo/machine.html` the BIOS is picked once through the `💽 ディスクシステム` group and kept in IndexedDB under the role `fdsbios`; disks are not kept, because disks are what a user swaps. A two-sided disk grows a side selector, and changing it ejects and re-inserts — a silent swap would look to the BIOS like nothing happened.

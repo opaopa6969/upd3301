@@ -31,6 +31,10 @@ function cartWith(code, { mapper = 0, prgBanks = 2, chr = 8192, at = 0x8000 } = 
 
 const runFrames = (m, n) => { for (let i = 0; i < n; i++) m.stepFrame(); return m; };
 
+// The Disk System's adapter is in the mapper registry but is not a board: it
+// has no PRG-ROM of its own and cannot be built from a .nes header.
+const FDS_MAPPER = 20;
+
 // ---------------------------------------------------------------------------
 // The frame counter
 
@@ -332,6 +336,10 @@ test('mappers: the registry grew and every entry constructs', () => {
     assert.ok(have.includes(n), `mapper ${n} missing`);
   }
   for (const n of have) {
+    // Mapper 20 is not a cartridge — it is the Disk System's RAM adapter, and
+    // it cannot be built from a .nes header at all (it needs a disk and the
+    // BIOS). test-fds.mjs owns it; this loop is about boards.
+    if (n === FDS_MAPPER) continue;
     const cart = parseINes(buildINes({ mapper: n, prg: new Uint8Array(0x20000), chr: new Uint8Array(0x20000) }));
     const mp = createMapper(cart);
     assert.equal(typeof mp.cpuRead(0x8000), 'number');
@@ -467,6 +475,7 @@ test('mapper 79 (NINA-003): the register lives below $6000', () => {
 
 test('mappers: every new board runs a frame in the real machine without throwing', () => {
   for (const n of supportedMappers()) {
+    if (n === FDS_MAPPER) continue; // see above: not a cartridge
     const cart = cartWith([0x4c, 0x00, 0x80], { mapper: n, prgBanks: 8, chr: 0x8000 });
     const m = new NesMachine({ cart });
     runFrames(m, 3);

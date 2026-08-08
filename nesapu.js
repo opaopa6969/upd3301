@@ -423,6 +423,14 @@ export class NesApu {
     this.noise = new Noise();
     this.dmc = new Dmc();
     this.ring = new Float32Array(ringSize);
+    // Expansion audio. Sound chips outside the 2A03 live on the cartridge (VRC6,
+    // Sunsoft 5B, Namco 163) or on the Disk System's RAM adapter, and they are
+    // summed into the console's audio pin, not into the 2A03's own DAC. So the
+    // hook is here in the mixer and nowhere else: the owner of the chip clocks
+    // it (it is on the CPU clock either way) and this only reads `output`.
+    // Keeping it a plain object rather than a subclass is what lets nesmapper.js
+    // own the FDS channel without nesapu.js knowing what a disk is.
+    this.expansion = null;
     this.powerOn();
   }
 
@@ -615,7 +623,8 @@ export class NesApu {
   mix() {
     const p = PULSE_TABLE[this.pulse1.output + this.pulse2.output];
     const t = TND_TABLE[3 * this.triangle.output + 2 * this.noise.output + this.dmc.output];
-    return p + t;
+    const e = this.expansion ? this.expansion.output : 0;
+    return p + t + e;
   }
 
   // Box-filter down to sampleRate, then the console's own output stage: two

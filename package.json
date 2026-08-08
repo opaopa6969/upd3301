@@ -18,6 +18,7 @@
     "./nesppu": "./nesppu.js",
     "./nesmapper": "./nesmapper.js",
     "./nesapu": "./nesapu.js",
+    "./fds": "./fds.js",
     "./machinenes": "./machinenes.js",
     "./z80dis": "./z80dis.js",
     "./machine": "./machine.js",

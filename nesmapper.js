@@ -29,6 +29,8 @@
 //   7  AxROM  — 32KB PRG bank + single-screen mirroring select.
 //   9  MMC2   — Punch-Out!!: CHR banks switched by watching PPU fetches.
 //  10  MMC4   — MMC2 with a 16KB PRG window (Fire Emblem, Famicom Wars).
+//  20  FDS    — not a board: the Disk System's RAM adapter (32KB RAM, BIOS,
+//               timer, drive, wavetable sound). See fds.js.
 //  21/22/23/25 VRC2 + VRC4 — Konami. One chip, four numbers, because the
 //               register address lines are wired differently per revision.
 //  24/26 VRC6  — Akumajou Densetsu. Banking only; the expansion audio is not
@@ -51,6 +53,7 @@
 // docs/nes-design.md §5.
 
 import { MIRRORING } from './ines.js';
+import { FdsDrive, FdsAudio } from './fds.js';
 
 export const SCHEMA_VERSION = 1;
 
@@ -1191,11 +1194,174 @@ class Fme7 extends Mapper {
 }
 
 // ---------------------------------------------------------------------------
+// 20 — the Famicom Disk System. Not a board at all: the RAM adapter that
+// replaces the cartridge, holding 32KB of program RAM at $6000-$DFFF, 8KB of
+// character RAM, an 8KB BIOS at $E000, a general-purpose timer, a drive and a
+// wavetable sound channel. iNES gives it a mapper number because the file
+// format has nowhere else to put it.
+//
+// The drive and the sound channel live in fds.js (pure, no imports); this
+// class is only the address decoder and the two IRQ sources. The dependency
+// runs one way — nesmapper.js -> fds.js — so fds.js stays testable on its own.
+//
+// The IRQ wire carries two independent sources, exactly like the machine's
+// does: the timer at $4020-$4022 (games use it as a raster/music clock — it is
+// the Disk System's answer to not having an MMC3) and the drive's byte-transfer
+// flag. Merging them into one boolean is fine here because the machine already
+// wire-ORs mapper IRQs onto one line, but they have to be ACKNOWLEDGED
+// separately: $4030 clears the timer, moving a byte clears the drive.
+class FdsAdapter extends Mapper {
+  constructor(cart) {
+    super(cart);
+    if (!cart.disk) throw new Error('mapper 20 needs a disk image (see fds.js makeFdsCart)');
+    this.drive = new FdsDrive(cart.disk);
+    this.audio = new FdsAudio();
+    // The timer runs off the CPU clock and the drive's byte clock does too, so
+    // this board wants every cycle. It is the only reason mapper.cpuCycle()
+    // exists on a board with no bank switching at all.
+    this.wantsCpuCycle = true;
+    this.reset();
+  }
+
+  reset() {
+    // Called from the base constructor before our fields exist, so guard.
+    if (!this.drive) return;
+    this.drive.reset();
+    this.irqReload = 0;
+    this.irqCounter = 0;
+    this.irqRepeat = false;
+    this.irqEnabled = false;
+    this.timerIrq = false;
+    this.diskRegEnable = false;
+    this.soundRegEnable = false;
+    this.extWrite = 0;
+    this.irq = false;
+  }
+
+  cpuCycle() {
+    if (this.irqEnabled) {
+      if (--this.irqCounter <= 0) {
+        this.timerIrq = true;
+        // A reload of zero would re-arm on every cycle and bury the CPU in
+        // interrupts. Hardware does exactly that; nothing sane asks for it, so
+        // treat it as one-shot rather than let a bad write hang the host.
+        if (this.irqRepeat && this.irqReload > 0) this.irqCounter = this.irqReload;
+        else { this.irqEnabled = false; this.irqCounter = 0; }
+      }
+    }
+    this.drive.tick();
+    this.audio.tick();
+    this.irq = this.timerIrq || this.drive.diskIrq;
+  }
+
+  cpuRead(addr) {
+    if (addr >= 0x4020 && addr < 0x4100) return this._regRead(addr);
+    if (addr >= 0x6000 && addr < 0xe000) return this.prgRam[addr - 0x6000];
+    if (addr >= 0xe000) return this.prg[(addr - 0xe000) & 0x1fff];
+    return 0;
+  }
+
+  cpuWrite(addr, value) {
+    if (addr >= 0x4020 && addr < 0x4100) { this._regWrite(addr, value); return; }
+    if (addr >= 0x6000 && addr < 0xe000) { this.prgRam[addr - 0x6000] = value; this.prgRamDirty = true; }
+    // $E000-$FFFF is the BIOS. A write there is a bug in the game, not a bank
+    // switch: there is nothing on this adapter to switch.
+  }
+
+  _regRead(addr) {
+    switch (addr) {
+      case 0x4030: {
+        // Disk status 0. Bit 7 reads as "read/write enable" and the BIOS
+        // checks it; bit 4 is the CRC error, which a .fds image can never
+        // produce because it has no CRCs (see fds.js).
+        let v = 0x80;
+        if (this.timerIrq) v |= 0x01;
+        if (this.drive.transferFlag) v |= 0x02;
+        if (this.drive.endOfDisk) v |= 0x40;
+        this.timerIrq = false;
+        this.irq = this.drive.diskIrq;
+        return v;
+      }
+      case 0x4031: return this.drive.readData();
+      case 0x4032: return this.drive.driveStatus();
+      case 0x4033: return 0x80; // external connector; bit 7 = "battery is good"
+      default: break;
+    }
+    const a = this.audio.read(addr);
+    return a >= 0 ? a : 0;
+  }
+
+  _regWrite(addr, value) {
+    switch (addr) {
+      case 0x4020: this.irqReload = (this.irqReload & 0xff00) | value; return;
+      case 0x4021: this.irqReload = (this.irqReload & 0x00ff) | (value << 8); return;
+      case 0x4022:
+        if (!this.diskRegEnable) return;
+        this.irqRepeat = (value & 1) !== 0;
+        this.irqEnabled = (value & 2) !== 0;
+        if (this.irqEnabled) this.irqCounter = this.irqReload;
+        else { this.timerIrq = false; this.irqCounter = 0; }
+        this.irq = this.timerIrq || this.drive.diskIrq;
+        return;
+      case 0x4023:
+        this.diskRegEnable = (value & 1) !== 0;
+        this.soundRegEnable = (value & 2) !== 0;
+        if (!this.diskRegEnable) {
+          // Clearing the master enable is how the BIOS shuts the adapter up
+          // before handing control to a game that does not want its interrupts.
+          this.irqEnabled = false; this.timerIrq = false;
+          this.drive.diskIrq = false; this.drive.irqOnTransfer = false;
+          this.irq = false;
+        }
+        return;
+      case 0x4024: if (this.diskRegEnable) this.drive.writeData(value); return;
+      case 0x4025:
+        if (!this.diskRegEnable) return;
+        this.drive.control(value);
+        // Bit 3 is the only banking-like thing on the whole adapter: it wires
+        // the two nametables horizontally or vertically.
+        this.mirroring = (value & 0x08) ? MIRROR.HORIZONTAL : MIRROR.VERTICAL;
+        this.irq = this.timerIrq || this.drive.diskIrq;
+        return;
+      case 0x4026: this.extWrite = value; return;
+      default: break;
+    }
+    if (addr >= 0x4040 && addr <= 0x408f) this.audio.write(addr, value);
+  }
+
+  // ---- disk handling, for the host ----------------------------------------
+  get sideCount() { return this.drive.sideCount; }
+  get side() { return this.drive.side; }
+  setSide(n) { this.drive.insert(n); return this; }
+  eject() { this.drive.eject(); return this; }
+  get diskWriteBytes() { return this.drive.writes.size; }
+
+  saveRegs(s) {
+    s.irqReload = this.irqReload; s.irqCounter = this.irqCounter;
+    s.irqRepeat = this.irqRepeat; s.irqEnabled = this.irqEnabled; s.timerIrq = this.timerIrq;
+    s.diskRegEnable = this.diskRegEnable; s.soundRegEnable = this.soundRegEnable;
+    s.extWrite = this.extWrite;
+    s.drive = this.drive.getState();
+    s.audio = this.audio.getState();
+  }
+
+  loadRegs(s) {
+    this.irqReload = s.irqReload; this.irqCounter = s.irqCounter;
+    this.irqRepeat = !!s.irqRepeat; this.irqEnabled = !!s.irqEnabled; this.timerIrq = !!s.timerIrq;
+    this.diskRegEnable = !!s.diskRegEnable; this.soundRegEnable = !!s.soundRegEnable;
+    this.extWrite = s.extWrite;
+    this.drive.setState(s.drive);
+    this.audio.setState(s.audio);
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 // The registry. Adding a board is adding a line here plus a class — the
 // machine never learns a mapper number.
 export const MAPPERS = Object.freeze({
   0: Nrom,
+  20: FdsAdapter,
   1: Mmc1,
   2: Uxrom,
   3: Cnrom,
@@ -1236,6 +1402,13 @@ export function tryCreateMapper(cart) {
   if (!MAPPERS[cart.mapper]) {
     return { ok: false, code: 'unsupported-mapper', mapper: cart.mapper,
       error: `mapper ${cart.mapper} is not implemented (have: ${supportedMappers().join(', ')})` };
+  }
+  // Mapper 20 is the one board that needs something the .nes file cannot carry:
+  // a disk and the Disk System BIOS. A plain .nes claiming mapper 20 is a
+  // mislabelled dump, and saying so beats throwing out of a file picker.
+  if (cart.mapper === 20 && !cart.disk) {
+    return { ok: false, code: 'fds-needs-disk', mapper: 20,
+      error: 'mapper 20 is the Famicom Disk System: load a .fds image and the FDS BIOS, not a .nes' };
   }
   return { ok: true, mapper: createMapper(cart) };
 }

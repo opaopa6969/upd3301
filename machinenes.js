@@ -39,6 +39,7 @@ import { NesPpu, SCREEN_W, SCREEN_H, buildNesPaletteRgb } from './nesppu.js';
 import { createMapper } from './nesmapper.js';
 import { parseINes, MIRRORING } from './ines.js';
 import { NesApu } from './nesapu.js';
+import { parseFds, makeFdsCart } from './fds.js';
 
 export const SCHEMA_VERSION = 1;
 
@@ -57,10 +58,15 @@ export const BUTTON = Object.freeze({
 const PALETTE_RGB = buildNesPaletteRgb();
 
 export class NesMachine {
-  // Either `cart` (already parsed by ines.js) or `rom` (raw .nes bytes).
-  constructor({ cart = null, rom = null, frameHz = NTSC_FRAME_HZ, sampleRate = 48000 } = {}) {
+  // One of:
+  //   { cart }        a cartridge already parsed by ines.js or built by fds.js
+  //   { rom }         raw .nes bytes
+  //   { fds, bios }   raw .fds bytes (or a parsed image) plus the 8KB FDS BIOS
+  constructor({ cart = null, rom = null, fds = null, bios = null,
+                frameHz = NTSC_FRAME_HZ, sampleRate = 48000 } = {}) {
     if (!cart && rom) cart = parseINes(rom);
-    if (!cart) throw new Error('NesMachine needs a cartridge (cart or rom)');
+    if (!cart && fds) cart = makeFdsCart(ArrayBuffer.isView(fds) ? parseFds(fds) : fds, bios);
+    if (!cart) throw new Error('NesMachine needs a cartridge (cart, rom or fds+bios)');
     this.cart = cart;
     this.schemaVersion = SCHEMA_VERSION;
     this.frameHz = frameHz;
@@ -83,6 +89,14 @@ export class NesMachine {
     this._inDmcDma = false;
 
     this.apu = new NesApu({ sampleRate, cpuHz: NTSC_CPU_HZ });
+    // Expansion sound sits on the cartridge (or, for the Disk System, on the
+    // RAM adapter), so the board owns the chip and the APU only mixes it. The
+    // board clocks it from its own cpuCycle(); nothing here has to know which
+    // chip it is, or that there is one.
+    if (this.mapper.audio) this.apu.expansion = this.mapper.audio;
+    // A disk drive is a machine-level fact, not a board-level one: the host
+    // wants to offer "turn the disk over" without knowing what a mapper is.
+    this.disk = this.mapper.drive || null;
 
     // The bus is a closure so the CPU sees a plain { read, write } and stays a
     // general 6502. Every access ticks the clock first (see the header).
@@ -252,6 +266,29 @@ export class NesMachine {
   padDown(bit, pad = 0) { this.pads[pad] |= (1 << bit); return this; }
   padUp(bit, pad = 0) { this.pads[pad] &= ~(1 << bit); return this; }
   setPad(mask, pad = 0) { this.pads[pad] = mask & 0xff; return this; }
+
+  // ---- the disk drive ------------------------------------------------------
+  // Only a Disk System machine has one. Games ask for a side by name ("DISK
+  // SET / SIDE B"), and the BIOS finds out by watching $4032 bit 0 — so a side
+  // change has to look like the disk physically leaving and coming back, not
+  // like the bytes under the head changing. `ejectFrames` holds the gap open
+  // for long enough that the BIOS's poll loop sees it.
+  get hasDisk() { return !!this.disk; }
+  get diskSides() { return this.disk ? this.disk.sideCount : 0; }
+  get diskSide() { return this.disk ? this.disk.side : -1; }
+
+  setDiskSide(n, { ejectFrames = 6 } = {}) {
+    if (!this.disk) return this;
+    if (ejectFrames > 0 && this.disk.inserted && n !== this.disk.side) {
+      this.disk.eject();
+      for (let i = 0; i < ejectFrames; i++) this.stepFrame();
+    }
+    this.disk.insert(n);
+    return this;
+  }
+
+  ejectDisk() { if (this.disk) this.disk.eject(); return this; }
+  insertDiskSide(n = this.diskSide) { if (this.disk) this.disk.insert(n); return this; }
 
   // ---- audio ---------------------------------------------------------------
   // Same signature as machine88.renderAudio(): fill a mono Float32Array at the
