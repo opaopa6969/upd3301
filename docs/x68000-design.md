@@ -307,7 +307,24 @@ node x68tools/sweep.mjs --ipl IPLROM.DAT --cgrom CGROM.DAT \
 ```
 
 This is the PC-8801 method from `docs/m88-comparison.md` — run everything, then
-chase only what came out wrong.
+chase only what came out wrong. Against 416 images at 600 frames each:
+
+```
+ok=376  flat=15  black=24  reject=1  total=416
+```
+
+Most of the `ok` results are Human68k reaching its prompt at 768x512, which is
+a two-colour screen. `flat` is mostly a loader that has set its screen mode and
+stopped. Of the 24 `black`, the one that was chased — `ｲｰｽ3#SYS.IMG` — turned
+out to be asking for its data disk in drive 1 (`READ DATA` with US=1), not an
+emulation fault; the sweep mounts one image, so multi-disk games stop there.
+The single `reject` declares DIM media type 17, which the format does not
+define.
+
+The sweep found two bugs of its own, both of the "one disk stalls four hundred"
+kind: a DMAC chain descriptor that points at itself never returns (there is a
+ceiling on it now), and garbage in CRTC R04 makes a single frame take minutes
+(it is clamped to 2048 lines).
 
 ### Determinism
 
