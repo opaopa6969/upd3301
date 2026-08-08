@@ -227,7 +227,10 @@ export class Upd765 {
     }
     if (globalThis.__fdcLog) globalThis.__fdcLog('RD', { c, h, r, n, cyl: d.cyl, hd: this.hd, found: !!sec, size: sec ? 128 << sec.n : 0 });
     if (!sec) return this._rwError(0x04, c, h, r, n); // ST1 ND
-    this._multi = { c, h, r, n, eot, deleted: wantDeleted, sec };
+    // MT (bit 7) = multi-track: after the EOT sector on head 0, the command does
+    // NOT end — it flips to head 1 of the same cylinder and carries on at R=1.
+    // A 2D loader can pull a whole cylinder (both sides) in one command that way.
+    this._multi = { c, h, r, n, eot, deleted: wantDeleted, sec, mt: (this.cmd[0] & 0x80) !== 0 };
     this.execBuf = sec.data;
     this.execPos = 0;
     this.execWrite = false;
@@ -276,11 +279,27 @@ export class Upd765 {
     // bytes; when the host keeps reading past a sector boundary we auto-advance
     // to R+1 (genuine multi-sector read).
     if (m && !m.format && !this.execWrite) {
+      const d = this.drives[this.us];
       if (m.r < m.eot) {
-        const d = this.drives[this.us];
         const next = findSector(d.disk, d.cyl, this.hd, m.r + 1, m.n);
         if (next) {
           m.r++;
+          m.sec = next;
+          this.execBuf = next.data;
+          this.execPos = 0;
+          this.int = true;
+          return;
+        }
+      } else if (m.mt && this.hd === 0) {
+        // EOT reached on side 0 and MT is set: cross to side 1, restart at R=1.
+        // Without this the command stops half way and the caller keeps whatever
+        // its buffer held from the *previous* transfer — which is how Makaimura
+        // ended up decrypting a stale sector into garbage code (issue #13).
+        const next = findSector(d.disk, d.cyl, 1, 1, m.n);
+        if (next) {
+          this.hd = 1;
+          m.h = 1;
+          m.r = 1;
           m.sec = next;
           this.execBuf = next.data;
           this.execPos = 0;
@@ -296,8 +315,13 @@ export class Upd765 {
       // Getting this wrong under-reads the file — 軽井沢誘拐案内 stops mid-load.
       const sec = m.sec;
       if (sec) {
-        if (sec.r === m.eot) { m.rc = (sec.c + 1) & 0xff; m.rr = 1; }
-        else { m.rc = sec.c; m.rr = (sec.r + 1) & 0xff; }
+        if (sec.r === m.eot) {
+          // End of cylinder. With MT the pair of sides counts as one cylinder,
+          // so the ID only advances to C+1 (and H back to 0) after side 1.
+          m.rc = (sec.c + 1) & 0xff;
+          m.rr = 1;
+          if (m.mt) m.rh = 0;
+        } else { m.rc = sec.c; m.rr = (sec.r + 1) & 0xff; }
         m.rAddr = true;
       }
     }
@@ -321,7 +345,8 @@ export class Upd765 {
     // the "next sector" address (see _execDone) — m.rAddr overrides C/R then.
     const rc = m.rAddr ? m.rc : (sec?.c ?? m.c);
     const rr = m.rAddr ? m.rr : (sec?.r ?? m.r);
-    this._results([st0, xst1, xst2, rc, sec?.h ?? m.h, rr, sec?.n ?? m.n]);
+    const rh = m.rAddr && m.rh !== undefined ? m.rh : (sec?.h ?? m.h);
+    this._results([st0, xst1, xst2, rc, rh, rr, sec?.n ?? m.n]);
   }
 
   _rwError(st1, c, h, r, n) {
