@@ -264,7 +264,14 @@ export class Hd63450 {
     const burst = (c.ocr & 3) === 1;
     const external = (c.ocr & 3) === 2;
     let moved = 0;
+    // A burst ignores the caller's budget by design — the CPU has no bus while
+    // it runs — but a chained channel whose table points back at itself would
+    // then never return. The ceiling is far past any real transfer (a whole
+    // 64 KB counter is 65535) and exists only so a broken descriptor costs a
+    // stutter rather than the process.
+    const CEILING = 1 << 20;
     while ((c.csr & CSR_ACT) && !(c.ccr & CCR_HLT) && !(c.csr & CSR_COC) && c.mtc) {
+      if (moved >= CEILING) break;
       if (external && !this.deviceReady(n)) break;
       if (!burst && moved >= budget) break;
       if (!this._operand(n)) return moved;   // bus/address fault: channel is dead
