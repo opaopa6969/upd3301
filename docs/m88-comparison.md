@@ -297,3 +297,51 @@ it just makes booting slower if you leave it in. **We are the faithful one
 there**, and M88 is deliberately not. That is why our sub-CPU trace showed us
 spinning `02bb` 262144 times while M88 never touched it: not a bug. (Applying
 M88's patch on our side changes neither Makaimura nor GAZZEL — measured.)
+
+## Triage of the remaining 13 divergences (2026-08-09, after the MT/ST0 fixes and ROM unification)
+
+The 1500f sweep with the GVRAM fingerprint: **exact 326/353 (92%), tracking 337/353 (95%)**.
+The 13 remaining leads, split with `tools/loop-profile.mjs`:
+
+### A. Polling OPN status + the joystick (possibly just waiting for input)
+
+| title | M88 | ours |
+|---|---|---|
+| JIKO_PZL | 00/gv35388 | ff/gv2040 |
+| FIREHAWK | 00/gv847 | ff/gv305 |
+
+Both poll `OUT 44,0e` → `IN 45` (the YM2203 general-purpose port A, which carries the
+joystick on a PC-8801) and `IN 44` (OPN status) at high frequency — FIREHAWK 238 times in
+two frames. **Both sit at E6CD=0xff**, and as recorded above `ff` is not necessarily
+"stuck". CHOPLIFT was already unclassifiable for wanting a keypress, so **rule out
+input-wait first**: inject input, or trace whether M88 performs the same poll.
+
+### B. Waiting on an interrupt that cannot arrive (a real hang)
+
+| title | M88 | ours |
+|---|---|---|
+| harakiri | 00/tv3195 | aa/tv800 |
+
+**No I/O at all** (zero IN, zero OUT), 53 distinct PCs, `iff1=false` with `pending=06`
+(sources 1 and 2 pending, E6mask=03). The CPU sits with interrupts disabled waiting on a
+condition only an interrupt could change. **Suspect interrupt delivery or the E4h/E6h mask
+handling.**
+
+### C. Unclassified (screen content differs; symptom not yet investigated)
+
+OHOTUKU / 北海道連鎖殺人事件 (same game, two files), Hydlide3, volguard, Yaksa, starclsr,
+Stercru, PRO_FAN, Seena, うる星やつらラブリーチェイサー.
+
+**Hydlide3 shows only one FDC result in 400 frames on the M88 side** (ours shows nine or
+more), so M88 itself may not be booting it — treat as a case where the gold is unusable.
+
+### Working discipline established so far
+
+1. **Judge at a converged frame.** A match at a fixed 400f can be two machines sitting in
+   the same *intermediate* state (this is how iteration 6's scorecard mis-scored a Ys1
+   regression as a win).
+2. **Suspect the metric before the emulator.** Three measuring-instrument defects so far:
+   the fixed 250f snapshot, the display mask, and text-off graphics.
+3. **The address region says nothing about health.** What works is the count of distinct
+   PCs and whether the machine still touches I/O.
+4. **A matching result header is not a matching payload.** The MT bug hid behind exactly that.
