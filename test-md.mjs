@@ -17,7 +17,9 @@ import { Sn76489 } from './sn76489.js';
 import { MegaDriveMachine, BUTTON } from './machinemd.js';
 import { buildTestRom, buildIdleRom, TEST_COUNTER } from './mdtools/mkrom.mjs';
 
-const counterOf = (m) => ((m.ram[0xff00] << 24) | (m.ram[0xff01] << 16) | (m.ram[0xff02] << 8) | m.ram[0xff03]) >>> 0;
+// The test cartridges count their vertical interrupts into a long in work RAM.
+const CNT = TEST_COUNTER & 0xffff;
+const counterOf = (m) => ((m.ram[CNT] << 24) | (m.ram[CNT + 1] << 16) | (m.ram[CNT + 2] << 8) | m.ram[CNT + 3]) >>> 0;
 
 // ===========================================================================
 // mdrom
