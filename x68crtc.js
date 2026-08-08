@@ -158,7 +158,11 @@ export class X68Crtc {
     this.hSyncEnd = w(0x02, 0x03);
     this.hStart = w(0x04, 0x05);
     this.hEnd = w(0x06, 0x07);
-    this.vTotal = w(0x08, 0x09) || 1;
+    // R04 is a 16-bit register but a CRT has a few hundred lines, and every
+    // line costs the machine a scheduling slice. A program that leaves garbage
+    // here (a half-written register, a game that scribbles over the CRTC on
+    // its way to crashing) would otherwise make one frame take minutes.
+    this.vTotal = Math.max(1, Math.min(2048, w(0x08, 0x09) || 1));
     this.vSyncEnd = w(0x0a, 0x0b);
     this.vStart = w(0x0c, 0x0d);
     this.vEnd = w(0x0e, 0x0f);
@@ -194,7 +198,7 @@ export class X68Crtc {
     const h = (rasters * this.verticalStep) / 2;
     this.height = h > 0 ? Math.min(h | 0, 1024) : 0;
     this.clocksPerFrame = this.highReso ? CLOCKS_PER_FRAME_HIGH : CLOCKS_PER_FRAME_NORMAL;
-    this.clocksPerLine = (this.clocksPerFrame / this.vTotal) | 0;
+    this.clocksPerLine = Math.max(1, (this.clocksPerFrame / this.vTotal) | 0);
   }
 
   // Which picture line a given raster line draws, or -1 outside the display.

@@ -636,6 +636,10 @@ export class X68000Machine {
         if (!(e instanceof BusError)) throw e;
         used = 4;
       }
+      // A step that costs nothing would spin here forever. Nothing in
+      // m68000.js returns zero, but the loop is the machine's only unbounded
+      // one and a hang here takes the whole host with it.
+      if (!(used > 0)) used = 4;
       this._cycleDebt -= used;
       spent += used;
     }

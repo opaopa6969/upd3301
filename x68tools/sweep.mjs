@@ -10,11 +10,13 @@
 //           screen is a real thing) but worth a second look.
 //   black   nothing at all, and the CPU is somewhere it should not be
 //   halted  the 68000 took a double bus fault
+//   slow    the wall-clock cap ran out before the frame count did
 //   reject  the file would not parse as a floppy image
 //
 // Usage:
 //   node x68tools/sweep.mjs --ipl IPL.DAT --cgrom CG.DAT --dir <dir>
-//                           [--frames 1200] [--limit 50] [--json out.json]
+//                           [--frames 1200] [--limit 50] [--maxms 30000]
+//                           [--json out.json]
 
 import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -72,6 +74,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const cgrom = o.cgrom ? new Uint8Array(readFileSync(o.cgrom)) : null;
   const sram = o.sram ? new Uint8Array(readFileSync(o.sram)) : null;
   const frames = parseInt(o.frames, 10) || 1200;
+  const maxMs = parseInt(o.maxms, 10) || 30000;
   let files = walk(o.dir).sort();
   if (o.limit) files = files.slice(0, parseInt(o.limit, 10));
 
@@ -88,10 +91,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         const m = new X68000Machine({ ipl, cgrom, sram });
         m.insertDisk(0, disk);
         const t0 = Date.now();
-        for (let i = 0; i < frames; i++) m.stepFrame();
+        // A wall-clock cap, not just a frame count: an image that programs a
+        // pathological screen can make one frame cost seconds, and one such
+        // disk should not stall a sweep of four hundred.
+        let ran = 0;
+        for (let i = 0; i < frames; i++) {
+          m.stepFrame();
+          ran++;
+          if (Date.now() - t0 > maxMs) break;
+        }
         const c = classify(m);
-        row = { name, ...c, ms: Date.now() - t0, pc: m.cpu.pc.toString(16),
+        row = { name, ...c, frames: ran, ms: Date.now() - t0, pc: m.cpu.pc.toString(16),
                 media: summarizeX68Disk(disk).media, boot: bootRecord(disk) };
+        if (ran < frames) row.verdict = 'slow';
       }
     } catch (e) {
       row = { name, verdict: 'reject', why: e.message };
