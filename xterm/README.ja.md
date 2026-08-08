@@ -86,6 +86,42 @@ localStorageに保存）と、標準レンダラーへ戻す **CRT** トグル�
    `/ws` を導出する（純正クライアントと同じ規則）ので、パスマウントされた
    インスタンスもそのまま動く。
 
+### aerie へのデプロイ (`crt.unlaxer.org`)
+
+`crt.unlaxer.org` は **aerie** ホスト（repoの動いているマシンとは別）で
+Dockerコンテナ `ttyd-crt` として動き、docker-compose で管理されている。
+HTMLはビルド時にイメージ内に焼き込まれるので、デプロイはファイルコピーでは
+なく**イメージの再ビルド**になる。
+
+**サービス構成**（aerie側 `~/work/aerie-platform/` 配下）:
+```
+services/ttyd-crt/
+├── compose.yml      # ttyd-crt サービス: イメージ構築・ssh鍵マウント・traefik-public 参加
+├── Dockerfile       # FROM tsl0922/ttyd:latest + COPY ttyd-crt.html /ttyd-crt.html
+└── ttyd-crt.html    # ビルド済みファイル（`node xterm/build.mjs` の出力）
+```
+compose サービスは `ttyd -W --index /ttyd-crt.html ssh ... tmux` を起動し、
+ssh鍵は `services/ttyd/ssh/` のものを共用する（鍵は同じ、tmuxセッション名は
+`crt` で通常の ttyd と分ける）。
+
+**このrepoからデプロイ**（aerie上ではなく、repoマシンで実行）:
+```sh
+node xterm/build.mjs                                       # → xterm/dist/ttyd-crt.html
+scp xterm/dist/ttyd-crt.html aerie:~/work/aerie-platform/services/ttyd-crt/ttyd-crt.html
+ssh aerie 'cd ~/work/aerie-platform/services/ttyd-crt && docker compose up -d --build'
+```
+再ビルドでコンテナイメージが切り替わる（HTML は `COPY` で焼き込まれるので、
+`docker cp` だけだと次の `up --build` で消える）。確認:
+```sh
+ssh aerie 'docker exec ttyd-crt md5sum /ttyd-crt.html'
+```
+ブラウザはハードリロード（ttyd が `Cache-Control: no-cache` を返すが、
+コンテナ切り替え前の旧HTMLをブラウザが持ち続けることがある）。
+
+**品質トグル**: パネルの `quality` セレクタで `品質(30fps)`（tubeが走査線
+ダブリング、CRT準拠）と `速度(60fps)`（tubeをソース解像度で動かしCSS拡大、
+入力ラグ最小）を切り替えられる。`localStorage` の `ttyd-crt-settings` に保存。
+
 ## 開発
 
 - `xterm/ttyd-crt.html` は開発ページ**兼**ビルドテンプレート。

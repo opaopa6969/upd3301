@@ -20,7 +20,7 @@
 // selection *behavior* and clipboard stay 100% xterm.js — we only replace
 // the photons.
 
-import { CrtPhosphor, PHOSPHORS } from '../crt.js';
+import { CrtPhosphor, PHOSPHORS, rollScan } from '../crt.js';
 import { CrtTube, MASKS } from '../tube.js';
 import { G } from '../demo/font.js';
 
@@ -262,9 +262,20 @@ const DEFAULT_OPTIONS = Object.freeze({
   flicker: false,      // 10 Hz beat + mains drift, frame-counted
   strict1979: false,   // drop per-cell backgrounds (PC-8001 truth)
   cursorBlink: true,
-  outputScale: 2,      // tube output pixels per source pixel (h; v gets ×2 more)
+  quality: 'high',     // 'high' = scanline-doubled tube (≈30fps at 80×50);
+                       // 'fast' = tube at src res, CSS scales — 60fps target
   scanlineDepth: 0.55, // traces visible, glyph bodies stay solid
   beamHeight: 0.6,
+  // ---- rear-knob twins of demo/crt-panel.js (kept opt-in; defaults ≈ clean) ----
+  hSize: 1.0,          // H-SIZE: horizontal scan amplitude (1 = fills glass)
+  vSize: 1.0,          // V-SIZE: vertical scan amplitude
+  convergence: 0.0035, // CONV: R/B gun mis-registration per r² (color fringes)
+  ghost: 0,            // glass reflection (0 = off; ~0.07 for the museum look)
+  tint: 0,             // NTSC chroma phase error (radians)
+  tintOn: false,       // TINT knob enable (phase error only exists when it does)
+  vhold: 0,            // V-HOLD: vertical roll speed (lines/frame; 0 = locked)
+  interlaced: false,   // interlace: each line refreshes at half rate (flickers)
+  line400: false,      // 400-line: pack scanlines until gaps close (vs 200-line gap)
 });
 
 export class CrtRendererAddon {
@@ -288,6 +299,9 @@ export class CrtRendererAddon {
     this._enabled = true;
     this._disposables = [];
     this._workCell = null;
+    // V-HOLD / power-collapse state (mirrors demo/crt-panel.js applyDeflection)
+    this._rollPos = 0;
+    this._rollBuf = null;
   }
 
   // ITerminalAddon
@@ -325,21 +339,29 @@ export class CrtRendererAddon {
     if ('phosphor' in partial && this._phosphor) {
       this._phosphor.setPhosphor(PHOSPHORS[o.phosphor] ?? PHOSPHORS.P22);
     }
-    if ('outputScale' in partial) this._cols = 0; // full rebuild
+    if ('quality' in partial || 'line400' in partial) this._cols = 0; // full rebuild
     else if (this._tube) {
       if ('focus' in partial) this._tube.beamWidth = o.focus;
-      if ('mask' in partial || 'maskPitch' in partial || 'barrel' in partial) {
-        this._tube.setGeometry({ mask: o.mask, maskPitch: o.maskPitch, barrel: o.barrel });
+      if ('ghost' in partial) this._tube.ghost = o.ghost;
+      if ('mask' in partial || 'maskPitch' in partial || 'barrel' in partial
+        || 'hSize' in partial || 'vSize' in partial || 'convergence' in partial) {
+        this._tube.setGeometry({
+          mask: o.mask, maskPitch: o.maskPitch, barrel: o.barrel,
+          hSize: o.hSize, vSize: o.vSize, convergence: o.convergence,
+        });
       }
     }
     return this;
   }
 
   // CRT off = give the page back to xterm's own renderer, live.
+  // We never hide .xterm-screen: our canvas paints on top opaquely so the
+  // screen isn't visible anyway, but hiding it breaks xterm.js's focus/
+  // input restoration in some layouts (the hidden layer stops receiving
+  // the click-to-focus that routes keyboard into the terminal).
   setEnabled(on) {
     this._enabled = !!on;
     if (this._canvas) this._canvas.style.display = on ? '' : 'none';
-    if (this._screen) this._screen.style.visibility = on ? 'hidden' : '';
     return this;
   }
 
@@ -363,7 +385,6 @@ export class CrtRendererAddon {
       term.element.appendChild(c);
       this._canvas = c;
       this._ctx = c.getContext('2d');
-      if (this._enabled && this._screen) this._screen.style.visibility = 'hidden';
       if (!this._enabled) c.style.display = 'none';
       this._workCell = term.buffer?.active?.getNullCell?.() ?? null;
     }
@@ -376,19 +397,32 @@ export class CrtRendererAddon {
     this._cols = term.cols;
     this._rows = term.rows;
     const w = this._cols * 8, h = this._rows * 8;
-    const s = Math.max(1, this.options.outputScale);
-    const outW = Math.round(w * s);
-    const outH = Math.round(h * 2 * s); // ×2: scanline doubling, like the demos
+    const o = this.options;
+    // Quality → output resolution. 'high' scanline-doubles in the tube (the
+    // CRT-accurate look; ≈30fps at 80×50). 'fast' drops the tube to source res
+    // and lets CSS scale the canvas — 60fps target, scanlines get smoother.
+    let outW, outH;
+    if (o.quality === 'fast') {
+      outW = w; outH = h;
+    } else {
+      outW = w; outH = h * 2; // ×2: scanline doubling, like the demos
+    }
     this._indexed = new Uint8Array(w * h);
+    this._rollBuf = new Uint8Array(w * h);
     this._phosphor = new CrtPhosphor({
       width: w, height: h,
-      phosphor: PHOSPHORS[this.options.phosphor] ?? PHOSPHORS.P22,
+      phosphor: PHOSPHORS[o.phosphor] ?? PHOSPHORS.P22,
     });
+    // 400-line packs the traces until the gaps vanish; 200-line leaves real
+    // black glass between them — same knob as demo/crt-panel.js.
     this._tube = new CrtTube({
       srcWidth: w, srcHeight: h, outWidth: outW, outHeight: outH,
-      mask: this.options.mask, maskPitch: this.options.maskPitch,
-      barrel: this.options.barrel, beamWidth: this.options.focus,
-      scanlineDepth: this.options.scanlineDepth, beamHeight: this.options.beamHeight,
+      mask: o.mask, maskPitch: o.maskPitch,
+      barrel: o.barrel, beamWidth: o.focus,
+      hSize: o.hSize, vSize: o.vSize, convergence: o.convergence,
+      ghost: o.ghost,
+      scanlineDepth: o.line400 ? 0.3 : o.scanlineDepth,
+      beamHeight: o.line400 ? 1.0 : o.beamHeight,
     });
     this._rgba = new Uint8ClampedArray(outW * outH * 4);
     this._canvas.width = outW;
@@ -440,7 +474,17 @@ export class CrtRendererAddon {
     });
     this._overlaySelection(term, buf);
 
-    this._phosphor.step(this._indexed, dt);
+    // V-HOLD: when the vertical oscillator free-runs off the sync frequency
+    // each field starts drawing at a shifted line — the picture rolls. We
+    // remap rows with wraparound over (h + blank); rows landing in the VBI
+    // go dark, exactly like crt-panel.js applyDeflection (which this mirrors).
+    const src = this._applyDeflection(this._indexed, this._cols * 8, this._rows * 8);
+
+    // interlace lives in the phosphor layer: each line refreshes at half rate
+    // and detail flickers on short phosphor. Frame parity picks a field.
+    this._phosphor.step(src, dt, {
+      fieldParity: this.options.interlaced ? (this._frame & 1) : null,
+    });
     // flicker: the ~10 Hz beat you get *filming* a 60 Hz raster, plus a slow
     // mains drift — the demo panel's recipe, frame-counted (crt-panel.js)
     let flick = 1;
@@ -452,9 +496,32 @@ export class CrtRendererAddon {
     this._tube.apply(this._phosphor.composite(), this._rgba, {
       scale: this.options.bright * flick,
       contrast: this.options.contrast,
+      tint: this.options.tintOn ? this.options.tint : 0,
     });
     this._img.data.set(this._rgba);
     this._ctx.putImageData(this._img, 0, 0);
+  }
+
+  // V-HOLD + power collapse, applied to an indexed frame before excitation.
+  // A twin of demo/crt-panel.js applyDeflection (no power state here — the
+  // terminal is always on; only the roll is exposed). Mutates _rollPos and
+  // reuses _rollBuf; returns src untouched when locked.
+  _applyDeflection(src, w, h) {
+    const blank = Math.round(h * 0.12), total = h + blank;
+    const vhold = this.options.vhold;
+    if (vhold !== 0) {
+      const wobble = 1 + 0.8 * Math.sin(this._rollPos / total * Math.PI * 2);
+      this._rollPos = (this._rollPos + vhold * wobble + total) % total;
+    } else if (this._rollPos !== 0) {
+      this._rollPos = this._rollPos < total / 2
+        ? this._rollPos * 0.8 : total - (total - this._rollPos) * 0.8;
+      if (this._rollPos < 0.6 || this._rollPos > total - 0.6) this._rollPos = 0;
+    }
+    if (this._rollPos === 0) return src;
+    if (!this._rollBuf || this._rollBuf.length !== w * h) this._rollBuf = new Uint8Array(w * h);
+    const stretch = 1 + Math.min(0.5, Math.abs(vhold) * 0.03)
+      * Math.sin(this._rollPos / total * Math.PI * 4);
+    return rollScan(src, this._rollBuf, w, h, Math.round(this._rollPos) % total, blank, 1, stretch);
   }
 
   // xterm's selection layer is hidden with the rest of the screen, so echo

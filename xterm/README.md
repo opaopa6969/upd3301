@@ -87,8 +87,46 @@ changes:
 2. Add `--index /opt/volta/assets/ttyd-crt.html` to that instance's ttyd
    command line.
 3. Reverse-proxy config is untouched: the page derives `/token` and `/ws`
-   from its own URL, exactly like the stock client, so path-mounted
-   instances keep working.
+    from its own URL, exactly like the stock client, so path-mounted
+    instances keep working.
+
+### aerie deployment (`crt.unlaxer.org`)
+
+`crt.unlaxer.org` runs on the **aerie** host (not the repo's own machine)
+as a Docker container `ttyd-crt`, managed by docker-compose. The HTML is
+baked into the image at build time, so a deploy is a rebuild, not a file
+copy.
+
+**Service layout** (on aerie, under `~/work/aerie-platform/`):
+```
+services/ttyd-crt/
+├── compose.yml      # ttyd-crt service: builds image, mounts ssh key, joins traefik-public
+├── Dockerfile       # FROM tsl0922/ttyd:latest + COPY ttyd-crt.html /ttyd-crt.html
+└── ttyd-crt.html    # the built file (output of `node xterm/build.mjs`)
+```
+The compose service runs `ttyd -W --index /ttyd-crt.html ssh ... tmux`,
+sharing the SSH key from `services/ttyd/ssh/` (same key, different tmux
+session name `crt`).
+
+**Deploy from this repo** (run on the repo machine, not aerie):
+```sh
+node xterm/build.mjs                                       # → xterm/dist/ttyd-crt.html
+scp xterm/dist/ttyd-crt.html aerie:~/work/aerie-platform/services/ttyd-crt/ttyd-crt.html
+ssh aerie 'cd ~/work/aerie-platform/services/ttyd-crt && docker compose up -d --build'
+```
+The rebuild flips the container image (the HTML is `COPY`-baked, so a
+plain `docker cp` would be lost on next `up --build`). Verify with:
+```sh
+ssh aerie 'docker exec ttyd-crt md5sum /ttyd-crt.html'
+```
+and hard-reload the browser (the page itself sets `Cache-Control: no-cache`
+via ttyd, but the browser may still hold the old HTML across the
+container swap).
+
+**Quality toggle**: the panel's `quality` selector switches between
+`品質(30fps)` (tube scanline-doubled, CRT-accurate) and `速度(60fps)` (tube
+at source resolution, CSS-scaled, minimal input lag). Persisted in
+`localStorage` under `ttyd-crt-settings`.
 
 ## Development
 
