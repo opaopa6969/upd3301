@@ -23,6 +23,7 @@ import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { Pc8801Machine } from '../machine88.js';
 import { parseD88All } from '../d88.js';
+import { loadRomSet } from './romset.mjs';
 import { disasm } from '../z80dis.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -41,9 +42,9 @@ const MAXHITS = Number(process.env.MAXHITS || 200);
 const COLLAPSE = process.env.PCFILTER === '1';
 
 const rd = (p) => new Uint8Array(readFileSync(p));
-const main = rd(`${ROMDIR}/n88.rom`), sub = rd(`${ROMDIR}/disk.rom`);
-const ext = new Uint8Array(0x8000);
-for (let i = 0; i < 4; i++) ext.set(rd(`${ROMDIR}/n88_${i}.rom`), i * 0x2000);
+// Load the ROM set the way M88 does (combined pc88.rom first) so both sides run
+// the same bytes — see docs/m88-comparison.md.
+const { main, ext, sub } = loadRomSet(ROMDIR);
 
 const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
 parseD88All(rd(resolve(disk))).forEach((img, u) => { if (u < 2) m.insertDisk(u, img); });

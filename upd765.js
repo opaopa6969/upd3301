@@ -308,6 +308,14 @@ export class Upd765 {
     // to R+1 (genuine multi-sector read).
     if (m && !m.format && !this.execWrite) {
       const d = this.drives[this.us];
+      // ST0 reports the head the transfer actually ran on, while the result ID
+      // reports where the chip stopped — and under MT those disagree, because
+      // finishing side 1 flips the ID back to side 0. Capture the head before
+      // the flip. (M88 keeps the same split: a saved `hdue` feeds ST0 while
+      // `idr.h` has already been toggled by IDIncrement.) Ys reads a cylinder
+      // with MT starting on side 1 and checks ST0's HD bit; reporting the
+      // post-flip head there makes it re-issue the same read forever.
+      m.stHd = this.hd;
       if (this._idIncrement(m)) {
         const next = findSector(d.disk, d.cyl, this.hd, m.r, m.n);
         if (next) {
@@ -333,7 +341,8 @@ export class Upd765 {
     const sec = m.sec;
     // a sector whose stored status is non-zero (protection!) reports it:
     // D88 status 0xB0 = data CRC error → ST1 DE, 0xF0 = no data → ST1 ND
-    let xst1 = st1, xst2 = st2, st0 = this.us | (this.hd << 2) | st0extra;
+    const stHd = m.stHd !== undefined ? m.stHd : this.hd; // see _execDone
+    let xst1 = st1, xst2 = st2, st0 = this.us | (stHd << 2) | st0extra;
     if (sec && sec.status) {
       st0 |= ST0_AT;
       if (sec.status === 0xa0 || sec.status === 0xb0) { xst1 |= 0x20; xst2 |= (sec.status === 0xb0 ? 0x20 : 0); }
