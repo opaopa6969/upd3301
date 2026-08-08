@@ -236,6 +236,17 @@ int main(int argc, char** argv) {
 
   // final: count tvram content + look for "ENIX"
   int tvnz = 0; for (int i = 0; i < 0x1000; i++) if (tv[i]) tvnz++;
+  // Graphics-plane fingerprint. tvramNZ alone cannot judge a title that turns the
+  // text plane off and draws everything in GVRAM — it reads as "blank screen" on
+  // whichever side got there first. Count non-zero bytes across the three planes
+  // so a graphics-only screen is still comparable. (Total is plane-order
+  // independent, so it does not matter that M88 packs the planes per address
+  // while we keep three arrays.)
+  { PC8801::Memory::quadbyte* gv = mem->GetGVRAM();
+    int gnz = 0;
+    for (int i = 0; i < 0x4000; i++)
+      for (int p = 0; p < 3; p++) if (gv[i].byte[p]) gnz++;
+    printf("# final gvramNZ=%d\n", gnz); }
   printf("# final E6CD=%02x EC88=%04x tvramNZ=%d\n", ram[0xe6cd], ram[0xec88]|(ram[0xec89]<<8), tvnz);
   printf("# tvram text rows (ASCII):\n");
   for (int r = 0; r < 25; r++) {
