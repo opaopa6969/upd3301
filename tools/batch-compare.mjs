@@ -36,6 +36,7 @@ import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { Pc8801Machine } from '../machine88.js';
 import { parseD88All } from '../d88.js';
+import { loadRomSet } from './romset.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROMDIR = process.argv[2] || '/mnt/c/var/emulator/エミュレーター本体/PC88/m88204';
@@ -44,10 +45,11 @@ const FRAMES = Number(process.argv[4] || 1500); // late enough that both emulato
 const REFDRV = resolve(HERE, '../m88ref/_m88m_build/M88M/refdrv');
 
 const rd = (p) => new Uint8Array(readFileSync(p));
-const main = rd(`${ROMDIR}/n88.rom`);
-const sub = rd(`${ROMDIR}/disk.rom`);
-const ext = new Uint8Array(0x8000);
-for (let i = 0; i < 4; i++) ext.set(rd(`${ROMDIR}/n88_${i}.rom`), i * 0x2000); // N88-DISK-BASIC
+// Load the ROM set exactly the way M88 does. M88 prefers a combined pc88.rom and
+// only falls back to n88.rom/disk.rom; reading the separate files here while M88
+// read the combined image had the two sides running *different ROM revisions*
+// (2021 of 8192 bytes differ in the sub ROM alone). See docs/m88-comparison.md.
+const { main, ext, sub } = loadRomSet(ROMDIR);
 
 function ours(path) {
   try {

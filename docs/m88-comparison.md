@@ -60,7 +60,10 @@ was the big lever. `E6CD == 0xff` is **not** universally "stuck": several titles
    comparison *harness* that mounted a single image. No emulator bug. *(Credit:
    codex flagged the two-drive hypothesis.)* **Fix applied to the sweep method
    below.**
-2. **Ys1 / Abyss2 — `E6CD` differs at f250 — NOT A BUG (post-boot phase).**
+2. **Ys1 / Abyss2 — `E6CD` differs at f250 — ~~not a bug (post-boot phase)~~ → for Ys1
+   this was a MISDIAGNOSIS.** The MT fix (2026-08-08) moved Ys1 from `fc/1425` to
+   `00/2678`, an **exact match with M88** (YS/YS2/Xak2 likewise). It was a real bug,
+   not a phase difference. Original note follows:**
    E6CD is `0` for ~200 frames in both (the title boots and reaches gameplay),
    then transitions to a title-specific value (Ys1→fc, Abyss2→1) at a slightly
    different frame than M88. The f250 snapshot just caught the two at different

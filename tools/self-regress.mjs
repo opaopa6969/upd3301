@@ -24,6 +24,7 @@
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { resolve, join } from 'path';
 import { parseD88All } from '../d88.js';
+import { loadRomSet } from './romset.mjs';
 
 const argv = process.argv.slice(2);
 if (!argv[0]) {
@@ -47,9 +48,10 @@ const { Pc8801Machine: New } = await import('../machine88.js');
 const { Pc8801Machine: Old } = await import(BASE);
 
 const rd = (p) => new Uint8Array(readFileSync(p));
-const main = rd(`${ROMDIR}/n88.rom`), sub = rd(`${ROMDIR}/disk.rom`);
-const ext = new Uint8Array(0x8000);
-for (let i = 0; i < 4; i++) ext.set(rd(`${ROMDIR}/n88_${i}.rom`), i * 0x2000);
+// Load the ROM set exactly the way M88 does — it prefers a combined pc88.rom
+// and only falls back to the separate files, and mixing the two means the two
+// emulators run different revisions (see docs/m88-comparison.md).
+const { main, ext, sub } = loadRomSet(ROMDIR);
 const hex = (v, w = 2) => (v >>> 0).toString(16).padStart(w, '0');
 
 function fingerprint(Klass, bytes) {
