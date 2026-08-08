@@ -12,3 +12,7 @@ demo/*.mp3
 
 # per-user ROM/disk library written by serve.py /api/store (user dumps; never in git)
 userdata/
+
+# SingleStepTests 68000 vectors, fetched by m68ktools/fetch-tests.sh (~138 MB).
+# Reference data, regenerated upstream — never committed.
+m68k-tests/

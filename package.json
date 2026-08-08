@@ -13,6 +13,7 @@
     "./crt": "./crt.js",
     "./tube": "./tube.js",
     "./z80": "./z80.js",
+    "./m68000": "./m68000.js",
     "./z80dis": "./z80dis.js",
     "./machine": "./machine.js",
     "./machine88": "./machine88.js",
@@ -43,6 +44,8 @@
     "phosphor",
     "shadow-mask",
     "z80",
+    "m68000",
+    "68000",
     "emulator",
     "terminal",
     "renderer"
