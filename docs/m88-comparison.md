@@ -375,13 +375,16 @@ Measured over 353 titles at 1500f:
 | boost removed | 328 | 338 | **regressed (tv190)** | **became a lead** |
 | **phase-gated** | **328/353 (93%)** | **338/353 (96%)** | ok | ok |
 
-**Fundamentally this is the price of not modelling the drive motor.** Model the real time a
-spindle takes to come up to speed and neither hack is needed; the FDC phase is standing in
-for that. Left as future work.
+~~**Fundamentally this is the price of not modelling the drive motor.**~~
 
-## Wait states do not explain the boot-speed difference (2026-08-10, hypothesis rejected)
-
-`machine88.js` does not model memory wait states (it says so in a comment), while M88 runs
+**Correction (2026-08-10, from an adversarial review)**: that has the causality backwards.
+`pc80s31.js:49` only stores the motor output — it drives neither READY nor the index — SEEK
+completes instantly, and READ DATA enters `execute` with no head load, settling or ID search.
+**Not modelling the motor makes the drive ready *earlier* than real hardware, which is no
+physical reason to also run the CPU 16x faster.** Calling `phase !== 'execute'` "waiting on
+mechanics" does not describe any real FDC state either; this is suspected to be a compatibility
+hack of the same family as M88's ROM patch. See
+[the adversarial review](./review/2026-08-10-fdc-adversarial-review.md). model memory wait states (it says so in a comment), while M88 runs
 with `Config::enablewait`. That looked like a candidate for the long-standing "our emulator
 boots ~20 frames ahead of M88". **Reading M88's actual table rejects it.**
 
