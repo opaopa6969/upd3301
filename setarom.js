@@ -134,6 +134,25 @@ export const SETA_SETS = Object.freeze({
     },
   },
 
+  // Ultraman Club. Sprites only like thunderl, but a 16 MHz CPU and, again,
+  // sprite ROMs that are NOT interleaved — two contiguous halves.
+  umanclub: {
+    title: 'Ultraman Club', year: 1992, maker: 'Banpresto', board: 'umanclub',
+    regions: {
+      maincpu: { size: 0x040000, chips: [
+        { names: ['uw001006.u48'], size: 0x20000, crc: 0x3dae1e9d, at: 0, step: 2 },
+        { names: ['uw001007.u49'], size: 0x20000, crc: 0x5c21e702, at: 1, step: 2 },
+      ] },
+      gfx1: { size: 0x100000, chips: [
+        { names: ['bp-u-002.u2'], size: 0x80000, crc: 0x936cbaaa, at: 0x00000, step: 1 },
+        { names: ['bp-u-001.u1'], size: 0x80000, crc: 0x87813c48, at: 0x80000, step: 1 },
+      ] },
+      x1snd: { size: 0x100000, optional: true, chips: [
+        { names: ['uw003.u13'], size: 0x100000, crc: 0xe2f718eb, at: 0x00000, step: 1 },
+      ] },
+    },
+  },
+
   // A later board: bigger program, trackballs, a scanline timer instead of a
   // plain vblank interrupt, and — note — sprite ROMs that are NOT interleaved.
   krzybowl: {

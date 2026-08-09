@@ -12,9 +12,10 @@ It satisfies the same contract as `machine88.js`, `machinenes.js`,
 `restore()`, `schemaVersion` — so `demo/machine.html` gives it fast-forward,
 rewind and jog-shuttle without knowing anything about it.
 
-**Thunder & Lightning (`thunderl`) is verified pixel-identical to MAME 0.242
-across a full minute of attract mode and demo play — 21 sampled frames,
-0 of 92160 pixels different on every one.** Section 9 has the procedure.
+**Three games are verified pixel-identical to MAME 0.242.** Thunder &
+Lightning over a full minute of attract mode and demo play — 21 sampled frames,
+0 of 92160 pixels different on every one — plus Ultraman Club and Krazy Bowl at
+6 sampled frames each. Section 9 has the procedure.
 
 ## 1. What is here
 
@@ -23,7 +24,7 @@ across a full minute of attract mode and demo play — 21 sampled frames,
 | `setarom.js` | MAME ROM sets: the per-chip layout of each board, byte interleaving, CRC-based identification, and assembly into regions |
 | `x1001.js` | The X1-001 / X1-002 sprite pair: tile decoding, 512 sprites, the floating tilemap, wrapping, flip |
 | `x1010.js` | The X1-010 sound chip: sixteen voices, PCM out of ROM and wavetable-plus-envelope out of chip RAM |
-| `machineseta.js` | The machine: a page-table address decoder, three board wirings, interrupts, the protection PAL, controls, the frame loop |
+| `machineseta.js` | The machine: a page-table address decoder, four board wirings, interrupts, the protection PAL, controls, the frame loop |
 | `setatools/boot.mjs` | Headless run, frame statistics, ASCII thumbnail, snapshot measurement |
 | `setatools/mameref.lua` | The oracle side: dumps MAME's state, or its screen's pixels, at chosen frames |
 | `setatools/mameref.mjs` | The comparison: runs this machine to the same frames and diffs, region by region or pixel by pixel |
@@ -37,10 +38,11 @@ X68000 depend on. `tools/` is untouched.
 
 | Set | Game | Board | State |
 |---|---|---|---|
-| `thunderl` | Thunder & Lightning (Seta, 1990) | `thunderl` | **Pixel-identical to MAME.** Boots, attract mode, coin, play |
+| `thunderl` | Thunder & Lightning (Seta, 1990) | `thunderl` | **Pixel-identical to MAME, 21/21 frames.** Boots, attract mode, coin, play |
 | `thunderla` | Thunder & Lightning, set 2 | `thunderl` | Same board; the alternate program ROMs are in the table, not tested against a dump |
-| `wits` | Wit's (Athena / Visco, 1989) | `wits` | Same PCB without the protection PAL. **No dump on hand — untested** |
-| `krzybowl` | Krazy Bowl (American Sammy, 1994) | `krzybowl` | Boots to its title screen. Trackballs read a standing zero |
+| `umanclub` | Ultraman Club (Banpresto, 1992) | `umanclub` | **Pixel-identical to MAME, 6/6 frames.** 16 MHz, level-3 interrupt, horizontal cabinet |
+| `krzybowl` | Krazy Bowl (American Sammy, 1994) | `krzybowl` | **Pixel-identical to MAME, 6/6 frames.** Trackballs read a standing zero |
+| `wits` | Wit's (Athena / Visco, 1989) | `wits` | Same PCB as thunderl without the protection PAL. **No dump on hand — untested** |
 
 Section 11 lists what every other Seta set would need and why it is not here.
 
@@ -340,6 +342,16 @@ frame     1 …  3600     0 / 92160 pixels differ on every one
 21/21 frames pixel-identical
 ```
 
+The other two boards with a dump on hand, 6 frames each:
+
+```
+umanclub   6/6 frames pixel-identical   (384x240, 0/92160 every time)
+krzybowl   6/6 frames pixel-identical   (304x240, 0/72960 every time)
+```
+
+Three boards, three different interrupt arrangements, two different sprite-ROM
+wirings, and one of them with a protection PAL — all exact.
+
 Two caveats stated plainly.
 
 **MAME's frame index is one ahead of this machine's** for pictures:
@@ -371,15 +383,16 @@ Measured after 1200 frames of `thunderl`, counting typed arrays at their byte
 length and everything else at eight bytes a value — the same arithmetic
 `mdtools/screenshot.mjs` and the host's rewind budget use:
 
-| Part | thunderl | krzybowl |
-|---|---|---|
-| X1-001 chip RAM | 16.8 KB | 16.8 KB |
-| X1-010 chip RAM + bus shadow | 16.2 KB | 16.2 KB |
-| work RAM | 16.0 KB | 64.0 KB |
-| palette (live + as displayed) | 2.0 KB | 2.0 KB |
-| 68000 | 0.2 KB | 0.2 KB |
-| battery-backed settings | — | 0.3 KB |
-| **total** | **51.3 KB** | **99.5 KB** |
+| Part | thunderl | krzybowl | umanclub |
+|---|---|---|---|
+| X1-001 chip RAM | 16.8 KB | 16.8 KB | 16.8 KB |
+| X1-010 chip RAM + bus shadow | 16.2 KB | 16.2 KB | 16.2 KB |
+| work RAM | 16.0 KB | 64.0 KB | 64.0 KB |
+| palette (live + as displayed) | 2.0 KB | 2.0 KB | 2.0 KB |
+| 68000 | 0.2 KB | 0.2 KB | 0.2 KB |
+| battery-backed settings | — | 0.3 KB | — |
+| scratch RAM sharing the palette page | — | — | 16.0 KB |
+| **total** | **51.3 KB** | **99.5 KB** | **115.3 KB** |
 
 For scale: Famicom 3 KB, FDS 47 KB, Mega Drive 142 KB, X68000 1564 KB.
 
@@ -426,6 +439,11 @@ nothing drives them.
 
 **`wits` is untested.** The board description and the ROM table are written from
 `seta.cpp`, and no dump was on hand to run.
+
+**Ultraman Club's palette-page scratch RAM is over-allocated.** The board's
+`$300400-$300FFF` is 3 KB and gets a 16 KB buffer, because that buffer is shared
+with Wit's `$E04000-$E07FFF`. It costs 13 KB of every rewind slot on that board
+and nothing else.
 
 **Sound is unverified.** The X1-010 was written against MAME's `x1_010.cpp` and
 its tests check the register semantics and determinism, but nothing here has

@@ -9,7 +9,7 @@
 // operating system. The board is a 68000, one ROM, sixteen kilobytes of RAM and
 // two custom chips, and it starts running the game from the reset vector. What
 // is left to write is a memory map — which is why this file is a third the size
-// of machinex68.js while covering three different boards.
+// of machinex68.js while covering four different boards.
 //
 // It is also the machine where rewind works best. A snapshot is about 50 KB
 // (measured numbers in docs/seta-design.md) against the X68000's 1.5 MB, so the
@@ -71,7 +71,7 @@ export const SETA_BOARDS = Object.freeze({
     romSize: 0x10000, ramBase: 0xffc000, ramSize: 0x4000,
     width: 512, height: 256, visX: [0, 384], visY: [8, 248],
     rotation: 270, bgPen: 0x1f0, paletteWords: 0x200,
-    irq: 'vblank2', protection: 'thunderl',
+    irq: 'vblank', irqLevel: 2, irqHold: false, protection: 'thunderl',
     dsw: 0xe9ff, coinsDip: 0xe0,
     // The offsets differ between upright and cocktail because the picture is
     // mirrored about a pivot the chip does not know the position of. The
@@ -92,7 +92,7 @@ export const SETA_BOARDS = Object.freeze({
     romSize: 0x10000, ramBase: 0xffc000, ramSize: 0x4000,
     width: 512, height: 256, visX: [0, 384], visY: [8, 248],
     rotation: 0, bgPen: 0x1f0, paletteWords: 0x200,
-    irq: 'vblank2', protection: null,
+    irq: 'vblank', irqLevel: 2, irqHold: false, protection: null,
     dsw: 0xffff, coinsDip: 0xe0, players: 4,
     sprite: { fgXoffs: 0, fgFlipXoffs: 0, fgYoffs: 0x0e, fgFlipYoffs: -0x12,
               bgYoffs: -0x1, bgFlipYoffs: 0x1 },
@@ -112,7 +112,7 @@ export const SETA_BOARDS = Object.freeze({
     romSize: 0x80000, ramBase: 0xf00000, ramSize: 0x10000,
     width: 512, height: 256, visX: [8, 312], visY: [8, 248],
     rotation: 270, bgPen: 0x1f0, paletteWords: 0x200,
-    irq: 'scanline12', protection: null,
+    irq: 'scanline12', irqHold: true, protection: null,
     dsw: 0xffff, coinsDip: 0xf0,
     sprite: { fgXoffs: 0, fgFlipXoffs: 0, fgYoffs: 0x0e, fgFlipYoffs: -0x06,
               bgYoffs: -0x1, bgFlipYoffs: -0x3 },
@@ -121,6 +121,24 @@ export const SETA_BOARDS = Object.freeze({
             [0x60, 0x60, P.TRACK], [0x80, 0x80, P.NVRAM], [0xa0, 0xa3, P.SND],
             [0xb0, 0xb0, P.PAL], [0xc0, 0xc3, P.SPRC], [0xd0, 0xd0, P.DUMMY],
             [0xe0, 0xe0, P.SPRY], [0xf0, 0xf0, P.RAM]],
+  },
+  // Ultraman Club, 1992. Sprites only again, but a 16 MHz 68000, a level 3
+  // interrupt that the acknowledge cycle clears rather than an ack register,
+  // sprite ROMs that are NOT interleaved, and a palette page whose upper three
+  // quarters are ordinary RAM.
+  umanclub: {
+    cpuHz: 16000000, x1sndHz: 16000000, fps: 60,
+    romSize: 0x40000, ramBase: 0x200000, ramSize: 0x10000,
+    width: 512, height: 256, visX: [0, 384], visY: [8, 248],
+    rotation: 0, bgPen: 0x1f0, paletteWords: 0x200, palTailRam: true,
+    irq: 'vblank', irqLevel: 3, irqHold: true, protection: null,
+    dsw: 0xffff, coinsDip: 0xf0,
+    sprite: { fgXoffs: 0, fgFlipXoffs: 0, fgYoffs: 0x0e, fgFlipYoffs: -0x12,
+              bgYoffs: -0x1, bgFlipYoffs: 0x1 },
+    pages: [[0x00, 0x03, P.ROM], [0x20, 0x20, P.RAM], [0x30, 0x30, P.PAL],
+            [0x40, 0x40, P.IN], [0x50, 0x50, P.COIN], [0x60, 0x60, P.DSW],
+            [0xa0, 0xa0, P.SPRY], [0xa8, 0xa8, P.DUMMY], [0xb0, 0xb3, P.SPRC],
+            [0xc0, 0xc3, P.SND]],
   },
 });
 
@@ -153,7 +171,7 @@ export class SetaMachine {
     // slot of every game — a quarter of thunderl's snapshot spent on nothing.
     const has = (code) => board.pages.some((p) => p[2] === code);
     this.nvram = has(P.NVRAM) ? new Uint8Array(0x100) : null;
-    this.extram = has(P.EXTRAM) ? new Uint8Array(0x4000) : null;
+    this.extram = (has(P.EXTRAM) || board.palTailRam) ? new Uint8Array(0x4000) : null;
     this.dummy = 0;
 
     const gfx = decodeSpriteTiles(romset.regions.gfx1 || new Uint8Array(0));
@@ -237,7 +255,7 @@ export class SetaMachine {
   // the request here, because on those the acknowledge cycle is the only thing
   // that ever clears it.
   _irqAck(level) {
-    if (this.board.irq === 'scanline12') {
+    if (this.board.irqHold) {
       this.irqLines &= ~(1 << level);
       this._pushIrq();
     }
@@ -259,7 +277,7 @@ export class SetaMachine {
       case P.IPL1ACK: this._setIrq(2, false); return 0;
       case P.IPL0ACK: this._setIrq(1, false); return 0;
       case P.DSW: return (a & 2) ? (this.dsw & 0xff) : ((this.dsw >> 8) & 0xff);
-      case P.PAL: { const i = (a & 0x3ff) >> 1; return i < this.paletteram.length ? this.paletteram[i] : 0; }
+      case P.PAL: return this._palRead(a);
       case P.IN: return this._inputRead(a);
       case P.SPRY: return this._spryRead(a);
       case P.SPRC: return this.video.codeRead((a & 0x3fff) >> 1);
@@ -280,7 +298,7 @@ export class SetaMachine {
       case P.IPL0ACK: this._setIrq(1, false); return;
       case P.PROT: this._protWrite(a); return;
       case P.COIN: this._coinWrite(v & 0xff); return;
-      case P.PAL: { const i = (a & 0x3ff) >> 1; if (i < this.paletteram.length) this.paletteram[i] = v; return; }
+      case P.PAL: this._palWrite(a, v); return;
       case P.SPRY: this._spryWrite(a, v); return;
       case P.SPRC: this.video.codeWrite((a & 0x3fff) >> 1, v); return;
       case P.DUMMY: this.dummy = v; return;
@@ -326,6 +344,22 @@ export class SetaMachine {
         return;
       }
     }
+  }
+
+  // The palette is 0x400 bytes at the foot of its page. On some boards the rest
+  // of the page is ordinary RAM the game uses for something else; masking the
+  // address down to 0x3ff on those would alias it onto the colours and repaint
+  // the screen every time the game touched its scratch space.
+  _palRead(a) {
+    const o = a & 0xffff;
+    if (o < 0x400) return this.paletteram[o >> 1];
+    return this.extram ? ((this.extram[o & 0x3ffe] << 8) | this.extram[(o & 0x3ffe) + 1]) : 0;
+  }
+
+  _palWrite(a, v) {
+    const o = a & 0xffff;
+    if (o < 0x400) { this.paletteram[o >> 1] = v; return; }
+    if (this.extram) { const i = o & 0x3ffe; this.extram[i] = v >> 8; this.extram[i + 1] = v & 0xff; }
   }
 
   _ramOff(a) {
@@ -476,7 +510,7 @@ export class SetaMachine {
 
   // Interrupt sources, per board.
   _lineHook(line, vblank) {
-    if (line === vblank && this.board.irq === 'vblank2') this._setIrq(2, true);
+    if (line === vblank && this.board.irq === 'vblank') this._setIrq(this.board.irqLevel, true);
     if (this.board.irq === 'scanline12') {
       if (line === 112) this._setIrq(2, true);
       if (line === 240) this._setIrq(1, true);
