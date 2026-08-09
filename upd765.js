@@ -227,7 +227,10 @@ export class Upd765 {
     }
     if (globalThis.__fdcLog) globalThis.__fdcLog('RD', { c, h, r, n, cyl: d.cyl, hd: this.hd, found: !!sec, size: sec ? 128 << sec.n : 0 });
     if (!sec) return this._rwError(0x04, c, h, r, n); // ST1 ND
-    this._multi = { c, h, r, n, eot, deleted: wantDeleted, sec };
+    // MT (bit 7) = multi-track: after the EOT sector on head 0, the command does
+    // NOT end — it flips to head 1 of the same cylinder and carries on at R=1.
+    // A 2D loader can pull a whole cylinder (both sides) in one command that way.
+    this._multi = { c, h, r, n, eot, deleted: wantDeleted, sec, mt: (this.cmd[0] & 0x80) !== 0 };
     this.execBuf = sec.data;
     this.execPos = 0;
     this.execWrite = false;
@@ -269,6 +272,34 @@ export class Upd765 {
     this.int = true;
   }
 
+  // Advance the record ID after a sector completes, exactly as the µPD765 does
+  // (this mirrors M88's `FDC::IDIncrement`). Returns true while the command
+  // should keep going, false at end of cylinder.
+  //
+  //   R != EOT           → R+1, continue
+  //   R == EOT, no MT    → R=1, C+1, stop
+  //   R == EOT, MT       → R=1, flip the head. Landing on side 1 continues the
+  //                        command; landing back on side 0 means both sides of
+  //                        the cylinder are done, so C+1 and stop.
+  //
+  // The head flip is what a 2D loader relies on to pull a whole cylinder — both
+  // sides, 32 sectors — in one command. Missing it made us deliver half the
+  // data and leave the caller's buffer holding the *previous* transfer, which is
+  // how Makaimura came to decrypt a stale sector into garbage code (issue #13).
+  _idIncrement(m) {
+    const atEot = m.r === m.eot;
+    m.r = (m.r + 1) & 0xff;
+    if (!atEot) return true;
+    m.r = 1;
+    if (m.mt) {
+      this.hd ^= 1;
+      m.h ^= 1;
+      if (m.h & 1) return true;
+    }
+    m.c = (m.c + 1) & 0xff;
+    return false;
+  }
+
   _execDone() {
     const m = this._multi;
     // On the PC-8801 disk sub-board the sub-CPU reads exactly the bytes it wants
@@ -276,11 +307,18 @@ export class Upd765 {
     // bytes; when the host keeps reading past a sector boundary we auto-advance
     // to R+1 (genuine multi-sector read).
     if (m && !m.format && !this.execWrite) {
-      if (m.r < m.eot) {
-        const d = this.drives[this.us];
-        const next = findSector(d.disk, d.cyl, this.hd, m.r + 1, m.n);
+      const d = this.drives[this.us];
+      // ST0 reports the head the transfer actually ran on, while the result ID
+      // reports where the chip stopped — and under MT those disagree, because
+      // finishing side 1 flips the ID back to side 0. Capture the head before
+      // the flip. (M88 keeps the same split: a saved `hdue` feeds ST0 while
+      // `idr.h` has already been toggled by IDIncrement.) Ys reads a cylinder
+      // with MT starting on side 1 and checks ST0's HD bit; reporting the
+      // post-flip head there makes it re-issue the same read forever.
+      m.stHd = this.hd;
+      if (this._idIncrement(m)) {
+        const next = findSector(d.disk, d.cyl, this.hd, m.r, m.n);
         if (next) {
-          m.r++;
           m.sec = next;
           this.execBuf = next.data;
           this.execPos = 0;
@@ -288,18 +326,12 @@ export class Upd765 {
           return;
         }
       }
-      // Terminating on a fully-read sector: the µPD765 leaves the result ID
-      // pointing at the *next* sector — R←R+1, and when the last sector read was
-      // the EOT sector it wraps to (C+1, R=1) (end-of-cylinder). Termination stays
-      // NORMAL (no abnormal/EN status): this is just the post-command ID the disk
-      // loader reads back to chain to the next cluster (N88-DISK-BASIC FAT walk).
-      // Getting this wrong under-reads the file — 軽井沢誘拐案内 stops mid-load.
-      const sec = m.sec;
-      if (sec) {
-        if (sec.r === m.eot) { m.rc = (sec.c + 1) & 0xff; m.rr = 1; }
-        else { m.rc = sec.c; m.rr = (sec.r + 1) & 0xff; }
-        m.rAddr = true;
-      }
+      // Whether it continued or not, the ID now holds where the chip stopped —
+      // that is exactly what the result phase reports. Termination stays NORMAL
+      // (no abnormal/EN status): this post-command ID is what a disk loader reads
+      // back to chain to the next cluster (the N88-DISK-BASIC FAT walk). Getting
+      // it wrong under-reads the file — 軽井沢誘拐案内 stops mid-load.
+      m.rAddr = true;
     }
     this._endRw(0, 0, 0);
   }
@@ -309,7 +341,8 @@ export class Upd765 {
     const sec = m.sec;
     // a sector whose stored status is non-zero (protection!) reports it:
     // D88 status 0xB0 = data CRC error → ST1 DE, 0xF0 = no data → ST1 ND
-    let xst1 = st1, xst2 = st2, st0 = this.us | (this.hd << 2) | st0extra;
+    const stHd = m.stHd !== undefined ? m.stHd : this.hd; // see _execDone
+    let xst1 = st1, xst2 = st2, st0 = this.us | (stHd << 2) | st0extra;
     if (sec && sec.status) {
       st0 |= ST0_AT;
       if (sec.status === 0xa0 || sec.status === 0xb0) { xst1 |= 0x20; xst2 |= (sec.status === 0xb0 ? 0x20 : 0); }
@@ -319,9 +352,13 @@ export class Upd765 {
     if (sec?.deleted && !m.deleted) xst2 |= 0x40; // ST2 CM: hit deleted data
     // result ID: normally the last sector's own id, but a completed read leaves
     // the "next sector" address (see _execDone) — m.rAddr overrides C/R then.
-    const rc = m.rAddr ? m.rc : (sec?.c ?? m.c);
-    const rr = m.rAddr ? m.rr : (sec?.r ?? m.r);
-    this._results([st0, xst1, xst2, rc, sec?.h ?? m.h, rr, sec?.n ?? m.n]);
+    // After a completed transfer `_idIncrement` has already walked the ID to
+    // where the chip stopped, so report it verbatim; an aborted command reports
+    // the sector it died on instead.
+    const rc = m.rAddr ? m.c : (sec?.c ?? m.c);
+    const rr = m.rAddr ? m.r : (sec?.r ?? m.r);
+    const rh = m.rAddr ? m.h : (sec?.h ?? m.h);
+    this._results([st0, xst1, xst2, rc, rh, rr, sec?.n ?? m.n]);
   }
 
   _rwError(st1, c, h, r, n) {

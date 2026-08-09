@@ -41,6 +41,8 @@
     padding: 3px 10px; cursor: pointer; font: inherit;
   }
   #panel button.on { background: #253; border-color: #4a6; color: #cfd; }
+  #panel label.toggle { display: flex; gap: 4px; align-items: center; color: #9ab; }
+  #panel label.toggle input { margin: 0; }
   #body {
     margin-top: 6px; background: rgba(10,10,16,.92); border: 1px solid #334;
     border-radius: 6px; padding: 10px; display: grid; gap: 7px; min-width: 230px;
@@ -48,7 +50,10 @@
   #body label { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
   #body select, #body input[type=range] { width: 130px; }
   #body select { background: #111; color: #9ab; border: 1px solid #334; }
-  #body.hidden { display: none; }
+  #body .knobs { display: grid; gap: 7px; padding-top: 6px; border-top: 1px solid #334; margin-top: 2px; }
+  #body .knobs label { justify-content: space-between; }
+  #body .knobs input[type=range] { width: 124px; }
+  #body.hidden, #body .hidden { display: none; }
 </style>
 </head>
 <body>
@@ -59,13 +64,31 @@
     <button id="crtToggle" class="on" title="toggle CRT renderer">CRT</button>
     <button id="knobsToggle" title="show/hide knobs">▾</button>
   </div>
-  <div id="body">
-    <label>phosphor <select id="phosphor"></select></label>
-    <label>mask <select id="mask"></select></label>
-    <label>bright <input id="bright" type="range" min="0.4" max="3" step="0.05"></label>
-    <label>flicker <input id="flicker" type="checkbox"></label>
-    <label>strict 1979 <input id="strict" type="checkbox" title="no per-cell background, like the real PC-8001"></label>
+<div id="body">
+  <label>phosphor <select id="phosphor"></select></label>
+  <label>mask <select id="mask"></select></label>
+  <label>bright <input id="bright" type="range" min="0.4" max="3" step="0.05"></label>
+  <label>contrast <input id="contrast" type="range" min="0.5" max="1.8" step="0.05"></label>
+  <label>quality <select id="quality"><option value="high">品質(30fps)</option><option value="fast">速度(60fps)</option></select></label>
+  <label>flicker <input id="flicker" type="checkbox"></label>
+  <label>strict 1979 <input id="strict" type="checkbox" title="no per-cell background, like the real PC-8001"></label>
+  <div class="knobs">
+    <button id="knobsAdv" title="toggle rear-knob section">▾ 裏ノブ</button>
+    <div id="adv" class="hidden">
+      <label>focus <input id="focus" type="range" min="0" max="2" step="0.05"></label>
+      <label>h-size <input id="hSize" type="range" min="0.7" max="1.15" step="0.01"></label>
+      <label>v-size <input id="vSize" type="range" min="0.7" max="1.15" step="0.01"></label>
+      <label>pitch <input id="pitch" type="range" min="3" max="9" step="1"></label>
+      <label>conv <input id="conv" type="range" min="0" max="0.02" step="0.001"></label>
+      <label>barrel <input id="barrel" type="range" min="-0.12" max="0.25" step="0.01"></label>
+      <label>v-hold <input id="vhold" type="range" min="-20" max="20" step="0.5"></label>
+      <label>tint <span style="display:flex;gap:4px;align-items:center"><input id="tintOn" type="checkbox"><input id="tint" type="range" min="-60" max="60" step="1"></span></label>
+      <label>ghost <input id="ghost" type="checkbox"></label>
+      <label>400-line <input id="line400" type="checkbox"></label>
+      <label>interlace <input id="interlaced" type="checkbox"></label>
+    </div>
   </div>
+</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
@@ -930,7 +953,7 @@ __def("xterm/crt-xterm.js", (__req) => {
 // selection *behavior* and clipboard stay 100% xterm.js — we only replace
 // the photons.
 
-const { CrtPhosphor, PHOSPHORS } = __req("crt.js");
+const { CrtPhosphor, PHOSPHORS, rollScan } = __req("crt.js");
 const { CrtTube, MASKS } = __req("tube.js");
 const { G } = __req("demo/font.js");
 
@@ -1172,9 +1195,20 @@ const DEFAULT_OPTIONS = Object.freeze({
   flicker: false,      // 10 Hz beat + mains drift, frame-counted
   strict1979: false,   // drop per-cell backgrounds (PC-8001 truth)
   cursorBlink: true,
-  outputScale: 2,      // tube output pixels per source pixel (h; v gets ×2 more)
+  quality: 'high',     // 'high' = scanline-doubled tube (≈30fps at 80×50);
+                       // 'fast' = tube at src res, CSS scales — 60fps target
   scanlineDepth: 0.55, // traces visible, glyph bodies stay solid
   beamHeight: 0.6,
+  // ---- rear-knob twins of demo/crt-panel.js (kept opt-in; defaults ≈ clean) ----
+  hSize: 1.0,          // H-SIZE: horizontal scan amplitude (1 = fills glass)
+  vSize: 1.0,          // V-SIZE: vertical scan amplitude
+  convergence: 0.0035, // CONV: R/B gun mis-registration per r² (color fringes)
+  ghost: 0,            // glass reflection (0 = off; ~0.07 for the museum look)
+  tint: 0,             // NTSC chroma phase error (radians)
+  tintOn: false,       // TINT knob enable (phase error only exists when it does)
+  vhold: 0,            // V-HOLD: vertical roll speed (lines/frame; 0 = locked)
+  interlaced: false,   // interlace: each line refreshes at half rate (flickers)
+  line400: false,      // 400-line: pack scanlines until gaps close (vs 200-line gap)
 });
 
 class CrtRendererAddon {
@@ -1198,6 +1232,9 @@ class CrtRendererAddon {
     this._enabled = true;
     this._disposables = [];
     this._workCell = null;
+    // V-HOLD / power-collapse state (mirrors demo/crt-panel.js applyDeflection)
+    this._rollPos = 0;
+    this._rollBuf = null;
   }
 
   // ITerminalAddon
@@ -1235,21 +1272,29 @@ class CrtRendererAddon {
     if ('phosphor' in partial && this._phosphor) {
       this._phosphor.setPhosphor(PHOSPHORS[o.phosphor] ?? PHOSPHORS.P22);
     }
-    if ('outputScale' in partial) this._cols = 0; // full rebuild
+    if ('quality' in partial || 'line400' in partial) this._cols = 0; // full rebuild
     else if (this._tube) {
       if ('focus' in partial) this._tube.beamWidth = o.focus;
-      if ('mask' in partial || 'maskPitch' in partial || 'barrel' in partial) {
-        this._tube.setGeometry({ mask: o.mask, maskPitch: o.maskPitch, barrel: o.barrel });
+      if ('ghost' in partial) this._tube.ghost = o.ghost;
+      if ('mask' in partial || 'maskPitch' in partial || 'barrel' in partial
+        || 'hSize' in partial || 'vSize' in partial || 'convergence' in partial) {
+        this._tube.setGeometry({
+          mask: o.mask, maskPitch: o.maskPitch, barrel: o.barrel,
+          hSize: o.hSize, vSize: o.vSize, convergence: o.convergence,
+        });
       }
     }
     return this;
   }
 
   // CRT off = give the page back to xterm's own renderer, live.
+  // We never hide .xterm-screen: our canvas paints on top opaquely so the
+  // screen isn't visible anyway, but hiding it breaks xterm.js's focus/
+  // input restoration in some layouts (the hidden layer stops receiving
+  // the click-to-focus that routes keyboard into the terminal).
   setEnabled(on) {
     this._enabled = !!on;
     if (this._canvas) this._canvas.style.display = on ? '' : 'none';
-    if (this._screen) this._screen.style.visibility = on ? 'hidden' : '';
     return this;
   }
 
@@ -1273,7 +1318,6 @@ class CrtRendererAddon {
       term.element.appendChild(c);
       this._canvas = c;
       this._ctx = c.getContext('2d');
-      if (this._enabled && this._screen) this._screen.style.visibility = 'hidden';
       if (!this._enabled) c.style.display = 'none';
       this._workCell = term.buffer?.active?.getNullCell?.() ?? null;
     }
@@ -1286,19 +1330,32 @@ class CrtRendererAddon {
     this._cols = term.cols;
     this._rows = term.rows;
     const w = this._cols * 8, h = this._rows * 8;
-    const s = Math.max(1, this.options.outputScale);
-    const outW = Math.round(w * s);
-    const outH = Math.round(h * 2 * s); // ×2: scanline doubling, like the demos
+    const o = this.options;
+    // Quality → output resolution. 'high' scanline-doubles in the tube (the
+    // CRT-accurate look; ≈30fps at 80×50). 'fast' drops the tube to source res
+    // and lets CSS scale the canvas — 60fps target, scanlines get smoother.
+    let outW, outH;
+    if (o.quality === 'fast') {
+      outW = w; outH = h;
+    } else {
+      outW = w; outH = h * 2; // ×2: scanline doubling, like the demos
+    }
     this._indexed = new Uint8Array(w * h);
+    this._rollBuf = new Uint8Array(w * h);
     this._phosphor = new CrtPhosphor({
       width: w, height: h,
-      phosphor: PHOSPHORS[this.options.phosphor] ?? PHOSPHORS.P22,
+      phosphor: PHOSPHORS[o.phosphor] ?? PHOSPHORS.P22,
     });
+    // 400-line packs the traces until the gaps vanish; 200-line leaves real
+    // black glass between them — same knob as demo/crt-panel.js.
     this._tube = new CrtTube({
       srcWidth: w, srcHeight: h, outWidth: outW, outHeight: outH,
-      mask: this.options.mask, maskPitch: this.options.maskPitch,
-      barrel: this.options.barrel, beamWidth: this.options.focus,
-      scanlineDepth: this.options.scanlineDepth, beamHeight: this.options.beamHeight,
+      mask: o.mask, maskPitch: o.maskPitch,
+      barrel: o.barrel, beamWidth: o.focus,
+      hSize: o.hSize, vSize: o.vSize, convergence: o.convergence,
+      ghost: o.ghost,
+      scanlineDepth: o.line400 ? 0.3 : o.scanlineDepth,
+      beamHeight: o.line400 ? 1.0 : o.beamHeight,
     });
     this._rgba = new Uint8ClampedArray(outW * outH * 4);
     this._canvas.width = outW;
@@ -1350,7 +1407,17 @@ class CrtRendererAddon {
     });
     this._overlaySelection(term, buf);
 
-    this._phosphor.step(this._indexed, dt);
+    // V-HOLD: when the vertical oscillator free-runs off the sync frequency
+    // each field starts drawing at a shifted line — the picture rolls. We
+    // remap rows with wraparound over (h + blank); rows landing in the VBI
+    // go dark, exactly like crt-panel.js applyDeflection (which this mirrors).
+    const src = this._applyDeflection(this._indexed, this._cols * 8, this._rows * 8);
+
+    // interlace lives in the phosphor layer: each line refreshes at half rate
+    // and detail flickers on short phosphor. Frame parity picks a field.
+    this._phosphor.step(src, dt, {
+      fieldParity: this.options.interlaced ? (this._frame & 1) : null,
+    });
     // flicker: the ~10 Hz beat you get *filming* a 60 Hz raster, plus a slow
     // mains drift — the demo panel's recipe, frame-counted (crt-panel.js)
     let flick = 1;
@@ -1362,9 +1429,32 @@ class CrtRendererAddon {
     this._tube.apply(this._phosphor.composite(), this._rgba, {
       scale: this.options.bright * flick,
       contrast: this.options.contrast,
+      tint: this.options.tintOn ? this.options.tint : 0,
     });
     this._img.data.set(this._rgba);
     this._ctx.putImageData(this._img, 0, 0);
+  }
+
+  // V-HOLD + power collapse, applied to an indexed frame before excitation.
+  // A twin of demo/crt-panel.js applyDeflection (no power state here — the
+  // terminal is always on; only the roll is exposed). Mutates _rollPos and
+  // reuses _rollBuf; returns src untouched when locked.
+  _applyDeflection(src, w, h) {
+    const blank = Math.round(h * 0.12), total = h + blank;
+    const vhold = this.options.vhold;
+    if (vhold !== 0) {
+      const wobble = 1 + 0.8 * Math.sin(this._rollPos / total * Math.PI * 2);
+      this._rollPos = (this._rollPos + vhold * wobble + total) % total;
+    } else if (this._rollPos !== 0) {
+      this._rollPos = this._rollPos < total / 2
+        ? this._rollPos * 0.8 : total - (total - this._rollPos) * 0.8;
+      if (this._rollPos < 0.6 || this._rollPos > total - 0.6) this._rollPos = 0;
+    }
+    if (this._rollPos === 0) return src;
+    if (!this._rollBuf || this._rollBuf.length !== w * h) this._rollBuf = new Uint8Array(w * h);
+    const stretch = 1 + Math.min(0.5, Math.abs(vhold) * 0.03)
+      * Math.sin(this._rollPos / total * Math.PI * 4);
+    return rollScan(src, this._rollBuf, w, h, Math.round(this._rollPos) % total, blank, 1, stretch);
   }
 
   // xterm's selection layer is hidden with the rest of the screen, so echo
@@ -1410,8 +1500,12 @@ const MASKS = window.CrtMASKS;
 // ---- settings (persisted) --------------------------------------------------
 const STORE = 'ttyd-crt-settings';
 const settings = Object.assign({
-  phosphor: 'P22', mask: 'aperture', bright: 1.2,
+  phosphor: 'P22', mask: 'aperture', bright: 1.2, contrast: 1.1, quality: 'high',
   flicker: false, strict1979: false, crtOn: true,
+  // rear knobs (defaults match crt-xterm.js DEFAULT_OPTIONS)
+  focus: 0.35, hSize: 1.0, vSize: 1.0, pitch: 3, conv: 0.0035,
+  barrel: 0.02, vhold: 0, tint: 0, tintOn: false,
+  ghost: false, line400: false, interlaced: false,
 }, (() => { try { return JSON.parse(localStorage.getItem(STORE)) || {}; } catch { return {}; } })());
 const save = () => { try { localStorage.setItem(STORE, JSON.stringify(settings)); } catch {} };
 
@@ -1432,7 +1526,13 @@ fitAddon.fit();
 
 const crt = new CrtRendererAddon({
   phosphor: settings.phosphor, mask: settings.mask, bright: settings.bright,
+  contrast: settings.contrast, quality: settings.quality,
   flicker: settings.flicker, strict1979: settings.strict1979,
+  focus: settings.focus, hSize: settings.hSize, vSize: settings.vSize,
+  maskPitch: settings.pitch, convergence: settings.conv, barrel: settings.barrel,
+  vhold: settings.vhold, tint: settings.tint, tintOn: settings.tintOn,
+  ghost: settings.ghost ? 0.07 : 0,
+  interlaced: settings.interlaced, line400: settings.line400,
 });
 term.loadAddon(crt);
 crt.setEnabled(settings.crtOn);
@@ -1450,14 +1550,44 @@ const fill = (sel, keys, current) => {
 fill($('phosphor'), Object.keys(PHOSPHORS), settings.phosphor);
 fill($('mask'), MASKS.filter((m) => m !== 'plasma'), settings.mask);
 $('bright').value = settings.bright;
+$('contrast').value = settings.contrast;
+$('quality').value = settings.quality;
 $('flicker').checked = settings.flicker;
 $('strict').checked = settings.strict1979;
-const apply = (key, value) => { settings[key] = value; crt.setOptions({ [key]: value }); save(); };
+$('focus').value = settings.focus;
+$('hSize').value = settings.hSize;
+$('vSize').value = settings.vSize;
+$('pitch').value = settings.pitch;
+$('conv').value = settings.conv;
+$('barrel').value = settings.barrel;
+$('vhold').value = settings.vhold;
+$('tintOn').checked = settings.tintOn;
+$('tint').value = Math.round(settings.tint * 180 / Math.PI);
+$('ghost').checked = settings.ghost;
+$('line400').checked = settings.line400;
+$('interlaced').checked = settings.interlaced;
+// Every knob returns focus to the terminal after applying — the panel is
+// click-only, never a keyboard trap. typing goes to the shell, always.
+const apply = (key, value) => { settings[key] = value; crt.setOptions({ [key]: value }); save(); term.focus(); };
 $('phosphor').onchange = (e) => apply('phosphor', e.target.value);
 $('mask').onchange = (e) => apply('mask', e.target.value);
 $('bright').oninput = (e) => apply('bright', +e.target.value);
+$('contrast').oninput = (e) => apply('contrast', +e.target.value);
+$('quality').onchange = (e) => apply('quality', e.target.value);
 $('flicker').onchange = (e) => apply('flicker', e.target.checked);
 $('strict').onchange = (e) => apply('strict1979', e.target.checked);
+$('focus').oninput = (e) => apply('focus', +e.target.value);
+$('hSize').oninput = (e) => apply('hSize', +e.target.value);
+$('vSize').oninput = (e) => apply('vSize', +e.target.value);
+$('pitch').oninput = (e) => apply('maskPitch', +e.target.value);
+$('conv').oninput = (e) => apply('convergence', +e.target.value);
+$('barrel').oninput = (e) => apply('barrel', +e.target.value);
+$('vhold').oninput = (e) => apply('vhold', +e.target.value);
+$('tintOn').onchange = (e) => apply('tintOn', e.target.checked);
+$('tint').oninput = (e) => apply('tint', (+e.target.value) * Math.PI / 180);
+$('ghost').onchange = (e) => apply('ghost', e.target.checked ? 0.07 : 0);
+$('line400').onchange = (e) => apply('line400', e.target.checked);
+$('interlaced').onchange = (e) => apply('interlaced', e.target.checked);
 $('crtToggle').onclick = () => {
   settings.crtOn = !settings.crtOn;
   crt.setEnabled(settings.crtOn);
@@ -1471,8 +1601,16 @@ $('knobsToggle').onclick = () => {
   knobsOpen = !knobsOpen;
   $('body').classList.toggle('hidden', !knobsOpen);
   $('knobsToggle').textContent = knobsOpen ? '▾' : '▸';
+  term.focus();
 };
 $('knobsToggle').onclick(); // start collapsed: the terminal is the point
+let advOpen = false;
+$('knobsAdv').onclick = () => {
+  advOpen = !advOpen;
+  $('adv').classList.toggle('hidden', !advOpen);
+  $('knobsAdv').textContent = (advOpen ? '▸' : '▾') + ' 裏ノブ';
+  term.focus();
+};
 const setStatus = (text, cls) => {
   const s = $('status');
   s.textContent = text;

@@ -36,6 +36,7 @@ import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { Pc8801Machine } from '../machine88.js';
 import { parseD88All } from '../d88.js';
+import { loadRomSet } from './romset.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROMDIR = process.argv[2] || '/mnt/c/var/emulator/エミュレーター本体/PC88/m88204';
@@ -44,10 +45,11 @@ const FRAMES = Number(process.argv[4] || 1500); // late enough that both emulato
 const REFDRV = resolve(HERE, '../m88ref/_m88m_build/M88M/refdrv');
 
 const rd = (p) => new Uint8Array(readFileSync(p));
-const main = rd(`${ROMDIR}/n88.rom`);
-const sub = rd(`${ROMDIR}/disk.rom`);
-const ext = new Uint8Array(0x8000);
-for (let i = 0; i < 4; i++) ext.set(rd(`${ROMDIR}/n88_${i}.rom`), i * 0x2000); // N88-DISK-BASIC
+// Load the ROM set exactly the way M88 does. M88 prefers a combined pc88.rom and
+// only falls back to n88.rom/disk.rom; reading the separate files here while M88
+// read the combined image had the two sides running *different ROM revisions*
+// (2021 of 8192 bytes differ in the sub ROM alone). See docs/m88-comparison.md.
+const { main, ext, sub } = loadRomSet(ROMDIR);
 
 function ours(path) {
   try {
@@ -59,14 +61,21 @@ function ours(path) {
     // b0=1 → text off), else a graphics-only game's stale bytes inflate tvNZ
     const textOff = (m._port53 & 1) !== 0;
     let tvnz = 0; if (m.tvram && !textOff) for (const b of m.tvram) if (b) tvnz++;
-    return { e6cd: m.ram[0xe6cd], tvnz, nimg: imgs.length };
+    // Graphics-plane fingerprint: a title that turns the text plane off and draws
+    // in GVRAM has tvnz === 0 and used to read as "blank screen", which flagged
+    // healthy graphics-only titles (Ys and friends) as divergences the moment one
+    // side reached gameplay first. Counting GVRAM keeps them comparable.
+    let gvnz = 0; for (const plane of m.gvram) for (const b of plane) if (b) gvnz++;
+    return { e6cd: m.ram[0xe6cd], tvnz, gvnz, textOff, nimg: imgs.length };
   } catch (e) { return { err: e.message }; }
 }
 function ref(path) {
   try {
     const out = execFileSync(REFDRV, [ROMDIR, path, String(FRAMES)], { timeout: 40000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     const m = out.match(/# final E6CD=([0-9a-f]{2}) EC88=[0-9a-f]+ tvramNZ=(\d+)/i);
-    return m ? { e6cd: parseInt(m[1], 16), tvnz: parseInt(m[2], 10) } : { err: 'no final line' };
+    const g = out.match(/# final gvramNZ=(\d+)/i);
+    return m ? { e6cd: parseInt(m[1], 16), tvnz: parseInt(m[2], 10), gvnz: g ? parseInt(g[1], 10) : null }
+             : { err: 'no final line' };
   } catch (e) { return { err: (e.message || '').slice(0, 40) }; }
 }
 
@@ -85,13 +94,23 @@ const errs = rows.filter((x) => x.o.err || x.r.err);
 const mism = rows.filter((x) => !x.match && !x.o.err && !x.r.err);
 const phase = [], real = [], blank = [];
 for (const x of mism) {
-  const mt = x.r.tvnz, ot = x.o.tvnz, ratio = Math.min(mt, ot) / Math.max(mt, ot, 1);
-  const rec = { ...x, ratio };
+  // Judge on whichever plane is actually being drawn. Comparing tvnz alone
+  // mislabels every graphics-only title: the moment one side reaches gameplay
+  // and blanks the text plane, tvnz goes to 0 and the ratio collapses even
+  // though both are healthy. When either side has text off, compare GVRAM.
+  const useG = (x.o.textOff || x.o.tvnz === 0 || x.r.tvnz === 0) && x.o.gvnz != null && x.r.gvnz != null;
+  const mt = useG ? x.r.gvnz : x.r.tvnz, ot = useG ? x.o.gvnz : x.o.tvnz;
+  const ratio = Math.min(mt, ot) / Math.max(mt, ot, 1);
+  const rec = { ...x, ratio, useG };
   if (mt < 200 && ot < 200) blank.push(rec);
   else if (ratio >= 0.85) phase.push(rec); // same screen-fill → snapshot-phase noise, not a bug
   else real.push(rec);
 }
-const line = (x) => `  ${x.f.slice(0, 28).padEnd(28)} M88=${x.r.e6cd.toString(16).padStart(2, '0')}/tv${x.r.tvnz}  ours=${x.o.e6cd.toString(16).padStart(2, '0')}/tv${x.o.tvnz}  (fill ${(x.ratio * 100) | 0}%)`;
+const line = (x) => {
+  const p = x.useG ? 'gv' : 'tv';
+  const rv = x.useG ? x.r.gvnz : x.r.tvnz, ov = x.useG ? x.o.gvnz : x.o.tvnz;
+  return `  ${x.f.slice(0, 28).padEnd(28)} M88=${x.r.e6cd.toString(16).padStart(2, '0')}/${p}${rv}  ours=${x.o.e6cd.toString(16).padStart(2, '0')}/${p}${ov}  (fill ${(x.ratio * 100) | 0}%)`;
+};
 
 console.log(`\n=== SUMMARY (${rows.length} titles, ${FRAMES}f) ===`);
 console.log(`exact E6CD match:     ${ok}/${rows.length} (${(100 * ok / rows.length).toFixed(0)}%)`);

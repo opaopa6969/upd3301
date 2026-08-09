@@ -24,11 +24,48 @@ static void e6cdLog(unsigned pc, unsigned addr, unsigned val) {
 }
 
 static int g_rdN = 0;
-static int g_traceOn = 0, g_traceN = 0;
-static unsigned g_pcbuf[200000];
+static int g_traceOn = 0, g_traceN = 0, g_traceMax = 0;
+static unsigned* g_pcbuf = nullptr;
 void* g_mainCpu = nullptr;
 void (*g_pcHook)(unsigned pc) = nullptr;
-static void pcLog(unsigned pc) { if (g_traceOn && g_traceN < 200000) g_pcbuf[g_traceN++] = pc; }
+// Arming: by frame (M88_TRACE_FROM) or by first execution of a PC
+// (M88_TRACE_ARMPC). The PC anchor is the useful one for cross-emulator diffs —
+// our emulator boots ~20 frames ahead of M88, so frame numbers do not line up,
+// but "the first time the program reaches address X" does.
+static int g_armFrame = -1, g_armFdc = 0;
+static long g_armPc = -1;
+static void pcLog(unsigned pc) {
+  if (!g_traceOn) {
+    if (g_armPc >= 0 && (long)pc == g_armPc) g_traceOn = 1;
+    else if (g_armFrame >= 0 && g_frame >= g_armFrame) g_traceOn = 1;
+    else return;
+  }
+  if (g_traceN < g_traceMax) g_pcbuf[g_traceN++] = pc;
+}
+
+// Range write-watch, the M88-side mirror of tools/watch-write.mjs.
+// M88_WATCH=<lo>-<hi> (hex) prints every MAIN-CPU store landing in that range.
+unsigned g_wrLo = 0xffffffff, g_wrHi = 0;
+void (*g_wrHook)(unsigned pc, unsigned addr, unsigned val) = nullptr;
+static long g_wrMax = 400, g_wrN = 0;
+static void wrLog(unsigned pc, unsigned addr, unsigned val) {
+  if (++g_wrN > g_wrMax) return;
+  printf("WR f%-4d pc=%04x [%04x]=%02x\n", g_frame, pc, addr, val);
+}
+
+// Range read-watch. Reads are the better probe when two emulators run the same
+// code over different *data*: this records the bytes the CPU actually saw,
+// already resolved through whatever bank was selected, so it needs no guess
+// about where an address lives.
+unsigned g_rdLo = 0xffffffff, g_rdHi = 0;
+void (*g_rdHook)(unsigned pc, unsigned addr, unsigned val) = nullptr;
+static long g_rdMax = 4000, g_rdWN = 0;
+static unsigned g_rdPcLo = 0, g_rdPcHi = 0xffff;   // M88_RWATCH_PC=<lo>[-<hi>]
+static void rdLog(unsigned pc, unsigned addr, unsigned val) {
+  if (pc < g_rdPcLo || pc > g_rdPcHi) return;
+  if (++g_rdWN > g_rdMax) return;
+  printf("RD f%-4d pc=%04x [%04x]=%02x\n", g_frame, pc, addr, val);
+}
 unsigned g_fdcDataCount=0;
 void (*g_mrdHook)(unsigned,unsigned)=nullptr;
 static void mrdLog(unsigned port,unsigned val){ printf("MRD %02x\n", val); }
@@ -36,9 +73,11 @@ static int g_resN = 0;
 void (*g_fdcResultHook)(unsigned,unsigned,unsigned,unsigned,unsigned,unsigned,unsigned) = nullptr;
 static void fdcResultLog(unsigned st0,unsigned st1,unsigned st2,unsigned c,unsigned h,unsigned r,unsigned n){
   printf("f%-4d RESULT ST[%02x %02x %02x] C%u H%u R%u N%u\n", g_frame, st0,st1,st2,c,h,r,n);
-  if (++g_resN == 6) { g_traceOn = 1; }   // arm MAIN pc trace right after read#6 (cyl20)
-  if (g_traceN > 12000) g_traceOn = 0;     // bound the window
+  // legacy arming: M88_TRACE_ARMFDC=<n> starts the trace after the n'th FDC
+  // result (this was hardcoded to 6 for 軽井沢's cyl20 read).
+  if (g_armFdc > 0 && ++g_resN == g_armFdc) g_traceOn = 1;
 }
+
 void (*g_fdcReadHook)(unsigned c, unsigned h, unsigned r, unsigned n, unsigned eot) = nullptr;
 static void fdcReadLog(unsigned c, unsigned h, unsigned r, unsigned n, unsigned eot) {
   ++g_rdN;
@@ -104,9 +143,50 @@ int main(int argc, char** argv) {
   g_e6cdHook = e6cdLog;
   g_fdcReadHook = fdcReadLog;
   g_fdcResultHook = fdcResultLog;
-  g_mainCpu = (void*)pc88.GetCPU1();  // trace MAIN cpu
-  g_pcHook = pcLog;                   // enable MAIN pc trace (armed at 6th FDC result)
+  // Which CPU the pc/read/write hooks follow. The disk sub-system is a second
+  // Z80 running DISK.ROM, and the 8255 handshake between the two is where a
+  // whole class of divergences lives — so it must be traceable too.
+  const char* whichCpu = getenv("M88_CPU");
+  const bool traceSub = whichCpu && (whichCpu[0] == 's' || whichCpu[0] == 'S' || whichCpu[0] == '2');
+  g_mainCpu = traceSub ? (void*)pc88.GetCPU2() : (void*)pc88.GetCPU1();
+  if (traceSub) printf("# hooks follow the SUB cpu (CPU2)\n");
   // g_mrdHook = mrdLog;  // (byte log off — capturing pc trace instead)
+
+  // ---- env-configured instrumentation (see m88ref/README.md) ----
+  const char* tracePath = getenv("M88_TRACE");
+  if (tracePath) {
+    if (const char* s = getenv("M88_TRACE_FROM"))  g_armFrame = atoi(s);
+    if (const char* s = getenv("M88_TRACE_ARMPC")) g_armPc = strtol(s, 0, 16);
+    if (const char* s = getenv("M88_TRACE_ARMFDC")) g_armFdc = atoi(s);
+    g_traceMax = (int)((getenv("M88_TRACE_MAX")) ? atol(getenv("M88_TRACE_MAX")) : 200000);
+    if (g_armFrame < 0 && g_armPc < 0 && g_armFdc == 0) g_armFrame = 0;  // default: from boot
+    g_pcbuf = new unsigned[g_traceMax];
+    g_pcHook = pcLog;
+    printf("# trace -> %s  (armFrame=%d armPc=%ld armFdc=%d max=%d)\n",
+           tracePath, g_armFrame, g_armPc, g_armFdc, g_traceMax);
+  }
+  if (const char* w = getenv("M88_WATCH")) {
+    unsigned lo = 0, hi = 0; char* end = nullptr;
+    lo = (unsigned)strtol(w, &end, 16);
+    hi = (end && *end == '-') ? (unsigned)strtol(end + 1, 0, 16) : lo;
+    g_wrLo = lo; g_wrHi = hi; g_wrHook = wrLog;
+    if (const char* s = getenv("M88_WATCH_MAX")) g_wrMax = atol(s);
+    printf("# watching MAIN writes to %04x-%04x (max %ld lines)\n", lo, hi, g_wrMax);
+  }
+  if (const char* w = getenv("M88_RWATCH")) {
+    char* end = nullptr;
+    unsigned lo = (unsigned)strtol(w, &end, 16);
+    unsigned hi = (end && *end == '-') ? (unsigned)strtol(end + 1, 0, 16) : lo;
+    g_rdLo = lo; g_rdHi = hi; g_rdHook = rdLog;
+    if (const char* s = getenv("M88_RWATCH_MAX")) g_rdMax = atol(s);
+    if (const char* s = getenv("M88_RWATCH_PC")) {
+      char* e2 = nullptr;
+      g_rdPcLo = (unsigned)strtol(s, &e2, 16);
+      g_rdPcHi = (e2 && *e2 == '-') ? (unsigned)strtol(e2 + 1, 0, 16) : g_rdPcLo;
+      printf("# ... only reads issued from pc %04x-%04x\n", g_rdPcLo, g_rdPcHi);
+    }
+    printf("# watching MAIN reads of %04x-%04x (max %ld lines)\n", lo, hi, g_rdMax);
+  }
   int win0 = argc > 4 ? atoi(argv[4]) : -1, win1 = argc > 5 ? atoi(argv[5]) : -1;
   for (g_frame = 0; g_frame < frames; g_frame++) {
     pc88.Proceed(fp, clock, eff);   // full frame = correct M88 timing
@@ -116,13 +196,20 @@ int main(int argc, char** argv) {
   g_e6cdHook = nullptr;
 
   g_pcHook = nullptr;
-  // dump the post-cyl20 instruction trace (dedup consecutive dups) for cross-emu diff
-  { FILE* tf = fopen("/home/opa/.claude/jobs/70f55d65/tmp/m88_trace.txt", "w");
-    unsigned prev = 0xffffffff;
-    for (int i = 0; i < g_traceN; i++) { if (g_pcbuf[i] != prev) { fprintf(tf, "%04x\n", g_pcbuf[i]); prev = g_pcbuf[i]; } }
-    fclose(tf);
-    printf("# traced %d instrs after cyl20 R8\n", g_traceN);
+  // dump the instruction trace (dedup consecutive dups) for cross-emulator diff
+  if (tracePath && g_pcbuf) {
+    FILE* tf = fopen(tracePath, "w");
+    if (!tf) { printf("# ERR cannot write trace to %s\n", tracePath); }
+    else {
+      unsigned prev = 0xffffffff;
+      long n = 0;
+      for (int i = 0; i < g_traceN; i++) { if (g_pcbuf[i] != prev) { fprintf(tf, "%04x\n", g_pcbuf[i]); prev = g_pcbuf[i]; n++; } }
+      fclose(tf);
+      printf("# traced %d instrs (%ld after dedup) -> %s\n", g_traceN, n, tracePath);
+      if (g_traceN >= g_traceMax) printf("# WARNING trace buffer full — raise M88_TRACE_MAX\n");
+    }
   }
+  if (g_wrHook && g_wrN > g_wrMax) printf("# WARNING %ld writes matched, only %ld printed\n", g_wrN, g_wrMax);
 
   printf("# M88 total FDC data bytes served to sub: %u\n", g_fdcDataCount);
   // dump key game-state regions for cross-emulator diff
@@ -149,6 +236,17 @@ int main(int argc, char** argv) {
 
   // final: count tvram content + look for "ENIX"
   int tvnz = 0; for (int i = 0; i < 0x1000; i++) if (tv[i]) tvnz++;
+  // Graphics-plane fingerprint. tvramNZ alone cannot judge a title that turns the
+  // text plane off and draws everything in GVRAM — it reads as "blank screen" on
+  // whichever side got there first. Count non-zero bytes across the three planes
+  // so a graphics-only screen is still comparable. (Total is plane-order
+  // independent, so it does not matter that M88 packs the planes per address
+  // while we keep three arrays.)
+  { PC8801::Memory::quadbyte* gv = mem->GetGVRAM();
+    int gnz = 0;
+    for (int i = 0; i < 0x4000; i++)
+      for (int p = 0; p < 3; p++) if (gv[i].byte[p]) gnz++;
+    printf("# final gvramNZ=%d\n", gnz); }
   printf("# final E6CD=%02x EC88=%04x tvramNZ=%d\n", ram[0xe6cd], ram[0xec88]|(ram[0xec89]<<8), tvnz);
   printf("# tvram text rows (ASCII):\n");
   for (int r = 0; r < 25; r++) {

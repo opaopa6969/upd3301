@@ -48,6 +48,36 @@ refdrv <romDir> <disk.d88> [frames] [win0 win1]
   素の `m88204` セットでそのまま動く。
 - `frames` — 60Hzフレーム数（既定600）。~250でメニューに到達。
 
+### 環境変数で刺す計測（クロスエミュ差分の主力）
+
+| 変数 | 意味 |
+|------|------|
+| `M88_TRACE=<path>` | MAIN CPU の命令トレースを吐く（1行1PC・連続重複は畳む） |
+| `M88_TRACE_ARMPC=<hex>` | **そのPCに最初に到達した時点**からトレース開始（推奨） |
+| `M88_TRACE_FROM=<frame>` | フレーム指定で開始（既定 0） |
+| `M88_TRACE_ARMFDC=<n>` | n回目のFDC result から開始（旧・軽井沢用の武装条件） |
+| `M88_TRACE_MAX=<n>` | 命令バッファ上限（既定 200000） |
+| `M88_WATCH=<lo>-<hi>` | MAIN CPU のそのアドレス範囲への書き込みを全部出す（`WR f… pc=… [addr]=val`） |
+| `M88_WATCH_MAX=<n>` | 出力行数の上限（既定 400） |
+
+**`M88_TRACE_ARMPC` を使うこと。** うちのエミュはM88より約20フレーム速く起動する
+ので、フレーム番号は同じ地点を指さない。「そのPCに最初に到達した時点」なら
+タイミングがずれていても両者で同じ地点になる。
+
+うち側の対応物は `tools/pc-trace.mjs`（同じ形式・同じ武装）と
+`tools/watch-write.mjs`。差分は `tools/trace-diff.mjs` で取る。
+
+```sh
+# 同じ地点から両方トレース → 長い方を切り詰めて差分
+M88_TRACE=/tmp/m88.txt M88_TRACE_ARMPC=fc11 M88_TRACE_MAX=6000000 \
+  refdrv <romDir> <disk.d88> 300
+node tools/pc-trace.mjs <disk.d88> /tmp/ours.txt 150 --armpc fc11 --max 3000000
+head -n $(wc -l < /tmp/ours.txt) /tmp/m88.txt > /tmp/m88cut.txt
+node tools/trace-diff.mjs /tmp/ours.txt /tmp/m88cut.txt
+```
+**長い方を切り詰めるのを忘れない** ── でないと「片方にしか無いPC」が単に
+「そっちが長く走っただけ」になる。M88 は同じ地点に届くのに約20フレーム余分に要る。
+
 例（このリポジトリが差分を取る参照実行）:
 ```sh
 refdrv /path/to/m88roms /path/to/karuizawa.d88 250

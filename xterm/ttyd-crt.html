@@ -41,6 +41,8 @@
     padding: 3px 10px; cursor: pointer; font: inherit;
   }
   #panel button.on { background: #253; border-color: #4a6; color: #cfd; }
+  #panel label.toggle { display: flex; gap: 4px; align-items: center; color: #9ab; }
+  #panel label.toggle input { margin: 0; }
   #body {
     margin-top: 6px; background: rgba(10,10,16,.92); border: 1px solid #334;
     border-radius: 6px; padding: 10px; display: grid; gap: 7px; min-width: 230px;
@@ -48,7 +50,10 @@
   #body label { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
   #body select, #body input[type=range] { width: 130px; }
   #body select { background: #111; color: #9ab; border: 1px solid #334; }
-  #body.hidden { display: none; }
+  #body .knobs { display: grid; gap: 7px; padding-top: 6px; border-top: 1px solid #334; margin-top: 2px; }
+  #body .knobs label { justify-content: space-between; }
+  #body .knobs input[type=range] { width: 124px; }
+  #body.hidden, #body .hidden { display: none; }
 </style>
 </head>
 <body>
@@ -59,13 +64,31 @@
     <button id="crtToggle" class="on" title="toggle CRT renderer">CRT</button>
     <button id="knobsToggle" title="show/hide knobs">▾</button>
   </div>
-  <div id="body">
-    <label>phosphor <select id="phosphor"></select></label>
-    <label>mask <select id="mask"></select></label>
-    <label>bright <input id="bright" type="range" min="0.4" max="3" step="0.05"></label>
-    <label>flicker <input id="flicker" type="checkbox"></label>
-    <label>strict 1979 <input id="strict" type="checkbox" title="no per-cell background, like the real PC-8001"></label>
+<div id="body">
+  <label>phosphor <select id="phosphor"></select></label>
+  <label>mask <select id="mask"></select></label>
+  <label>bright <input id="bright" type="range" min="0.4" max="3" step="0.05"></label>
+  <label>contrast <input id="contrast" type="range" min="0.5" max="1.8" step="0.05"></label>
+  <label>quality <select id="quality"><option value="high">品質(30fps)</option><option value="fast">速度(60fps)</option></select></label>
+  <label>flicker <input id="flicker" type="checkbox"></label>
+  <label>strict 1979 <input id="strict" type="checkbox" title="no per-cell background, like the real PC-8001"></label>
+  <div class="knobs">
+    <button id="knobsAdv" title="toggle rear-knob section">▾ 裏ノブ</button>
+    <div id="adv" class="hidden">
+      <label>focus <input id="focus" type="range" min="0" max="2" step="0.05"></label>
+      <label>h-size <input id="hSize" type="range" min="0.7" max="1.15" step="0.01"></label>
+      <label>v-size <input id="vSize" type="range" min="0.7" max="1.15" step="0.01"></label>
+      <label>pitch <input id="pitch" type="range" min="3" max="9" step="1"></label>
+      <label>conv <input id="conv" type="range" min="0" max="0.02" step="0.001"></label>
+      <label>barrel <input id="barrel" type="range" min="-0.12" max="0.25" step="0.01"></label>
+      <label>v-hold <input id="vhold" type="range" min="-20" max="20" step="0.5"></label>
+      <label>tint <span style="display:flex;gap:4px;align-items:center"><input id="tintOn" type="checkbox"><input id="tint" type="range" min="-60" max="60" step="1"></span></label>
+      <label>ghost <input id="ghost" type="checkbox"></label>
+      <label>400-line <input id="line400" type="checkbox"></label>
+      <label>interlace <input id="interlaced" type="checkbox"></label>
+    </div>
   </div>
+</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
@@ -91,8 +114,12 @@ const MASKS = window.CrtMASKS;
 // ---- settings (persisted) --------------------------------------------------
 const STORE = 'ttyd-crt-settings';
 const settings = Object.assign({
-  phosphor: 'P22', mask: 'aperture', bright: 1.2,
+  phosphor: 'P22', mask: 'aperture', bright: 1.2, contrast: 1.1, quality: 'high',
   flicker: false, strict1979: false, crtOn: true,
+  // rear knobs (defaults match crt-xterm.js DEFAULT_OPTIONS)
+  focus: 0.35, hSize: 1.0, vSize: 1.0, pitch: 3, conv: 0.0035,
+  barrel: 0.02, vhold: 0, tint: 0, tintOn: false,
+  ghost: false, line400: false, interlaced: false,
 }, (() => { try { return JSON.parse(localStorage.getItem(STORE)) || {}; } catch { return {}; } })());
 const save = () => { try { localStorage.setItem(STORE, JSON.stringify(settings)); } catch {} };
 
@@ -113,7 +140,13 @@ fitAddon.fit();
 
 const crt = new CrtRendererAddon({
   phosphor: settings.phosphor, mask: settings.mask, bright: settings.bright,
+  contrast: settings.contrast, quality: settings.quality,
   flicker: settings.flicker, strict1979: settings.strict1979,
+  focus: settings.focus, hSize: settings.hSize, vSize: settings.vSize,
+  maskPitch: settings.pitch, convergence: settings.conv, barrel: settings.barrel,
+  vhold: settings.vhold, tint: settings.tint, tintOn: settings.tintOn,
+  ghost: settings.ghost ? 0.07 : 0,
+  interlaced: settings.interlaced, line400: settings.line400,
 });
 term.loadAddon(crt);
 crt.setEnabled(settings.crtOn);
@@ -131,14 +164,44 @@ const fill = (sel, keys, current) => {
 fill($('phosphor'), Object.keys(PHOSPHORS), settings.phosphor);
 fill($('mask'), MASKS.filter((m) => m !== 'plasma'), settings.mask);
 $('bright').value = settings.bright;
+$('contrast').value = settings.contrast;
+$('quality').value = settings.quality;
 $('flicker').checked = settings.flicker;
 $('strict').checked = settings.strict1979;
-const apply = (key, value) => { settings[key] = value; crt.setOptions({ [key]: value }); save(); };
+$('focus').value = settings.focus;
+$('hSize').value = settings.hSize;
+$('vSize').value = settings.vSize;
+$('pitch').value = settings.pitch;
+$('conv').value = settings.conv;
+$('barrel').value = settings.barrel;
+$('vhold').value = settings.vhold;
+$('tintOn').checked = settings.tintOn;
+$('tint').value = Math.round(settings.tint * 180 / Math.PI);
+$('ghost').checked = settings.ghost;
+$('line400').checked = settings.line400;
+$('interlaced').checked = settings.interlaced;
+// Every knob returns focus to the terminal after applying — the panel is
+// click-only, never a keyboard trap. typing goes to the shell, always.
+const apply = (key, value) => { settings[key] = value; crt.setOptions({ [key]: value }); save(); term.focus(); };
 $('phosphor').onchange = (e) => apply('phosphor', e.target.value);
 $('mask').onchange = (e) => apply('mask', e.target.value);
 $('bright').oninput = (e) => apply('bright', +e.target.value);
+$('contrast').oninput = (e) => apply('contrast', +e.target.value);
+$('quality').onchange = (e) => apply('quality', e.target.value);
 $('flicker').onchange = (e) => apply('flicker', e.target.checked);
 $('strict').onchange = (e) => apply('strict1979', e.target.checked);
+$('focus').oninput = (e) => apply('focus', +e.target.value);
+$('hSize').oninput = (e) => apply('hSize', +e.target.value);
+$('vSize').oninput = (e) => apply('vSize', +e.target.value);
+$('pitch').oninput = (e) => apply('maskPitch', +e.target.value);
+$('conv').oninput = (e) => apply('convergence', +e.target.value);
+$('barrel').oninput = (e) => apply('barrel', +e.target.value);
+$('vhold').oninput = (e) => apply('vhold', +e.target.value);
+$('tintOn').onchange = (e) => apply('tintOn', e.target.checked);
+$('tint').oninput = (e) => apply('tint', (+e.target.value) * Math.PI / 180);
+$('ghost').onchange = (e) => apply('ghost', e.target.checked ? 0.07 : 0);
+$('line400').onchange = (e) => apply('line400', e.target.checked);
+$('interlaced').onchange = (e) => apply('interlaced', e.target.checked);
 $('crtToggle').onclick = () => {
   settings.crtOn = !settings.crtOn;
   crt.setEnabled(settings.crtOn);
@@ -152,8 +215,16 @@ $('knobsToggle').onclick = () => {
   knobsOpen = !knobsOpen;
   $('body').classList.toggle('hidden', !knobsOpen);
   $('knobsToggle').textContent = knobsOpen ? '▾' : '▸';
+  term.focus();
 };
 $('knobsToggle').onclick(); // start collapsed: the terminal is the point
+let advOpen = false;
+$('knobsAdv').onclick = () => {
+  advOpen = !advOpen;
+  $('adv').classList.toggle('hidden', !advOpen);
+  $('knobsAdv').textContent = (advOpen ? '▸' : '▾') + ' 裏ノブ';
+  term.focus();
+};
 const setStatus = (text, cls) => {
   const s = $('status');
   s.textContent = text;
