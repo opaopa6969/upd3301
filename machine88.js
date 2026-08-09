@@ -796,6 +796,14 @@ export class Pc8801Machine {
       },
       ints: { levels: this.intLevels, mask: this.intMaskBits, pending: this.intPending },
       pioPoll: { last: this._pioLast, count: this._pioPoll },
+      // The sub CPU's clock. `_subMark` is how much of this frame the sub has
+      // already been paid for and `_subDebt` the fractional cycles carried
+      // between syncs — leave them out and a restore resumes with the *other*
+      // timeline's debt, so the sub runs a different number of cycles and the
+      // machine lands somewhere else on identical input. That silently broke
+      // the determinism contract (and with it rewind, jog and the ICE's
+      // branching tree) the moment `_syncSub` was introduced.
+      subClock: { mark: this._subMark, debt: this._subDebt },
       tInFrame: this.tInFrame, frame: this.frame, acc: this._acc ?? 0,
     };
     if (this.sub) {
@@ -848,6 +856,9 @@ export class Pc8801Machine {
     this.mono = b.mono; this.line400 = b.line400; this.width80 = b.width80;
     this.intLevels = s.ints.levels; this.intMaskBits = s.ints.mask; this.intPending = s.ints.pending;
     this._pioLast = s.pioPoll.last; this._pioPoll = s.pioPoll.count;
+    // `?? 0` keeps snapshots taken before this field existed loadable.
+    this._subMark = s.subClock?.mark ?? 0;
+    this._subDebt = s.subClock?.debt ?? 0;
     this.tInFrame = s.tInFrame; this.frame = s.frame; this._acc = s.acc;
     if (this.sub && s.sub) {
       restoreObj(this.pio, s.pio);

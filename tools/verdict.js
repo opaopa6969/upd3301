@@ -1,0 +1,83 @@
+// verdict — the judgement rules the comparison tools run on, as pure functions.
+//
+// These rules have been wrong three times, and each time the mistake cost more
+// than the bug it was hiding, because a wrong verdict sends you chasing an
+// emulator fault that is really a measurement fault. They now live here so they
+// can be unit-tested against the exact cases that fooled us (test-verdict.mjs
+// encodes them); the tools import from here instead of open-coding the checks.
+//
+// The three corrections, each a real incident (see docs/m88-comparison.md):
+//
+//   1. A fixed frame is not a verdict. Two machines can hold the same
+//      *intermediate* state at frame N and diverge later — that is how a Ys1
+//      regression got scored as a win.
+//   2. tvram alone cannot judge a title that turned the text plane off and
+//      draws in GVRAM. It reads as a blank screen on whichever side got to
+//      gameplay first.
+//   3. "Executing low addresses" says nothing about health — Xanadu, which
+//      matches M88 exactly, spends 100% of its frames below 0x1000. What
+//      separates alive from dead is how many distinct PCs are touched and
+//      whether the machine still talks to devices.
+//
+// Pure, zero deps, no ROM needed.
+
+export const SCHEMA_VERSION = 1;
+
+// How close two screen-fill counts must be to read as the same screen. Below
+// this the two sides are showing genuinely different content.
+const FILL_MATCH = 0.85;
+// Under this many bytes neither side has drawn anything worth comparing.
+const BLANK_FLOOR = 200;
+// A loop revisiting more distinct addresses than this per sample window is
+// marching through memory rather than looping — it is executing data as code.
+const RUNAWAY_PCS = 500;
+
+/**
+ * Which plane actually carries this title's picture, and how well the two sides
+ * agree on it. Pass `null` for a gvram count when the emulator did not report
+ * one (older refdrv builds); the text plane is then the only evidence available.
+ */
+export function classifyScreen(ref, ours) {
+  // Judge on whichever plane is being drawn. If either side has the text plane
+  // off, its tvram count is meaningless and GVRAM is the only comparable thing.
+  const textDark = ours.textOff || ours.tvnz === 0 || ref.tvnz === 0;
+  const haveG = ref.gvnz != null && ours.gvnz != null;
+  const useG = textDark && haveG;
+  const plane = useG ? 'gv' : 'tv';
+  const r = useG ? ref.gvnz : ref.tvnz;
+  const o = useG ? ours.gvnz : ours.tvnz;
+  const ratio = Math.min(r, o) / Math.max(r, o, 1);
+
+  if (ref.e6cd === ours.e6cd && r === o) return { kind: 'exact', plane, ratio: 1 };
+  if (r < BLANK_FLOOR && o < BLANK_FLOOR) return { kind: 'blank', plane, ratio };
+  // Same amount of picture, different flag byte: the two sides are at different
+  // points of the same running program, not in different states.
+  if (ratio >= FILL_MATCH) return { kind: 'phase', plane, ratio };
+  return { kind: 'divergent', plane, ratio };
+}
+
+/**
+ * What a stalled machine is actually doing. `distinctPCs` and `ioCount` come
+ * from a short profile window (a couple of frames) after it settled.
+ */
+export function classifyLoop({ distinctPCs, ioCount, halted = false }) {
+  // A halted CPU parks on one address waiting for an interrupt. That is a
+  // healthy idle, not a hang — reading it as "one hot PC = dead" mislabelled
+  // OHOTUKU, which was animating fine either side of the sample.
+  if (halted || distinctPCs <= 1) return 'halted-waiting';
+  // Marching through thousands of addresses while touching no device at all is
+  // a CPU executing data. A wait loop is small and keeps polling.
+  if (distinctPCs > RUNAWAY_PCS && ioCount === 0) return 'runaway';
+  if (ioCount === 0) return 'no-io-loop'; // small loop, no devices: waiting on memory an interrupt should change
+  return 'tight-loop';
+}
+
+/**
+ * Is a fingerprint safe to judge on? A single frame is not — say so rather than
+ * letting a caller compare two mid-load machines and call it a match.
+ */
+export function isConverged(samples) {
+  if (!Array.isArray(samples) || samples.length < 2) return false;
+  const key = (s) => `${s.e6cd}/${s.tvnz}/${s.gvnz ?? ''}`;
+  return samples.every((s) => key(s) === key(samples[0]));
+}

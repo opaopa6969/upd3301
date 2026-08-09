@@ -37,6 +37,7 @@ import { dirname, resolve } from 'path';
 import { Pc8801Machine } from '../machine88.js';
 import { parseD88All } from '../d88.js';
 import { loadRomSet } from './romset.mjs';
+import { classifyScreen } from './verdict.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROMDIR = process.argv[2] || '/mnt/c/var/emulator/エミュレーター本体/PC88/m88204';
@@ -94,16 +95,13 @@ const errs = rows.filter((x) => x.o.err || x.r.err);
 const mism = rows.filter((x) => !x.match && !x.o.err && !x.r.err);
 const phase = [], real = [], blank = [];
 for (const x of mism) {
-  // Judge on whichever plane is actually being drawn. Comparing tvnz alone
-  // mislabels every graphics-only title: the moment one side reaches gameplay
-  // and blanks the text plane, tvnz goes to 0 and the ratio collapses even
-  // though both are healthy. When either side has text off, compare GVRAM.
-  const useG = (x.o.textOff || x.o.tvnz === 0 || x.r.tvnz === 0) && x.o.gvnz != null && x.r.gvnz != null;
-  const mt = useG ? x.r.gvnz : x.r.tvnz, ot = useG ? x.o.gvnz : x.o.tvnz;
-  const ratio = Math.min(mt, ot) / Math.max(mt, ot, 1);
-  const rec = { ...x, ratio, useG };
-  if (mt < 200 && ot < 200) blank.push(rec);
-  else if (ratio >= 0.85) phase.push(rec); // same screen-fill → snapshot-phase noise, not a bug
+  // The judgement rules live in tools/verdict.js so they can be unit-tested
+  // against the cases that have fooled them (test-verdict.mjs) — three separate
+  // measurement bugs cost more than the emulator bugs they hid.
+  const v = classifyScreen(x.r, x.o);
+  const rec = { ...x, ratio: v.ratio, useG: v.plane === 'gv' };
+  if (v.kind === 'blank') blank.push(rec);
+  else if (v.kind === 'phase' || v.kind === 'exact') phase.push(rec);
   else real.push(rec);
 }
 const line = (x) => {
