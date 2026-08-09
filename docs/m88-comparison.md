@@ -345,3 +345,36 @@ more), so M88 itself may not be booting it — treat as a case where the gold is
 3. **The address region says nothing about health.** What works is the count of distinct
    PCs and whether the machine still touches I/O.
 4. **A matching result header is not a matching payload.** The MT bug hid behind exactly that.
+
+## How much time to lend the sub CPU (2026-08-10)
+
+The `_pioPoll` ×16 boost — read a main spinning on an unchanged answer as "waiting for the
+sub" and lend the sub 16× bus time, the trick QUASI88 uses — turns out to be **harmful
+during an FDC data transfer specifically**.
+
+Two failures pull in opposite directions:
+
+| situation | what the sub is doing | without the boost | with the boost |
+|---|---|---|---|
+| motor spin-up, seek | a long delay loop | **the boot ROM times out first** (wizrdry4 comes up blank, tv190) | fine |
+| FDC data transfer | answering a tight handshake | fine | **the sub runs ahead of real time and the main sees the ready bit early** (harakiri leaves the transfer wait early and runs away) |
+
+**The FDC phase separates the two exactly**: `execute` is the transfer, anything else is the
+sub waiting on mechanics. So the boost applies only while `phase !== 'execute'`. The split
+of responsibility is:
+
+- `_syncSub()` — the sub is never *starved* (run it to the main's current time before the
+  latches are touched)
+- the phase test — whether it may also run *early*
+
+Measured over 353 titles at 1500f:
+
+| variant | exact | tracking | wizrdry4 | Silpheed |
+|---|---|---|---|---|
+| boost always | 326 | 337 | ok | ok |
+| boost removed | 328 | 338 | **regressed (tv190)** | **became a lead** |
+| **phase-gated** | **328/353 (93%)** | **338/353 (96%)** | ok | ok |
+
+**Fundamentally this is the price of not modelling the drive motor.** Model the real time a
+spindle takes to come up to speed and neither hack is needed; the FDC phase is standing in
+for that. Left as future work.

@@ -430,10 +430,10 @@ export class Pc8801Machine {
       if (!this.pio) return 0xff;
       this._syncSub();  // the sub owns the other side of these latches — let it catch up first
       const v = this.pio.read(port - 0xfc);
-      // main spinning on an unchanged answer = it is waiting for the sub.
-      // Count it so stepFrame can lend the sub extra time (same trick
-      // QUASI88 uses: on continuous PIO reads, switch to the sub CPU) —
-      // otherwise the boot ROM's timeout beats the sub ROM's motor delay.
+      // A main spinning on an unchanged answer is waiting for the sub. Count it
+      // so stepFrame can decide whether to lend the sub extra time — see the
+      // FDC-phase test there for why that lending must not apply during a data
+      // transfer.
       if (v === this._pioLast) this._pioPoll++;
       else { this._pioLast = v; this._pioPoll = 0; }
       return v;
@@ -639,12 +639,23 @@ export class Pc8801Machine {
         this._serviceInterrupts();
       }
       if (this.sub) {
-        // A main stuck polling an unchanged answer is waiting on the sub and
-        // wasting bus time; donate it (×16) so the boot ROM's timeout cannot
-        // beat the sub ROM's motor delay. (Same trick QUASI88 uses.) _syncSub
-        // has already banked the plain 1× time for any slice that touched the
-        // PIO, so only the extra 15× is added here.
-        if (this._pioPoll > 32) this._subDebt += (this.tInFrame - before) * this.subRatio * 15;
+        // Lend the sub extra bus time *only while it is not streaming data*.
+        //
+        // Two failures pull in opposite directions. During motor spin-up and
+        // seeks the sub sits in a long delay loop, and if it only ever gets its
+        // fair share the boot ROM's timeout expires first — wizrdry4 comes up
+        // blank. But during an FDC data transfer the sub is answering a tight
+        // handshake, and running it ahead of real time makes the main see the
+        // ready bit too early — harakiri then leaves the transfer wait several
+        // iterations before M88 does.
+        //
+        // The FDC phase separates the two exactly: `execute` is the transfer,
+        // anything else is the sub waiting on mechanics. (`_syncSub` already
+        // guarantees the sub is never *starved* by a slice boundary; this only
+        // decides whether it may also run early.)
+        if (this._pioPoll > 32 && this.sub.fdc?.phase !== 'execute') {
+          this._subDebt += (this.tInFrame - before) * this.subRatio * 15;
+        }
         this._syncSub();
       }
     }
