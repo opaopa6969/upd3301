@@ -24,13 +24,15 @@
     "./memmap": "./memmap.js",
     "./romlabels": "./romlabels.js",
     "./romxref": "./romxref.js",
+    "./analysisdb": "./analysisdb.js",
     "./ym2203": "./ym2203.js"
   },
   "files": [
     "*.js",
     "README.md",
     "README.ja.md",
-    "docs/"
+    "docs/",
+    "analysis/"
   ],
   "scripts": {
     "test": "node --test"

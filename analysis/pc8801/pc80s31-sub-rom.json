@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "machine": "pc8801",
+  "cpu": "sub",
+  "title": "PC-80S31 FDD sub-CPU ROM — command dispatch and the motor delay",
+  "romHash": {
+    "sub": [
+      "sha256:3e2e6545d5fae6f73ba3fc88a57191ef9d950f964e082b095a34aa86ca74b9f6",
+      "fnv1a64:cd3af1786be58800"
+    ]
+  },
+  "source": "upd3301 boot investigations (romlabels.js pc80s31, docs/m88-comparison.md)",
+  "labels": {
+    "00B1": {
+      "name": "poweron_pio_init",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"pc80s31\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "programs the 8255 to mode 91h (A in / B out / C-hi out / C-lo in)",
+      "source": "romlabels.js"
+    },
+    "00CC": {
+      "name": "idle_poll_loop",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"pc80s31\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "command wait loop polling FE bit3 (main's ATN); motors off on timeout",
+      "source": "romlabels.js"
+    },
+    "00EC": {
+      "name": "cmd_dispatch",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"pc80s31\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "dispatches a received command (<1Fh) via the table at 011B; first use spins motors up",
+      "source": "romlabels.js"
+    },
+    "00FB": {
+      "name": "call_motor_settle_delay",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "bytes CD B4 02 (CALL 02B4h) read at this offset in all three images checked (FR disk.rom 2KB, m88204 disk.rom 8KB, m88204 Pc88.rom at 0x14000)",
+        "basis": "M88's SubSystem::PatchROM NOPs exactly these two call sites, which is what identifies them as the spin-up delay calls"
+      },
+      "note": "one of the two motor spin-up delay calls M88 patches out; we keep it",
+      "source": "docs/m88-comparison.md"
+    },
+    "0105": {
+      "name": "call_motor_settle_delay",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "bytes CD B4 02 (CALL 02B4h) read at this offset in all three images checked (FR disk.rom 2KB, m88204 disk.rom 8KB, m88204 Pc88.rom at 0x14000)",
+        "basis": "M88's SubSystem::PatchROM NOPs exactly these two call sites, which is what identifies them as the spin-up delay calls"
+      },
+      "note": "one of the two motor spin-up delay calls M88 patches out; we keep it",
+      "source": "docs/m88-comparison.md"
+    },
+    "011B": {
+      "name": "cmd_jump_table",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"pc80s31\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "00 init, 01 write, 02 read, 03 send, 05 format, 06 result (7F14), 07 drive map (7F15), 0B mem→main, 0C main→mem, 17 mode flags, 1B remote execute",
+      "source": "romlabels.js"
+    },
+    "015D": {
+      "name": "cmd00_initialize",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"pc80s31\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "SPECIFY, then probe each drive (RECAL + SEEK 10 + RECAL); packs the drive map into 7F15 via RRA",
+      "source": "romlabels.js"
+    },
+    "02A4": {
+      "name": "fdc_send_cmd",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"pc80s31\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "send a command byte to the μPD765 (wait RQM/DIO in MSR, OUT FBh); logs to 7F0C",
+      "source": "romlabels.js"
+    },
+    "02B4": {
+      "name": "motor_settle_delay",
+      "confidence": "observed",
+      "evidence": {
+        "samples": 262144,
+        "basis": "our sub-CPU trace spins the inner loop at 02BB 262144 times per call while M88 never touches it: SubSystem::PatchROM NOPs the CALL 02B4h at 00FB and 0105. We are the faithful side here (docs/m88-comparison.md)",
+        "note": "double 65536 loop, twice ~ 0.85s of motor settling"
+      },
+      "note": "motor settle delay: double 65536 loop, twice; the 7F09 flag skips it once spun up",
+      "source": "docs/m88-comparison.md + romlabels.js"
+    },
+    "05BC": {
+      "name": "cmd17_mode_flags",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"pc80s31\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "receive one byte; expand low 4 bits into per-drive flags at 7F1C-1F (extended mode)",
+      "source": "romlabels.js"
+    },
+    "05DA": {
+      "name": "cmd1b_remote_exec",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"pc80s31\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "remote execute: LD I, switch SP to 7F2E, pop full register set, JP 7F25 — official main-supplied-code execution",
+      "source": "romlabels.js"
+    },
+    "06A6": {
+      "name": "recv_params_bcde",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"pc80s31\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "receive 4 parameter bytes into B, C, D, E",
+      "source": "romlabels.js"
+    },
+    "070F": {
+      "name": "send_byte_to_main",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"pc80s31\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "send one byte to the main CPU through the 8255 (the body of RST 18h)",
+      "source": "romlabels.js"
+    }
+  },
+  "unclassified": [
+    {
+      "addr": "011B",
+      "reason": "the dispatch table is walked only for the eleven commands the boot path uses (00 01 02 03 05 06 07 0B 0C 17 1B). Every other command below 1Fh is unexercised and unnamed."
+    },
+    {
+      "addr": "0800",
+      "reason": "this dump ends at 07FF. The 8KB variants (m88204 disk.rom, and Pc88.rom at 0x14000) agree with it byte for byte over 0000-07FF and then differ from EACH OTHER in 2021 of the remaining 6144 bytes — nothing here has looked above 0800."
+    }
+  ],
+  "notes": "Scope: the disk-boot path of the sub board, not a map of the ROM. Everything not listed is unclassified by default.\n\nConfidence mapping: romlabels.js marks these entries \"verified\" (walked instruction by instruction). They appear here as `inferred` because this format reserves `observed` for claims with a recorded count — and the counts from those sessions were never written down. The one genuine `observed` entry is 02B4, whose 262144 iterations were measured against M88.\n\nROM revision: this document is stamped with the PC-8801mkII FR 2KB disk.rom. Measured on 2026-08-10: its 2048 bytes are identical to the first 2048 of m88204 disk.rom AND of Pc88.rom at 0x14000, so every label below (all under 0800) transfers to both. That is luck, not policy — the same two 8KB images differ in 2021 bytes overall, which is the harness defect recorded in docs/m88-comparison.md. Do not assume; compare the hash.",
+  "sources": [
+    "romlabels.js",
+    "docs/m88-comparison.md",
+    "docs/ice-design.md"
+  ],
+  "generator": "hand-assembled from romlabels.js and docs/m88-comparison.md; serialized with analysisdb.stringify()"
+}

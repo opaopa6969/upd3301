@@ -77,6 +77,12 @@ ICE design — debugger, time travel, assembler, and the reverse-engineering
 "stone tools" (labels, source export, verified relocation):
 [docs/ice-design.md](./docs/ice-design.md).
 
+The analysis format (`analysisdb.js` / `analysis/<machine>/<slug>.json`) — labels,
+RNG maps and case notes shared as pull requests, each claim carrying its
+`confidence`, its `evidence` and the `romHash` it was found on; conflicting names
+are recorded, never silently overwritten:
+[docs/analysis-format.md](./docs/analysis-format.md).
+
 Using the pieces as libraries (CRT renderer, terminal, machines):
 [docs/library.md](./docs/library.md).
 
