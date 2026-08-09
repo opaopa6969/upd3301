@@ -378,3 +378,38 @@ Measured over 353 titles at 1500f:
 **Fundamentally this is the price of not modelling the drive motor.** Model the real time a
 spindle takes to come up to speed and neither hack is needed; the FDC phase is standing in
 for that. Left as future work.
+
+## Wait states do not explain the boot-speed difference (2026-08-10, hypothesis rejected)
+
+`machine88.js` does not model memory wait states (it says so in a comment), while M88 runs
+with `Config::enablewait`. That looked like a candidate for the long-standing "our emulator
+boots ~20 frames ahead of M88". **Reading M88's actual table rejects it.**
+
+M88's waits come from `waittable[waitmode + waittype]` (`memory.cpp:198`, 48 entries); each
+triple is the wait cycles for `(0000-BFFF, C000-EFFF, F000-FFFF)`.
+
+```cpp
+waitmode = ((sw31 & 0x40) || (n80mode && n80srmode) ? 12 : 0) + (high ? 24 : 0);
+```
+
+For this comparison harness:
+- `sw31` = input port 31h = `dipsw[1]` = `0x79`, bit 6 set (V2 mode) → **+12**
+- `high` = `!(In(0x6e) & 0x80)`; port 6Eh is unimplemented and reads `0xff` → `high = 0` → **+0**
+- so **`waitmode = 12`**
+
+The `waitmode=12` band (entries 12-23):
+```
+{0,0,1},{0,0,0},{0,0,0},{0,0,0},
+{0,2,2},{0,1,1},{0,2,2},{0,1,1},
+{0,2,2},{0,1,1},{0,2,2},{0,1,1}
+```
+
+**0000-BFFF waits zero in every pattern**; C000-FFFF waits 0-2. Ordinary code therefore runs
+at the same speed with or without the model, so the boot-speed gap has another cause.
+
+(The eye-catching `30` and `72` entries belong to the `waitmode=0`/`24` bands — V1 mode and
+8 MHz machines — which this configuration never selects. Implementing waits would also
+require tracking `waittype`: VRTC, display status, and port 40h bit 4 for GVRAM access
+during display.)
+
+**Remaining candidates**: the DMA bus-steal estimate, the sub-CPU ratio, FDC transfer pacing.
