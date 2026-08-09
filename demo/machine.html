@@ -62,6 +62,7 @@
   <label style="color:#778;font-size:12px" title="メガドライブのカートリッジ(.md/.bin/.gen/.smd)を読み込む。読み込むと機種がメガドライブに切り替わる">🕹 メガドライブ: <input type="file" id="fmd" accept=".md,.MD,.bin,.BIN,.gen,.GEN,.smd,.SMD,.68k" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="X68000のIPL ROM(IPLROM.DAT 128KB)とCGROM(CGROM.DAT 768KB)を選ぶ。両方まとめて選んでよい">🖥 X68000 ROM: <input type="file" id="fx68rom" multiple style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="X68000のフロッピー(.dim/.xdf/.img/.d88)を読み込む。IPL ROMがあれば機種がX68000に切り替わる">💾 X68000 FD: <input type="file" id="fx68fd" accept=".dim,.DIM,.xdf,.XDF,.img,.IMG,.2hd,.d88,.D88,.88d" multiple style="font-size:11px"></label>
+  <label style="color:#778;font-size:12px" title="Setaアーケード基板のMAME ROMセット(thunderl.zip など)を読み込む。読み込むと機種がアーケードに切り替わる">🕹 Seta基板(.zip): <input type="file" id="fseta" accept=".zip,.ZIP" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <span id="grp-tape" style="display:inline-flex;gap:4px;align-items:center">
     <label style="color:#778;font-size:12px" title="カセットテープ(.t88/.cas/.cmt)を読み込む。N88モードで CLOAD するとテープから読める">📼 テープ: <input type="file" id="ftape" accept=".t88,.cas,.cmt,.T88,.CAS,.CMT" style="font-size:11px"></label>
@@ -104,7 +105,8 @@
   <button id="mn88">N88-BASIC</button>
   <button id="mnes" title="ファミコン(NES)。.nes を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">ファミコン</button>
   <button id="mmd" title="メガドライブ。.md/.bin/.gen/.smd を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">メガドライブ</button>
-  <button id="mx68" title="X68000。IPL ROMとフロッピーを読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">X68000</button></span>
+  <button id="mx68" title="X68000。IPL ROMとフロッピーを読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">X68000</button>
+  <button id="mseta" title="Setaアーケード基板(サンダー＆ライトニング等)。MAMEのROMセット(.zip)を読み込むと選べる。スナップショットが50KBと小さいので巻き戻しが一番よく効く">アーケード/Seta</button></span>
   <label style="color:#778;font-size:12px" title="サウンドボードII (OPNA/YM2608) を有効にする">SB2 <input type="checkbox" id="sb2" style="vertical-align:middle"></label>
   <label style="color:#778;font-size:12px" title="エミュレーション速度。倍速・早送り（実CPUが追いつく範囲まで）">速度 <select id="speed" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
     <option value="0.25">×0.25</option><option value="0.5">×0.5</option>
@@ -151,6 +153,8 @@ import { MegaDriveMachine, BUTTON as MD_BUTTON } from '../machinemd.js';
 import { X68000Machine, KEY as X68_KEY, JOY as X68_JOY } from '../machinex68.js';
 import { tryParseX68Disk, summarizeX68Disk } from '../x68fdd.js';
 import { tryParseMdRom, summarizeMdRom } from '../mdrom.js';
+import { SetaMachine, BUTTON as SETA_BUTTON } from '../machineseta.js';
+import { loadSetaRomSet } from '../setarom.js';
 import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 import { parseD88All, summarize } from '../d88.js';
@@ -424,6 +428,25 @@ $('fx68rom').onchange = async (e) => {
   guts.textContent = `X68000: IPL=${x68Ipl ? x68IplName : '未'} CGROM=${x68Cgrom ? 'あり' : '未'}`;
   if (x68Ipl) switchMode('x68');
 };
+// ---- Seta arcade: one zip is the whole board ------------------------------
+// A MAME ROM set is a zip of one file per chip. setarom.js identifies which
+// board it is by CRC rather than by the file's name, so a renamed or
+// reorganised set still lands on the right machine — and a zip that is not a
+// Seta set says so instead of booting into noise.
+$('fseta').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    setaRomset = await loadSetaRomSet(bytes, { name: f.name });
+    setaName = `${setaRomset.set} · ${setaRomset.title} (${setaRomset.year} ${setaRomset.maker})`;
+    guts.textContent = setaName + (setaRomset.warnings.length ? '  ⚠ ' + setaRomset.warnings.join(' / ') : '');
+    switchMode('seta');
+  } catch (err) {
+    setaRomset = null;
+    guts.textContent = 'このzipはSetaのROMセットとして読めない: ' + err.message;
+  }
+};
 $('fx68fd').onchange = async (e) => {
   const files = [...e.target.files].slice(0, 2);
   x68Disks = [null, null];
@@ -543,7 +566,7 @@ function renderMachine(extra = {}) {
   if (hasOwnRender(machine)) return machine.render({ cgrom, ...renderOpts(), ...extra });
   return machine.sys.render({ cgrom });
 }
-const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', md: 'メガドライブ/MD', x68: 'X68000' };
+const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', md: 'メガドライブ/MD', x68: 'X68000', seta: 'アーケード/Seta' };
 // Raw-frame PNG: the machine's OWN render() (full 512-colour palette), with NO
 // phosphor / tube / interlace / line-double and no CSS scaling — the emulation's
 // ground truth at 640×200. Lets a corrupted scene be diagnosed as emulation vs
@@ -604,15 +627,16 @@ $('bpng').onclick = () => {
 // defaults (the user can still override before reset).
 function switchMode(mode) {
   bootMode = mode;
-  const is88 = mode === 'n88', isNes = mode === 'nes', isMd = mode === 'md', isX68 = mode === 'x68';
+  const is88 = mode === 'n88', isNes = mode === 'nes', isMd = mode === 'md', isX68 = mode === 'x68', isSeta = mode === 'seta';
   $('mn88').classList.toggle('on', is88);
   $('mn80').classList.toggle('on', mode === 'n80');
   $('mnes').classList.toggle('on', isNes);
   $('mmd').classList.toggle('on', isMd);
   $('mx68').classList.toggle('on', isX68);
+  $('mseta').classList.toggle('on', isSeta);
   // The consoles have no DIP switches; leave the fields where they are so
   // switching away and back does not lose the user's PC-88 setup.
-  if (!isNes && !isMd && !isX68) {
+  if (!isNes && !isMd && !isX68 && !isSeta) {
     $('dip1').value = is88 ? 'DB' : 'FF';
     $('dip2').value = is88 ? '79' : 'FF';
   }
@@ -622,6 +646,8 @@ function switchMode(mode) {
     $('dipnote').textContent = 'メガドライブのROM(.md/.bin/.gen/.smd)を選ぶと起動する';
   } else if (isX68 && !x68Ipl) {
     $('dipnote').textContent = 'X68000のIPL ROM(128KB)とCGROM(768KB)を選ぶと起動する';
+  } else if (isSeta && !setaRomset) {
+    $('dipnote').textContent = 'SetaアーケードのROMセット(.zip、例 thunderl.zip)を選ぶと起動する';
   } else if (is88 && !has88Set()) {
     $('dipnote').textContent = t('PC-8801 BIOS一式(n88.rom+n88_0..3.rom+disk.rom)を選ぶとN88で起動する');
   } else {
@@ -636,6 +662,7 @@ $('mn88').onclick = () => switchMode('n88');
 $('mnes').onclick = () => switchMode('nes');
 $('mmd').onclick = () => switchMode('md');
 $('mx68').onclick = () => switchMode('x68');
+$('mseta').onclick = () => switchMode('seta');
 for (const id of ['dip1', 'dip2']) $(id).onchange = () => boot();
 
 // Disk pool + drive assignment. A .d88 file can hold SEVERAL disk images, and a
@@ -1754,6 +1781,10 @@ let mdCart = null, mdInfo = null, mdName = '';
 // end of rewind.
 let x68Ipl = null, x68Cgrom = null, x68Sram = null, x68IplName = '';
 let x68Disks = [null, null], x68DiskName = '';
+// The Seta boards. The ROM set is held by reference for the same reason the
+// X68000's ROMs are: it is megabytes, it never changes, and it must not end up
+// in a snapshot. `setaPad` is the live keyboard mask, ORed with the gamepad.
+let setaRomset = null, setaName = '', setaPad = 0, setaCoinAt = -1;
 let x68Joy = 0;   // live joystick mask (see X68_KEYMAP)
 let mdPad = 0;  // live 3-button pad mask (see MD_KEYMAP), ORed with the gamepad
 const dipOf = (id, dflt) => {
@@ -1833,6 +1864,16 @@ function boot() {
     machine = new X68000Machine({ ipl: x68Ipl, cgrom: x68Cgrom, sram: x68Sram });
     x68Disks.forEach((d, i) => { if (d) machine.insertDisk(i, d); });
     x68Joy = 0;
+    canvas.focus();
+    return;
+  }
+  if (bootMode === 'seta') {
+    if (!setaRomset) { guts.textContent = 'SetaアーケードのROMセット(.zip)を選んでね'; return; }
+    // Nothing to configure: the ROM set names its own board, and the board
+    // carries its clock, screen window, cabinet rotation and DIP defaults.
+    machine = new SetaMachine({ romset: setaRomset });
+    setaPad = 0; setaCoinAt = -1;
+    ensureAudio();
     canvas.focus();
     return;
   }
@@ -2201,6 +2242,21 @@ function applyPad() {
     machine.joy[0] = b;
     return;
   }
+  // Seta arcade: a four-way stick and two buttons, plus start and a coin slot
+  // on the keyboard. Translated from the same 8801 joystick bits every other
+  // family uses, so the pad config panel keeps working here too.
+  if (bootMode === 'seta' && machine.inputs) {
+    const j = ~padJoy & 0x3f;
+    let b = setaPad;
+    if (j & 0x01) b |= 1 << SETA_BUTTON.UP;
+    if (j & 0x02) b |= 1 << SETA_BUTTON.DOWN;
+    if (j & 0x04) b |= 1 << SETA_BUTTON.LEFT;
+    if (j & 0x08) b |= 1 << SETA_BUTTON.RIGHT;
+    if (j & 0x10) b |= 1 << SETA_BUTTON.B1;
+    if (j & 0x20) b |= 1 << SETA_BUTTON.B2;
+    machine.inputs[0] = b;
+    return;
+  }
   if (bootMode === 'md' && machine.pads) {
     const j = ~padJoy & 0x3f;
     let b = mdPad;
@@ -2262,6 +2318,23 @@ function x68KeySet(e, down) {
   if (down) machine.keyDown(code); else machine.keyUp(code);
   return true;
 }
+// The cabinet has no keyboard, so this is the control panel: a stick, two
+// buttons, start, and the coin slot. A coin is a momentary contact rather than
+// a held key — insertCoin() runs the impulse for the frames the game needs.
+const SETA_KEYMAP = {
+  ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT',
+  w: 'UP', s: 'DOWN', a: 'LEFT', d: 'RIGHT',
+  z: 'B1', x: 'B2', ' ': 'B1', Enter: 'START', '1': 'START',
+};
+function setaKeySet(e, down) {
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (key === '5' || key === 'c') { if (down && machine.insertCoin) machine.insertCoin(0); return true; }
+  const name = SETA_KEYMAP[key];
+  if (!name) return false;
+  const bit = 1 << SETA_BUTTON[name];
+  setaPad = down ? (setaPad | bit) : (setaPad & ~bit);
+  return true;
+}
 function mdKeySet(e, down) {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const name = MD_KEYMAP[key];
@@ -2295,8 +2368,9 @@ function matrixKey(e) {
 const isFormFocused = () => { const el = document.activeElement; return el && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName); };
 window.addEventListener('keydown', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (bootMode === 'nes' || bootMode === 'md' || bootMode === 'x68') {
+  if (bootMode === 'nes' || bootMode === 'md' || bootMode === 'x68' || bootMode === 'seta') {
     const hit = bootMode === 'x68' ? x68KeySet(e, true)
+      : bootMode === 'seta' ? setaKeySet(e, true)
       : bootMode === 'md' ? mdKeySet(e, true) : nesKeySet(e, true);
     if (!hit) return;
     ensureAudio(); // a keypress is a user gesture -> unblock autoplay
@@ -2318,6 +2392,7 @@ window.addEventListener('keyup', (e) => {
   if (bootMode === 'nes') { if (nesKeySet(e, false)) e.preventDefault(); return; }
   if (bootMode === 'md') { if (mdKeySet(e, false)) e.preventDefault(); return; }
   if (bootMode === 'x68') { if (x68KeySet(e, false)) e.preventDefault(); return; }
+  if (bootMode === 'seta') { if (setaKeySet(e, false)) e.preventDefault(); return; }
   const k = matrixKey(e);
   if (!e.shiftKey) kbSet([[8, 6]], false);
   const jb = joyBitFor(e);
@@ -2686,6 +2761,7 @@ function loop(now) {
     guts.textContent = `${MACHINE_LABEL[bootMode] || 'machine'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
       + (crtc ? `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz`
         : bootMode === 'x68' ? `  ${machine.crtc.width}x${machine.crtc.height} ${machine.crtc.highReso ? '31kHz' : '15kHz'}${x68DiskName ? '  ' + x68DiskName : ''}`
+        : bootMode === 'seta' ? `  ${setaName}  ${machine.board.rotation ? 'ROT' + machine.board.rotation : ''}`
         : bootMode === 'md' && mdInfo ? `  ${mdName} · ${mdInfo.title || '(no title)'} · ${mdInfo.regions}`
         : (nesInfo ? `  ${nesName} · ${nesInfo.board}` : ''))
       + (machine.effectiveCpuPct !== undefined ? `  CPU ${machine.effectiveCpuPct}%` : '')
