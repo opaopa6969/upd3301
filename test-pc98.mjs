@@ -77,6 +77,10 @@ test('machine boots a self-contained BIOS and produces text pixels', () => {
   assert.equal(m.cpu.halted, true);
   assert.equal(m.gdcText.displayEnabled, true);
   assert.ok(lit > 0);
+  const indexed = m.render({ indexed: true, analog: true });
+  assert.equal(indexed.pixels.length, 640 * 400);
+  assert.equal(indexed.drive.length, 640 * 400 * 3);
+  assert.ok(indexed.pixels.some((p) => p !== 0), 'shared CRT path receives lit pixels');
 });
 
 test('word I/O reaches both byte lanes in a shared device block', () => {
@@ -183,4 +187,3 @@ test('FDC SENSE INTERRUPT without a pending event is one byte', () => {
   assert.equal(f.read(0x92), 0x80);
   assert.equal(f.fdc.phase, 'idle');
 });
-

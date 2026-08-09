@@ -62,6 +62,8 @@
   <label style="color:#778;font-size:12px" title="メガドライブのカートリッジ(.md/.bin/.gen/.smd)を読み込む。読み込むと機種がメガドライブに切り替わる">🕹 メガドライブ: <input type="file" id="fmd" accept=".md,.MD,.bin,.BIN,.gen,.GEN,.smd,.SMD,.68k" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="X68000のIPL ROM(IPLROM.DAT 128KB)とCGROM(CGROM.DAT 768KB)を選ぶ。両方まとめて選んでよい">🖥 X68000 ROM: <input type="file" id="fx68rom" multiple style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="X68000のフロッピー(.dim/.xdf/.img/.d88)を読み込む。IPL ROMがあれば機種がX68000に切り替わる">💾 X68000 FD: <input type="file" id="fx68fd" accept=".dim,.DIM,.xdf,.XDF,.img,.IMG,.2hd,.d88,.D88,.88d" multiple style="font-size:11px"></label>
+  <label style="color:#778;font-size:12px" title="PC-9801のBIOS ROM(96KB)、ITF ROM(32KB)、FONT ROM、SOUND ROMをまとめて選べる">🖥 PC-98 ROM: <input type="file" id="fpc98rom" multiple style="font-size:11px"></label>
+  <label style="color:#778;font-size:12px" title="PC-9801のフロッピー(.d88/.fdi/.hdm/.2hd/.img)を2枚まで読み込む">💾 PC-98 FD: <input type="file" id="fpc98fd" accept=".d88,.D88,.88d,.fdi,.FDI,.hdm,.HDM,.2hd,.2HD,.img,.IMG,.dup,.DUP" multiple style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <span id="grp-tape" style="display:inline-flex;gap:4px;align-items:center">
     <label style="color:#778;font-size:12px" title="カセットテープ(.t88/.cas/.cmt)を読み込む。N88モードで CLOAD するとテープから読める">📼 テープ: <input type="file" id="ftape" accept=".t88,.cas,.cmt,.T88,.CAS,.CMT" style="font-size:11px"></label>
@@ -104,7 +106,8 @@
   <button id="mn88">N88-BASIC</button>
   <button id="mnes" title="ファミコン(NES)。.nes を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">ファミコン</button>
   <button id="mmd" title="メガドライブ。.md/.bin/.gen/.smd を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">メガドライブ</button>
-  <button id="mx68" title="X68000。IPL ROMとフロッピーを読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">X68000</button></span>
+  <button id="mx68" title="X68000。IPL ROMとフロッピーを読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">X68000</button>
+  <button id="mpc98" title="PC-9801。V30世代のBIOS/ITFとフロッピーを読み込むと選べる。80386搭載RS系のITFは未対応">PC-9801</button></span>
   <label style="color:#778;font-size:12px" title="サウンドボードII (OPNA/YM2608) を有効にする">SB2 <input type="checkbox" id="sb2" style="vertical-align:middle"></label>
   <label style="color:#778;font-size:12px" title="エミュレーション速度。倍速・早送り（実CPUが追いつく範囲まで）">速度 <select id="speed" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
     <option value="0.25">×0.25</option><option value="0.5">×0.5</option>
@@ -150,6 +153,8 @@ import { tryCreateMapper } from '../nesmapper.js';
 import { MegaDriveMachine, BUTTON as MD_BUTTON } from '../machinemd.js';
 import { X68000Machine, KEY as X68_KEY, JOY as X68_JOY } from '../machinex68.js';
 import { tryParseX68Disk, summarizeX68Disk } from '../x68fdd.js';
+import { Pc98Machine, KEY as PC98_KEY } from '../machinepc98.js';
+import { tryParsePc98Disk, summarizePc98Disk } from '../pc98fdd.js';
 import { tryParseMdRom, summarizeMdRom } from '../mdrom.js';
 import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
@@ -438,6 +443,39 @@ $('fx68fd').onchange = async (e) => {
   if (x68Ipl) switchMode('x68');
   else guts.textContent = 'X68000のIPL ROM(128KB)も選んでね';
 };
+// PC-98 ROMs are identified by their physical image size, not by a filename.
+// This keeps locally renamed dumps usable. Image size cannot distinguish the
+// V30 and 386 generations, so the mode selector states that scope explicitly.
+$('fpc98rom').onchange = async (e) => {
+  const unknown = [];
+  for (const f of e.target.files) {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    if (bytes.length === 0x18000) { pc98Bios = bytes; pc98BiosName = f.name; }
+    else if (bytes.length === 0x8000) pc98Itf = bytes;
+    else if (bytes.length >= 0x46800) pc98Font = bytes;
+    else if (bytes.length === 0x4000) pc98Sound = bytes;
+    else unknown.push(`${f.name}(${bytes.length}B)`);
+  }
+  guts.textContent = `PC-98: BIOS=${pc98Bios ? pc98BiosName : '未'} ITF=${pc98Itf ? 'あり' : '未'} FONT=${pc98Font ? 'あり' : '未'}`
+    + (unknown.length ? ` 未識別=${unknown.join(', ')}` : '');
+  if (pc98Bios) switchMode('pc98');
+};
+$('fpc98fd').onchange = async (e) => {
+  pc98Disks = [null, null]; pc98DiskName = '';
+  const errors = [];
+  const files = [...e.target.files].slice(0, 2);
+  for (let i = 0; i < files.length; i++) {
+    const bytes = new Uint8Array(await files[i].arrayBuffer());
+    const parsed = tryParsePc98Disk(bytes);
+    if (!parsed.disk) { errors.push(`${files[i].name}: ${parsed.error}`); continue; }
+    pc98Disks[i] = parsed.disk;
+    const info = summarizePc98Disk(parsed.disk);
+    if (!pc98DiskName) pc98DiskName = `${files[i].name} · ${info.media}`;
+  }
+  if (errors.length) guts.textContent = errors.join(' / ');
+  if (pc98Bios) switchMode('pc98');
+  else guts.textContent = 'PC-9801のBIOS ROM(96KB)も選んでね';
+};
 $('ffont').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
@@ -543,7 +581,12 @@ function renderMachine(extra = {}) {
   if (hasOwnRender(machine)) return machine.render({ cgrom, ...renderOpts(), ...extra });
   return machine.sys.render({ cgrom });
 }
-const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', md: 'メガドライブ/MD', x68: 'X68000' };
+const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', md: 'メガドライブ/MD', x68: 'X68000', pc98: 'PC-9801' };
+const cpuPcText = (m) => {
+  if (!m?.cpu) return '----';
+  const pc = m.cpu.pc ?? m.cpu.ip ?? 0;
+  return pc.toString(16).padStart(4, '0');
+};
 // Raw-frame PNG: the machine's OWN render() (full 512-colour palette), with NO
 // phosphor / tube / interlace / line-double and no CSS scaling — the emulation's
 // ground truth at 640×200. Lets a corrupted scene be diagnosed as emulation vs
@@ -560,7 +603,7 @@ $('bpng').onclick = () => {
   cx.putImageData(im, 0, 0);
   const crtc = crtcOf(machine);
   const is88 = machine instanceof Pc8801Machine;
-  console.log(`[raw PNG] ${W}x${H}  ${crtc ? `crtc=${crtc.cols}x${crtc.rows} linesPerChar=${crtc.linesPerChar} ` : ''}pc=${machine.cpu.pc.toString(16)}`);
+  console.log(`[raw PNG] ${W}x${H}  ${crtc ? `crtc=${crtc.cols}x${crtc.rows} linesPerChar=${crtc.linesPerChar} ` : ''}pc=${cpuPcText(machine)}`);
   if (is88) { // palette diagnostic (R,G,B per index 0-7, each 0-7) + analog/mono flags
     const pal = []; for (let n = 0; n < 8; n++) pal.push(`${n}:${machine.palette[n * 3]}${machine.palette[n * 3 + 1]}${machine.palette[n * 3 + 2]}`);
     const line = `crtc ${crtc.cols}x${crtc.rows}×${crtc.linesPerChar}=${crtc.rows * crtc.linesPerChar}ln  pal ${(machine._port32 & 0x20) ? 'analog' : 'digital'}  ${pal.join(' ')}`;
@@ -604,15 +647,16 @@ $('bpng').onclick = () => {
 // defaults (the user can still override before reset).
 function switchMode(mode) {
   bootMode = mode;
-  const is88 = mode === 'n88', isNes = mode === 'nes', isMd = mode === 'md', isX68 = mode === 'x68';
+  const is88 = mode === 'n88', isNes = mode === 'nes', isMd = mode === 'md', isX68 = mode === 'x68', isPc98 = mode === 'pc98';
   $('mn88').classList.toggle('on', is88);
   $('mn80').classList.toggle('on', mode === 'n80');
   $('mnes').classList.toggle('on', isNes);
   $('mmd').classList.toggle('on', isMd);
   $('mx68').classList.toggle('on', isX68);
+  $('mpc98').classList.toggle('on', isPc98);
   // The consoles have no DIP switches; leave the fields where they are so
   // switching away and back does not lose the user's PC-88 setup.
-  if (!isNes && !isMd && !isX68) {
+  if (!isNes && !isMd && !isX68 && !isPc98) {
     $('dip1').value = is88 ? 'DB' : 'FF';
     $('dip2').value = is88 ? '79' : 'FF';
   }
@@ -622,6 +666,8 @@ function switchMode(mode) {
     $('dipnote').textContent = 'メガドライブのROM(.md/.bin/.gen/.smd)を選ぶと起動する';
   } else if (isX68 && !x68Ipl) {
     $('dipnote').textContent = 'X68000のIPL ROM(128KB)とCGROM(768KB)を選ぶと起動する';
+  } else if (isPc98 && !pc98Bios) {
+    $('dipnote').textContent = 'PC-9801のBIOS ROM(96KB)を選ぶと起動する（V30世代。RS系80386 ITFは未対応）';
   } else if (is88 && !has88Set()) {
     $('dipnote').textContent = t('PC-8801 BIOS一式(n88.rom+n88_0..3.rom+disk.rom)を選ぶとN88で起動する');
   } else {
@@ -636,6 +682,7 @@ $('mn88').onclick = () => switchMode('n88');
 $('mnes').onclick = () => switchMode('nes');
 $('mmd').onclick = () => switchMode('md');
 $('mx68').onclick = () => switchMode('x68');
+$('mpc98').onclick = () => switchMode('pc98');
 for (const id of ['dip1', 'dip2']) $(id).onchange = () => boot();
 
 // Disk pool + drive assignment. A .d88 file can hold SEVERAL disk images, and a
@@ -1755,6 +1802,10 @@ let mdCart = null, mdInfo = null, mdName = '';
 let x68Ipl = null, x68Cgrom = null, x68Sram = null, x68IplName = '';
 let x68Disks = [null, null], x68DiskName = '';
 let x68Joy = 0;   // live joystick mask (see X68_KEYMAP)
+// PC-98 firmware and media are immutable session inputs. Like the X68000 ROMs,
+// they remain outside snapshots so the rewind ring only carries mutable state.
+let pc98Bios = null, pc98Itf = null, pc98Font = null, pc98Sound = null, pc98BiosName = '';
+let pc98Disks = [null, null], pc98DiskName = '';
 let mdPad = 0;  // live 3-button pad mask (see MD_KEYMAP), ORed with the gamepad
 const dipOf = (id, dflt) => {
   const v = parseInt($(id).value.trim(), 16);
@@ -1833,6 +1884,13 @@ function boot() {
     machine = new X68000Machine({ ipl: x68Ipl, cgrom: x68Cgrom, sram: x68Sram });
     x68Disks.forEach((d, i) => { if (d) machine.insertDisk(i, d); });
     x68Joy = 0;
+    canvas.focus();
+    return;
+  }
+  if (bootMode === 'pc98') {
+    if (!pc98Bios) { guts.textContent = 'PC-9801のBIOS ROM(96KB)を選んでね'; return; }
+    machine = new Pc98Machine({ bios: pc98Bios, itf: pc98Itf, font: pc98Font, sound: pc98Sound });
+    pc98Disks.forEach((d, i) => { if (d) machine.insertDisk(i, d); });
     canvas.focus();
     return;
   }
@@ -2262,6 +2320,25 @@ function x68KeySet(e, down) {
   if (down) machine.keyDown(code); else machine.keyUp(code);
   return true;
 }
+const PC98_KEYMAP = {
+  ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT',
+  Enter: 'RETURN', Backspace: 'BS', Delete: 'DEL', Home: 'HOME', Tab: 'TAB',
+  ' ': 'SPACE', Escape: 'ESC', Shift: 'SHIFT', Control: 'CTRL',
+  '-': 'MINUS', '^': 'CARET', '\\': 'YEN', '@': 'AT', '[': 'LBRACKET',
+  ']': 'RBRACKET', ';': 'SEMICOLON', ':': 'COLON', ',': 'COMMA',
+  '.': 'PERIOD', '/': 'SLASH',
+};
+function pc98KeySet(e, down) {
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  let name = PC98_KEYMAP[key];
+  if (!name && /^[a-z]$/.test(key)) name = key.toUpperCase();
+  if (!name && /^[0-9]$/.test(key)) name = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE'][+key];
+  if (!name && /^F(?:10|[1-9])$/.test(key)) name = key;
+  const code = name === undefined ? undefined : PC98_KEY[name];
+  if (code === undefined) return false;
+  if (down) machine.keyDown(code); else machine.keyUp(code);
+  return true;
+}
 function mdKeySet(e, down) {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const name = MD_KEYMAP[key];
@@ -2294,9 +2371,10 @@ function matrixKey(e) {
 // lifts a pause/scrub — pressing a direction just resumes and plays.
 const isFormFocused = () => { const el = document.activeElement; return el && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName); };
 window.addEventListener('keydown', (e) => {
-  if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (bootMode === 'nes' || bootMode === 'md' || bootMode === 'x68') {
-    const hit = bootMode === 'x68' ? x68KeySet(e, true)
+  if (!machine || isFormFocused() || (e.ctrlKey && e.key !== 'Control') || e.metaKey || e.altKey) return;
+  if (bootMode === 'nes' || bootMode === 'md' || bootMode === 'x68' || bootMode === 'pc98') {
+    const hit = bootMode === 'pc98' ? pc98KeySet(e, true)
+      : bootMode === 'x68' ? x68KeySet(e, true)
       : bootMode === 'md' ? mdKeySet(e, true) : nesKeySet(e, true);
     if (!hit) return;
     ensureAudio(); // a keypress is a user gesture -> unblock autoplay
@@ -2314,10 +2392,11 @@ window.addEventListener('keydown', (e) => {
   if (k) { kbSet(cellsOf(k), true); e.preventDefault(); }
 });
 window.addEventListener('keyup', (e) => {
-  if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (!machine || isFormFocused() || (e.ctrlKey && e.key !== 'Control') || e.metaKey || e.altKey) return;
   if (bootMode === 'nes') { if (nesKeySet(e, false)) e.preventDefault(); return; }
   if (bootMode === 'md') { if (mdKeySet(e, false)) e.preventDefault(); return; }
   if (bootMode === 'x68') { if (x68KeySet(e, false)) e.preventDefault(); return; }
+  if (bootMode === 'pc98') { if (pc98KeySet(e, false)) e.preventDefault(); return; }
   const k = matrixKey(e);
   if (!e.shiftKey) kbSet([[8, 6]], false);
   const jb = joyBitFor(e);
@@ -2683,9 +2762,10 @@ function loop(now) {
     const nowP = performance.now();
     workMs = workMs * 0.9 + (nowP - t0) * 0.1;
     perfAccountRender(nowP - tEmu, nowP);
-    guts.textContent = `${MACHINE_LABEL[bootMode] || 'machine'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
+    guts.textContent = `${MACHINE_LABEL[bootMode] || 'machine'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${cpuPcText(machine)}h`
       + (crtc ? `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz`
         : bootMode === 'x68' ? `  ${machine.crtc.width}x${machine.crtc.height} ${machine.crtc.highReso ? '31kHz' : '15kHz'}${x68DiskName ? '  ' + x68DiskName : ''}`
+        : bootMode === 'pc98' ? `  640x400${pc98DiskName ? '  ' + pc98DiskName : ''}`
         : bootMode === 'md' && mdInfo ? `  ${mdName} · ${mdInfo.title || '(no title)'} · ${mdInfo.regions}`
         : (nesInfo ? `  ${nesName} · ${nesInfo.board}` : ''))
       + (machine.effectiveCpuPct !== undefined ? `  CPU ${machine.effectiveCpuPct}%` : '')

@@ -70,7 +70,7 @@ export class Pc98Video {
     this.tvram = new Uint8Array(TVRAM_SIZE);
     this.gvram = [];
     for (let i = 0; i < PLANES; i++) this.gvram.push(new Uint8Array(PLANE_SIZE));
-    // Video memory is half a megabyte of the snapshot if it travels
+    // Video memory is 128 KB of the snapshot if it travels
     // unconditionally, and a machine sitting at a text prompt has never
     // written a single graphics byte. The flag is monotonic, so there is no
     // ambiguity about when a snapshot has to carry the planes.
@@ -267,12 +267,31 @@ export class Pc98Video {
   // One full 640x400 picture. Graphics first, then text over the top wherever
   // the glyph has a dot. Both layers can be off independently, and a machine
   // that has programmed neither GDC produces a black screen rather than noise.
-  render() {
-    const out = this.frame;
-    out.fill(0);
-    if (this.gfxDisplay) this._renderGraphics(out);
-    if (this.textDisplay) this._renderText(out);
-    return { width: SCREEN_W, height: SCREEN_H, rgb: out };
+  render({ out: target = null, indexed = false, analog = true } = {}) {
+    const rgb = this.frame;
+    rgb.fill(0);
+    if (this.gfxDisplay) this._renderGraphics(rgb);
+    if (this.textDisplay) this._renderText(rgb);
+    const n = SCREEN_W * SCREEN_H;
+    if (indexed) {
+      const pixels = target && target.length === n ? target : new Uint8Array(n);
+      let drive = null;
+      if (analog) {
+        if (!this._driveBuf || this._driveBuf.length !== n * 3) this._driveBuf = new Float32Array(n * 3);
+        drive = this._driveBuf;
+      }
+      for (let i = 0; i < n; i++) {
+        const r = rgb[i * 3], g = rgb[i * 3 + 1], b = rgb[i * 3 + 2];
+        pixels[i] = (g >= 128 ? 4 : 0) | (r >= 128 ? 2 : 0) | (b >= 128 ? 1 : 0);
+        if (drive) { drive[i] = r / 255; drive[n + i] = g / 255; drive[2 * n + i] = b / 255; }
+      }
+      return { width: SCREEN_W, height: SCREEN_H, pixels, drive, schemaVersion: SCHEMA_VERSION };
+    }
+    if (target && target.length === n * 3) {
+      target.set(rgb);
+      return { width: SCREEN_W, height: SCREEN_H, rgb: target, schemaVersion: SCHEMA_VERSION };
+    }
+    return { width: SCREEN_W, height: SCREEN_H, rgb, schemaVersion: SCHEMA_VERSION };
   }
 
   _rgbOf(index) {

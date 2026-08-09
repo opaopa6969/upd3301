@@ -657,7 +657,7 @@ export class Pc98Machine {
   }
 
   // ---- video / audio ----------------------------------------------------------------------
-  render() { return this.video.render(); }
+  render(opts = {}) { return this.video.render(opts); }
 
   renderAudio(out, n = out.length) {
     this.opn.render(out, n);
