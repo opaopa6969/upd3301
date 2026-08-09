@@ -378,7 +378,19 @@ export class Pc8801Machine {
     if ((port === 0x47 || port === 0xad) && this.opna) return this.opna.readStatus(); // OPNA ext data (status fallback)
     if (port === 0x40) {
       // d5 = VRTC (high during retrace), d1 = CMT carrier etc.
-      const vrtc = this.tInFrame > this.frameT * 0.86;
+      //
+      // The retrace window is whatever the CRTC was programmed with, not a
+      // constant: a title sets displayed rows and the blanking count, and the
+      // fraction of the frame spent in retrace follows from those. This used to
+      // be a fixed 0.86, but the titles here program 20 displayed rows against
+      // 6 blanking rows — a display fraction of 0.769, so retrace really lasts
+      // 23% of the frame and not 14%. Code that times itself off VRTC (a wait
+      // for the edge, or a "draw during blanking" window) sees the wrong budget
+      // with a constant. M88 derives the same window from the CRTC
+      // (`crtc.cpp`: retrace runs `linetime * vretrace`).
+      const dispRows = this.crtc.rows, blankRows = this.crtc.vblankRows;
+      const dispFrac = dispRows > 0 ? dispRows / (dispRows + blankRows) : 0.86;
+      const vrtc = this.tInFrame > this.frameT * dispFrac;
       // b2 = CMT carrier-detect: high while the tape is parked on a MARK
       let cmt = 0;
       if (this.tape) { this.tape.pump(this._tapeNow()); cmt = this.tape.carrier() ? 0x04 : 0; }

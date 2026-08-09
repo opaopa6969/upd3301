@@ -413,3 +413,18 @@ require tracking `waittype`: VRTC, display status, and port 40h bit 4 for GVRAM 
 during display.)
 
 **Remaining candidates**: the DMA bus-steal estimate, the sub-CPU ratio, FDC transfer pacing.
+
+## Derive the VRTC window from the CRTC (2026-08-10)
+
+We generated retrace as `tInFrame > frameT * 0.86` — a fixed 14% of the frame. The titles in
+this set actually program **rows=20 / vblankRows=6**, a display fraction of 0.769, so retrace
+really occupies **23%**. M88 derives the same window from the CRTC (`crtc.cpp`: retrace runs
+for `linetime * vretrace`).
+
+`crtc.rows` and `crtc.vblankRows` were already available, so the threshold now comes from
+them. Code that times itself off VRTC — waiting for the edge, or drawing inside the blanking
+window — sees the wrong budget when the constant disagrees with what the title programmed.
+
+353 titles at 1500f: **exact 328 and tracking 338, unchanged, with no regressions**;
+FIREHAWK's screen fill improved from 69% to 79%. The headline numbers do not move, but this
+is strictly more faithful than a constant.
