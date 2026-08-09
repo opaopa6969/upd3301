@@ -101,6 +101,9 @@ export class Pc98Video {
     this.displayPage = 0;        // $A4: which 200-line page is shown
     this.drawPage = 0;           // $A6: which one the CPU sees
     this.borderColour = 0;       // $6C
+    // Six text fine-scroll registers share $70-$7B with the PIT on the other
+    // byte lane. Most screens leave them zero, but POST writes them as words.
+    this.textScroll = new Uint8Array(6);
 
     this.modeFF = new Uint8Array(8);
     this.modeFF[2] = 1;          // colour, not monochrome
@@ -257,6 +260,8 @@ export class Pc98Video {
 
   writeGrcgMode(v) { this.grcgMode = v & 0xff; this.grcgPtr = 0; }
   writeGrcgTile(v) { this.grcgTile[this.grcgPtr & 3] = v & 0xff; this.grcgPtr = (this.grcgPtr + 1) & 3; }
+  readTextScroll(reg) { return reg < 6 ? this.textScroll[reg] : 0xff; }
+  writeTextScroll(reg, v) { if (reg < 6) this.textScroll[reg] = v & 0xff; }
 
   // ---- rendering --------------------------------------------------------------------
   // One full 640x400 picture. Graphics first, then text over the top wherever
@@ -387,6 +392,7 @@ export class Pc98Video {
       gvram: this.gvramDirty ? this.gvram.map((p) => p.slice()) : null,
       gvramDirty: this.gvramDirty,
       palette: Array.from(this.palette), palIndex: this.palIndex, analog: this.analog,
+      textScroll: Array.from(this.textScroll),
       digital: this._digital ? Array.from(this._digital) : null,
       grcgMode: this.grcgMode, grcgTile: Array.from(this.grcgTile), grcgPtr: this.grcgPtr,
       displayPage: this.displayPage, drawPage: this.drawPage, borderColour: this.borderColour,
@@ -402,6 +408,7 @@ export class Pc98Video {
     else if (this.gvramDirty) for (const p of this.gvram) p.fill(0);
     this.gvramDirty = !!s.gvramDirty;
     this.palette.set(s.palette); this.palIndex = s.palIndex; this.analog = s.analog;
+    this.textScroll.set(s.textScroll ?? [0, 0, 0, 0, 0, 0]);
     if (s.digital) { this._digital = this._digital || new Uint8Array(4); this._digital.set(s.digital); }
     this.grcgMode = s.grcgMode; this.grcgTile.set(s.grcgTile); this.grcgPtr = s.grcgPtr;
     this.displayPage = s.displayPage; this.drawPage = s.drawPage; this.borderColour = s.borderColour;

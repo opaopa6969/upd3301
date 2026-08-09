@@ -146,7 +146,24 @@ export class Pc98Machine {
       new I8259({ name: 'slave' }),
     ];
     this.pit = new I8253({ onOut: (ch, level) => this._pitOut(ch, level) });
-    this.ppi = new I8255();
+    // The system and printer PPIs occupy opposite bytes of the same two
+    // sixteen-bit I/O blocks. Keeping both chips real is important because a
+    // word access must still reach each half independently.
+    this.ppi = new I8255({
+      inA: () => this.dipsw[0],
+      inB: () => this.dipsw[1],
+      inC: () => 0xa0,
+    });
+    this.printerPpi = new I8255({
+      inA: () => 0x00,
+      inB: () => this.printerStatus,
+      inC: () => 0x00,
+    });
+    this.mousePpi = new I8255({
+      inA: () => 0xff,
+      inB: () => 0x20,       // 640 KB conventional RAM, no high-resolution mode
+      inC: () => 0xff,
+    });
     this.fdd = new Pc98Fdd();
     // The PC-9801-26K's OPN. ym2203.js has no interrupt callback — it exposes
     // an `irq` line the board polls, which is what the real /IRQ pin is — so
@@ -179,6 +196,7 @@ export class Pc98Machine {
     this.frame = 0;
     this._acc = 0;
     this.ioLog = null;                 // set to an array to record every port
+    this.unknownIoLog = null;          // set to an array to record only open-bus accesses
     this.powerOn();
   }
 
@@ -250,15 +268,21 @@ export class Pc98Machine {
     this._keyDivider = 0;
     this.beep = false;
     this.shutdownFlag = 0;
-    // $42 bit 1 is the ITF's "resuming from protected mode" flag; it is set by
-    // a reset that came from a write to $F0, and clear on a cold start.
+    // This is the printer PPI port-B wiring. A later model also reports its
+    // CPU type and clock here; the V30 baseline leaves those model bits low.
     this.printerStatus = 0x00;
     this.memWindow = 0x40;
+    // $0439 is a readable latch. A floating-high value sends later ITFs down
+    // their SYSTEM SHUTDOWN path before ordinary device initialization.
+    this.dmaAccessControl = 0x00;
+    this.dmaAutoIncrement = new Uint8Array(4);
 
     for (const p of this.pic) p.reset();
     this.pit.reset();
     this.dma.reset();
     this.ppi.reset();
+    this.printerPpi.reset();
+    this.mousePpi.reset();
     this.fdd.reset();
     // ym2203.js has no reset(); a fresh chip is what the constructor built, and
     // the registers the ROM cares about are all written before a note sounds.
@@ -316,22 +340,18 @@ export class Pc98Machine {
       case 0x08: return this.pic[1].read(true);
       case 0x0a: return this.pic[1].read(false);
 
-      case 0x31: return this.dipsw[0];
-      case 0x33: return this.dipsw[1];
+      case 0x31: return this.ppi.read(0);
+      case 0x33: return this.ppi.read(1);
       case 0x35: return this.ppi.read(2);
-      case 0x37: return 0xff;
+      case 0x37: return this.ppi.read(3);
 
       case 0x41: return this._keyRead();
       case 0x43: return (this.keyFull ? 0x02 : 0x00) | 0x05;   // RxRDY | TxRDY | TxE
 
-      // The printer's 8255 at $40-$46. Nothing is plugged in, and the ITF
-      // reads $42 before it decides whether to reset the CPU and start again:
-      // bit 1 set there means "come back from protected mode", which on a
-      // machine that has never been in protected mode is a loop.
-      case 0x40: return 0x00;
-      case 0x42: return this.printerStatus;
-      case 0x44: return 0x00;
-      case 0x46: return 0x00;
+      case 0x40: return this.printerPpi.read(0);
+      case 0x42: return this.printerPpi.read(1);
+      case 0x44: return this.printerPpi.read(2);
+      case 0x46: return this.printerPpi.read(3);
 
       case 0x60: return this.gdcText.readStatus();
       case 0x62: return this.gdcText.readFifo();
@@ -341,6 +361,8 @@ export class Pc98Machine {
       case 0x73: return this.pit.read(1);
       case 0x75: return this.pit.read(2);
       case 0x77: return this.pit.read(3);
+      case 0x70: case 0x72: case 0x74: case 0x76: case 0x78: case 0x7a:
+        return this.video.readTextScroll((p - 0x70) >> 1);
 
       case 0x90: case 0x92: case 0x94: case 0xbe: return this.fdd.read(p);
       case 0xc8: return this.fdd.read(0x90);
@@ -356,6 +378,12 @@ export class Pc98Machine {
       case 0x188: return this.opn.readStatus();
       case 0x18a: return this.opn.reg[this.opn.addr];
 
+      case 0x7fd9: return this.mousePpi.read(0);
+      case 0x7fdb: return this.mousePpi.read(1);
+      case 0x7fdd: return this.mousePpi.read(2);
+      case 0x7fdf: return this.mousePpi.read(3);
+
+      case 0x0439: return this.dmaAccessControl;
       case 0x043b: return this.itfEnabled ? 0x00 : 0x01;
       case 0x043d: return 0xff;
       case 0x5f: return 0xff;                       // the standard wait port
@@ -364,6 +392,7 @@ export class Pc98Machine {
     // DMA: odd addresses $01-$1F, page registers $21-$27.
     if (p >= 0x01 && p <= 0x1f && (p & 1)) return this.dma.read((p - 1) >> 1);
     if (p >= 0x21 && p <= 0x27 && (p & 1)) return this.dma.readPage((p - 0x21) >> 1);
+    if (this.unknownIoLog) this.unknownIoLog.push({ r: 1, p, v: 0xff, pc: this.cpu.ip, cs: this.cpu.s[1] });
     return 0xff;
   }
 
@@ -377,6 +406,8 @@ export class Pc98Machine {
       case 0x08: this.pic[1].write(true, v); return;
       case 0x0a: this.pic[1].write(false, v); return;
 
+      case 0x31: this.ppi.write(0, v); return;
+      case 0x33: this.ppi.write(1, v); return;
       case 0x35: this.ppi.write(2, v); return;
       case 0x37:
         // The system 8255's control port is used almost entirely for its
@@ -384,6 +415,11 @@ export class Pc98Machine {
         this.ppi.write(3, v);
         if (!(v & 0x80) && ((v >> 1) & 7) === 3) this.beep = !(v & 1);
         return;
+
+      case 0x40: this.printerPpi.write(0, v); return;
+      case 0x42: this.printerPpi.write(1, v); return;
+      case 0x44: this.printerPpi.write(2, v); return;
+      case 0x46: this.printerPpi.write(3, v); return;
 
       case 0x41: return;                            // keyboard data out: no LEDs here
       case 0x43: return;                            // 8251 command
@@ -403,6 +439,8 @@ export class Pc98Machine {
       case 0x73: this.pit.write(1, v); return;
       case 0x75: this.pit.write(2, v); return;
       case 0x77: this.pit.write(3, v); return;
+      case 0x70: case 0x72: case 0x74: case 0x76: case 0x78: case 0x7a:
+        this.video.writeTextScroll((p - 0x70) >> 1, v); return;
 
       case 0x7c: this.video.writeGrcgMode(v); return;
       case 0x7e: this.video.writeGrcgTile(v); return;
@@ -424,19 +462,30 @@ export class Pc98Machine {
       case 0x18a: this.opn.writeData(v); return;
       case 0x18c: case 0x18e: return;               // the -86's second bank
 
+      case 0x7fd9: this.mousePpi.write(0, v); return;
+      case 0x7fdb: this.mousePpi.write(1, v); return;
+      case 0x7fdd: this.mousePpi.write(2, v); return;
+      case 0x7fdf: this.mousePpi.write(3, v); return;
+
       case 0x043d:
         // The ITF's exit door. $10 puts the ITF back over the BIOS, anything
         // else takes it away; the ROM writes $12 as the last thing it does.
         if (v === 0x10) this.itfEnabled = !!this.itf;
         else if (v === 0x12 || v === 0x00 || v === 0x02) this.itfEnabled = false;
         return;
-      case 0x0439: case 0x043b: return;
+      case 0x0439: this.dmaAccessControl = v; return;
+      case 0x043b: return;
       case 0x043f: this.memWindow = v; return;   // memory window bank select
       case 0xf0: case 0xf2: case 0xf4: case 0xf6: return;   // CPU mode / A20
       default: break;
     }
     if (p >= 0x01 && p <= 0x1f && (p & 1)) { this.dma.write((p - 1) >> 1, v); return; }
     if (p >= 0x21 && p <= 0x27 && (p & 1)) { this.dma.writePage((p - 0x21) >> 1, v); return; }
+    if (p === 0x29) {
+      this.dmaAutoIncrement[v & 3] = (v >> 2) & 3;
+      return;
+    }
+    if (this.unknownIoLog) this.unknownIoLog.push({ r: 0, p, v, pc: this.cpu.ip, cs: this.cpu.s[1] });
   }
 
   // The 9801's data bus is sixteen bits wide and most of its registers are
@@ -673,10 +722,16 @@ export class Pc98Machine {
       fdd: this.fdd.getState(),
       opn: this._opnState(),
       ppi: { control: this.ppi.control, outA: this.ppi.outA, outB: this.ppi.outB, outC: this.ppi.outC },
+      printerPpi: { control: this.printerPpi.control, outA: this.printerPpi.outA,
+        outB: this.printerPpi.outB, outC: this.printerPpi.outC },
+      mousePpi: { control: this.mousePpi.control, outA: this.mousePpi.outA,
+        outB: this.mousePpi.outB, outC: this.mousePpi.outC },
       itfEnabled: this.itfEnabled,
       keyQueue: [...this.keyQueue], keyData: this.keyData, keyFull: this.keyFull,
       keyDivider: this._keyDivider,
       beep: this.beep, shutdownFlag: this.shutdownFlag,
+      dmaAccessControl: this.dmaAccessControl, memWindow: this.memWindow,
+      dmaAutoIncrement: Array.from(this.dmaAutoIncrement),
       line: this.line, frame: this.frame, acc: this._acc,
       cycleDebt: this._cycleDebt, pitFrac: this._pitFrac,
       fdcByteCredit: this._fdcByteCredit, irqLine: this._irqLine,
@@ -695,10 +750,15 @@ export class Pc98Machine {
     this.fdd.setState(s.fdd);
     this._opnRestore(s.opn);
     Object.assign(this.ppi, s.ppi);
+    if (s.printerPpi) Object.assign(this.printerPpi, s.printerPpi);
+    if (s.mousePpi) Object.assign(this.mousePpi, s.mousePpi);
     this.itfEnabled = s.itfEnabled;
     this.keyQueue = [...s.keyQueue]; this.keyData = s.keyData; this.keyFull = s.keyFull;
     this._keyDivider = s.keyDivider;
     this.beep = s.beep; this.shutdownFlag = s.shutdownFlag;
+    this.dmaAccessControl = s.dmaAccessControl ?? 0;
+    this.memWindow = s.memWindow ?? 0x40;
+    this.dmaAutoIncrement.set(s.dmaAutoIncrement ?? [0, 0, 0, 0]);
     this.line = s.line; this.frame = s.frame; this._acc = s.acc ?? 0;
     this._cycleDebt = s.cycleDebt; this._pitFrac = s.pitFrac;
     this._fdcByteCredit = s.fdcByteCredit;

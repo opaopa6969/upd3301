@@ -1265,6 +1265,22 @@ export class I8086 {
         if (idx < lo || idx > hi) this.interrupt(VEC.BOUND);
         return;
       }
+      case 0x66: case 0x67: {                         // FPO2
+        // These bytes became the operand/address-size prefixes on the 386,
+        // but on a V30 they are escapes for the never-shipped µPD72291. PC-98
+        // firmware deliberately uses the collision to distinguish the CPUs.
+        // A memory form has no CPU-visible effect; a register form takes vector
+        // 7 and reports the instruction's first byte as the return address.
+        this.modrm();
+        if (this.eaIsReg) {
+          this.ip = this._instStart;
+          this.interrupt(7);
+          this.cycles += 50;
+        } else {
+          this.cycles += 11 + this.eaCycles;
+        }
+        return;
+      }
       case 0x68: this.push(this.fetch16()); this.cycles += 10; return;
       case 0x69: {                                    // IMUL r16, r/m16, imm16
         this.modrm();

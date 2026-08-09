@@ -11,7 +11,7 @@
 //   node pc98tools/boot.mjs --bios BIOS.ROM [--itf ITF.ROM] [--font FONT.ROM]
 //                           [--fd0 disk.d88] [--fd1 disk2.d88]
 //                           [--frames 600] [--thumb] [--text] [--trace]
-//                           [--io] [--ppm out.ppm]
+//                           [--io] [--io-unknown] [--ppm out.ppm]
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { Pc98Machine } from '../machinepc98.js';
@@ -118,6 +118,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     m.insertDisk(unit, d);
   }
   if (o.io) m.ioLog = [];
+  if (o.io || o['io-unknown']) m.unknownIoLog = [];
 
   const frames = parseInt(o.frames, 10) || 600;
   const t0 = Date.now();
@@ -149,6 +150,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log('\n--- I/O ports touched ---');
     console.log([...seen.entries()].sort((a, b) => b[1] - a[1])
       .map(([k, n]) => `${k} x${n}`).join('\n'));
+  }
+  if ((o.io || o['io-unknown']) && m.unknownIoLog) {
+    const seen = new Map();
+    for (const e of m.unknownIoLog) {
+      const k = `${e.r ? 'IN ' : 'OUT'} ${e.p.toString(16).padStart(2, '0')}`;
+      const site = `${e.cs.toString(16).padStart(4, '0')}:${e.pc.toString(16).padStart(4, '0')}`;
+      const old = seen.get(k);
+      if (old) old.count++;
+      else seen.set(k, { count: 1, site, value: e.v });
+    }
+    console.log('\n--- unmapped I/O ports ---');
+    console.log([...seen.entries()].sort((a, b) => b[1].count - a[1].count)
+      .map(([k, e]) => `${k} x${e.count} first=${e.site} value=${e.value.toString(16).padStart(2, '0')}`)
+      .join('\n') || '(none)');
   }
   if (o.ppm && o.ppm !== true) {
     const hdr = Buffer.from(`P6\n${frame.width} ${frame.height}\n255\n`, 'ascii');
