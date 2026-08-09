@@ -1,0 +1,33 @@
+# Run the whole test suite on every push and PR.
+#
+# This exists because of a specific failure: during the autonomous run of
+# 2026-08-08..10 every iteration checked regressions with `node test.mjs` (63
+# CRTC tests) instead of `node --test` (313), and a broken determinism contract
+# reached main and stayed there for two days. test-snapshot.mjs was failing the
+# whole time — the detector existed, it just was not in the net.
+#
+# Node is pinned because the repo uses syntax the system node on the author's
+# machine (v12) cannot parse; a version that silently differs would make CI
+# results meaningless.
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      # No install step: the emulator and its tools are dependency-free by
+      # contract, so `npm ci` would have nothing to do and package-lock.json
+      # deliberately does not exist.
+      - name: node --test
+        # Tests that need a ROM skip themselves; everything else must pass.
+        # tools/type-test.mjs is excluded because it imports a ROM at module
+        # load and therefore cannot skip — see docs/testing.md.
+        run: node --test --test-reporter=spec
