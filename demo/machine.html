@@ -402,7 +402,7 @@ $('fnes').onchange = async (e) => {
 $('fpce').onchange = async (e) => {
   const f = e.target.files[0]; if (!f) return;
   const bytes = new Uint8Array(await f.arrayBuffer());
-  const parsed = tryParsePce(bytes);
+  const parsed = tryParsePce(bytes, { name: f.name });
   if (!parsed.ok) { guts.textContent = `${f.name}: ${parsed.error}`; return; }
   pceCart = parsed.cart;
   pceInfo = summarizePce(pceCart);

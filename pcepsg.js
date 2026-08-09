@@ -253,7 +253,12 @@ export class PcePsg {
     const v = ((this._accL + this._accR) / 2 / n) / (16 * CHANNELS);
     this._accL = this._accR = 0; this._accN = 0;
     const next = (this.ringWrite + 1) & (this.ring.length - 1);
-    if (next !== this.ringRead) { this.ring[this.ringWrite] = v; this.ringWrite = next; }
+    // When nobody drains audio (headless runs and fast-forward), retain the
+    // newest quarter-second rather than the oldest one. Starting audio later
+    // should not play sound from seconds ago.
+    if (next === this.ringRead) this.ringRead = (this.ringRead + 1) & (this.ring.length - 1);
+    this.ring[this.ringWrite] = v;
+    this.ringWrite = next;
   }
 
   // Drain into a mono Float32Array; identical signature to
@@ -301,6 +306,9 @@ export class PcePsg {
       c.counter = d.counter; c.out = d.out;
       c.noiseCtrl = d.noiseCtrl; c.noiseCounter = d.noiseCounter; c.lfsr = d.lfsr; c.noiseOut = d.noiseOut;
     }
+    // Samples already queued belong to the timeline that was rewound away.
+    // The resampler phase above is state; its produced samples are output.
+    this.ringRead = this.ringWrite = 0;
     return this;
   }
 }

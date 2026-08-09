@@ -158,6 +158,13 @@ test('parsePce rejects what it cannot run, tryParsePce reports it', () => {
   assert.equal(r.code, 'too-small');
 });
 
+test('SuperGrafx is an explicit or filename hint, never a raw-byte guess', () => {
+  const rom = buildPce({ size: 0x8000, code: Array(8).fill([0x8d, 0x10, 0x00]).flat() });
+  assert.equal(parsePce(rom).superGrafx, false, 'opcode-like data is not metadata');
+  assert.equal(parsePce(rom, { name: 'Aldynes (SGX) (J).pce' }).superGrafx, true);
+  assert.equal(parsePce(rom, { superGrafx: true }).superGrafx, true);
+});
+
 test('the bank map folds by 256KB, not to the start of the cartridge', () => {
   const m512 = buildBankMap(0x80000);
   assert.equal(m512[0x00], 0x00000);
@@ -350,6 +357,10 @@ test('the PSG state round-trips and the sample stream repeats', () => {
   const b = mk(); b.setState(s);
   const outB = new Float32Array(200); b.run(6 * 20000); b.render(outB, 200);
   assert.deepEqual(Array.from(outB), Array.from(outA));
+  a.run(6 * 10000);
+  assert.notEqual(a.ringRead, a.ringWrite, 'there is queued future audio');
+  a.setState(s);
+  assert.equal(a.ringRead, a.ringWrite, 'restore discards samples from the abandoned timeline');
 });
 
 // ---- the machine contract -------------------------------------------------

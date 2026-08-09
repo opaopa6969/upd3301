@@ -30,14 +30,15 @@
 // is worth opening.
 //
 // Usage:
-//   node pcetools/sweep.mjs <dir> [--frames N] [--jobs N] [--filter s]
+//   node pcetools/sweep.mjs <dir-or-zip> [--frames N] [--jobs N] [--filter s]
 //                                 [--press run] [--json] [--pad-flip]
 //                                 [--bank-rule hudson|mirror|modulo]
 
 import { readdirSync, statSync, readFileSync } from 'node:fs';
-import { join, relative, extname } from 'node:path';
+import { join, relative, extname, basename } from 'node:path';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { unzip } from '../zip.js';
 import { runRom } from './pcerun.mjs';
 import { tryParsePce, buildBankMap } from '../pcerom.js';
 
@@ -62,17 +63,17 @@ export function classify(r) {
   return 'ok';
 }
 
-function runOne(path, rel, opt) {
+function runOne(path, rel, opt, suppliedBytes = null) {
   const t0 = Date.now();
   try {
-    const bytes = new Uint8Array(readFileSync(path));
+    const bytes = suppliedBytes || new Uint8Array(readFileSync(path));
     // The bank-rule switch exists because the two odd cartridge sizes (384KB
     // and 768KB) are not documented anywhere this was written from, and the
     // library itself is the only way to find out which rule is right. Sweeping
     // under both and counting is the measurement; see docs/pce-design.md §3.
     let cart = null;
     if (opt.bankRule) {
-      const parsed = tryParsePce(bytes);
+      const parsed = tryParsePce(bytes, { name: rel });
       if (parsed.ok) {
         cart = parsed.cart;
         cart.banks = buildBankMap(cart.rom.length, cart.mapper, opt.bankRule);
@@ -117,7 +118,7 @@ function report(rows, frames, asJson) {
   for (const r of rows) buckets[r.verdict] = (buckets[r.verdict] || 0) + 1;
   if (asJson) { console.log(JSON.stringify({ frames, buckets, rows }, null, 1)); return; }
   for (const r of rows) {
-    console.log(`${r.verdict.padEnd(7)} ${r.rom.slice(0, 48).padEnd(48)} col=${String(r.colours).padStart(3)} top=${String(r.topPct).padStart(5)}% anim=${String(r.animated).padStart(4)} vram=${String(r.vram).padStart(4)} pcs=${String(r.pcs).padStart(5)} ${String(r.w)}x${String(r.h)} ${r.bg ? 'B' : '-'}${r.spr ? 'S' : '-'} ${(r.size / 1024) | 0}K${r.rev ? ' rev' : ''}${r.sgx ? ' SGX' : ''} ${r.note}`);
+    console.log(`${r.verdict.padEnd(7)} ${r.rom.slice(0, 48).padEnd(48)} col=${String(r.colours).padStart(3)} top=${String(r.topPct).padStart(5)}% anim=${String(r.animated).padStart(4)} vram=${String(r.vram).padStart(4)} pcs=${String(r.pcs).padStart(5)} ${String(r.w)}x${String(r.h)} ${r.bg ? 'B' : '-'}${r.spr ? 'S' : '-'} ${(r.size / 1024) | 0}K${r.hdr ? ' hdr' : ''}${r.rev ? ' rev' : ''}${r.sgx ? ' SGX' : ''} ${r.note}`);
   }
   console.log('---');
   console.log(Object.entries(buckets).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join('  ') + `  total=${rows.length}`);
@@ -127,7 +128,7 @@ async function main(argv) {
   const args = argv.slice(2);
   if (args.includes('--worker')) return worker();
   const dir = args[0];
-  if (!dir) { console.error('usage: node pcetools/sweep.mjs <dir> [--frames N] [--jobs N]'); process.exit(2); }
+  if (!dir) { console.error('usage: node pcetools/sweep.mjs <dir-or-zip> [--frames N] [--jobs N]'); process.exit(2); }
   const get = (n, d) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : d; };
   const opt = {
     frames: parseInt(get('--frames', '1800'), 10),
@@ -135,16 +136,38 @@ async function main(argv) {
     padSelDirections: !args.includes('--pad-flip'),
     bankRule: get('--bank-rule', null),
   };
-  const jobs = parseInt(get('--jobs', '1'), 10);
+  let jobs = parseInt(get('--jobs', '1'), 10);
   const filter = get('--filter', null);
   const asJson = args.includes('--json');
 
-  const files = [...walk(dir)].filter((p) => !filter || p.includes(filter));
+  let files;
+  const inputStat = statSync(dir);
+  if (inputStat.isFile()) {
+    if (extname(dir).toLowerCase() === '.zip') {
+      // zip.js intentionally returns member bytes in memory. Do not copy a
+      // whole ROM collection through child-process IPC as well; archive input
+      // therefore stays single-process while extracted directories can fan out.
+      const entries = await unzip(new Uint8Array(readFileSync(dir)));
+      files = entries.filter((e) => EXTS.has(extname(e.name).toLowerCase()))
+        .map((e) => ({ path: null, rel: e.name, bytes: e.bytes }));
+      if (jobs > 1) {
+        process.stderr.write('# archive input uses one job to avoid duplicating every member over IPC\n');
+        jobs = 1;
+      }
+    } else if (EXTS.has(extname(dir).toLowerCase())) {
+      files = [{ path: dir, rel: basename(dir), bytes: null }];
+    } else {
+      throw new Error(`unsupported input: ${dir}`);
+    }
+  } else {
+    files = [...walk(dir)].map((path) => ({ path, rel: relative(dir, path), bytes: null }));
+  }
+  files = files.filter((f) => !filter || f.rel.includes(filter));
   process.stderr.write(`# ${files.length} HuCards, ${opt.frames} frames each, ${jobs} job(s)\n`);
 
   if (jobs <= 1) {
-    const rows = files.map((p, i) => {
-      const row = runOne(p, relative(dir, p), opt);
+    const rows = files.map((f, i) => {
+      const row = runOne(f.path, f.rel, opt, f.bytes);
       process.stderr.write(`  ..${i + 1}/${files.length} ${row.verdict}\n`);
       return row;
     });
@@ -175,7 +198,7 @@ async function main(argv) {
 
 function worker() {
   process.on('message', ({ files, dir, opt }) => {
-    for (const p of files) process.send({ row: runOne(p, relative(dir, p), opt) });
+    for (const f of files) process.send({ row: runOne(f.path, f.rel, opt) });
     process.exit(0);
   });
 }

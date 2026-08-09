@@ -46,7 +46,7 @@ export function runRom(bytes, {
   padSelDirections = true, cart = null,
 } = {}) {
   if (!cart) {
-    const parsed = tryParsePce(bytes);
+    const parsed = tryParsePce(bytes, { name });
     if (!parsed.ok) return { name, ok: false, error: parsed.error, code: parsed.code };
     cart = parsed.cart;
   }

@@ -197,11 +197,13 @@ export function parsePce(bytes, opts = {}) {
   // bank registers themselves are write-only so there is nothing else to see.
   const mapper = rom.length === 0x280000 ? MAPPER.SF2 : MAPPER.NONE;
 
-  // 4. SuperGrafx. Its extra hardware (a second VDC and the VPC that mixes the
-  // two) is not implemented, and a SuperGrafx-only title run on a plain PC
-  // Engine draws half a picture rather than failing loudly — so say so here,
-  // where it can be reported, instead of leaving it to be discovered on screen.
-  const superGrafx = looksSuperGrafx(rom);
+  // 4. SuperGrafx. A headerless HuCard has no machine flag, and scanning raw
+  // bytes for stores to the VPC is not sound: operands and graphics routinely
+  // contain the same three-byte pattern. Accept an explicit hint or the common
+  // filename tag instead. This can miss a renamed dump, but it never invents a
+  // hardware requirement from arbitrary cartridge data.
+  const superGrafx = opts.superGrafx === true
+    || /(?:^|[^a-z0-9])(?:sgx|supergrafx)(?:[^a-z0-9]|$)/i.test(opts.name || '');
   if (superGrafx) warnings.push('SuperGrafx title: the second VDC and the VPC are not implemented');
 
   return {
@@ -216,23 +218,6 @@ export function parsePce(bytes, opts = {}) {
     resetVector: rom[0x1ffe] | (rom[0x1fff] << 8),
     warnings,
   };
-}
-
-// SuperGrafx software talks to the second VDC through bank $FF pages $0010-$001F
-// (the VPC) — addresses a plain PC Engine game never touches. Scanning for the
-// store instructions that reach them is a heuristic, but it is the same one the
-// name suffix "(SGX)" encodes, and it works on files whose names were lost.
-function looksSuperGrafx(rom) {
-  // ST0/ST1/ST2 cannot reach the VPC, so SGX code has to use ordinary stores to
-  // $0008-$001F within the hardware bank. Look for the distinctive
-  // "STA $1E00-ish" pattern by counting absolute stores into the VPC window.
-  let hits = 0;
-  for (let i = 0; i + 2 < rom.length; i++) {
-    if (rom[i] !== 0x8d && rom[i] !== 0x9d) continue;   // STA abs / STA abs,X
-    const a = rom[i + 1] | (rom[i + 2] << 8);
-    if (a >= 0x0008 && a <= 0x001f) { if (++hits >= 8) return true; }
-  }
-  return false;
 }
 
 // Host entry point: never throws. A file picker gets junk as a matter of
