@@ -38,7 +38,7 @@
 // Contract: pure, dependency-free, deterministic, plain-data state. No
 // Math.random. getState()/setState() are exact inverses, and ROM is never
 // copied into a snapshot — the machine holds the parsed cartridge and hands it
-// back on restore. See docs/gb-design.md §6.
+// back on restore. See docs/gb-design.md §3.
 
 export const SCHEMA_VERSION = 1;
 

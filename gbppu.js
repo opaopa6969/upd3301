@@ -73,9 +73,17 @@ export class GbPpu {
     this.vbk = 0;
     this.oam = new Uint8Array(160);
 
-    // Output. Sixteen bits per pixel: a shade index 0-3 on a DMG, a 15-bit
-    // BGR555 colour on a Color. Output, not state — see the snapshot note in
-    // docs/gb-design.md §9.
+    // The picture. Sixteen bits per pixel: a shade index 0-3 on a DMG, a
+    // 15-bit BGR555 colour on a Color.
+    //
+    // It IS state, and the reason is the host. A finished frame holds 144
+    // lines that were each painted with the registers as they stood when the
+    // raster crossed them — it is a record of the frame that just happened,
+    // not something that can be recomputed from the registers as they stand
+    // now. So a host that restores a snapshot and draws (which is exactly what
+    // demo/machine.html does while the jog-shuttle is held) would otherwise
+    // show whatever frame the emulator last ran, not the frame it rewound to.
+    // See docs/gb-design.md §9 for what it costs.
     this.frameBuf = new Uint16Array(SCREEN_W * SCREEN_H);
 
     // Colour RAM, 8 palettes of 4 colours for each of background and objects.
@@ -584,8 +592,34 @@ export class GbPpu {
   }
 
   // ---- time travel ---------------------------------------------------------
+  // A DMG pixel is two bits, so the picture packs four to a byte and costs
+  // 5,760 of them — a third of the rest of the snapshot put together. A Color
+  // pixel is a real 15-bit colour that no palette lookup can reconstruct after
+  // the fact (the game may have rewritten the palette on a later line), so
+  // there it travels raw at 46,080 bytes. Both numbers are in §9.
+  _packFrame() {
+    const buf = this.frameBuf;
+    if (this.cgb) return buf.slice();
+    const out = new Uint8Array(buf.length >> 2);
+    for (let i = 0, o = 0; i < buf.length; i += 4, o++) {
+      out[o] = (buf[i] & 3) | ((buf[i + 1] & 3) << 2) | ((buf[i + 2] & 3) << 4) | ((buf[i + 3] & 3) << 6);
+    }
+    return out;
+  }
+
+  _unpackFrame(p) {
+    const buf = this.frameBuf;
+    if (!p) return;
+    if (this.cgb) { buf.set(p); return; }
+    for (let o = 0; o < p.length; o++) {
+      const b = p[o], i = o << 2;
+      buf[i] = b & 3; buf[i + 1] = (b >> 2) & 3; buf[i + 2] = (b >> 4) & 3; buf[i + 3] = (b >> 6) & 3;
+    }
+  }
+
   getState() {
     return {
+      frameBuf: this._packFrame(),
       vram: this.vram.slice(),
       oam: this.oam.slice(),
       vbk: this.vbk,
@@ -608,6 +642,7 @@ export class GbPpu {
   }
 
   setState(s) {
+    this._unpackFrame(s.frameBuf);
     this.vram.set(s.vram);
     this.oam.set(s.oam);
     this.vbk = s.vbk;

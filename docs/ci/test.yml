@@ -1,0 +1,68 @@
+# Run the whole test suite on every push and PR, and then actually EXECUTE the
+# bundled Game Boy test ROMs.
+#
+# The first job exists because of a specific failure: during the autonomous run
+# of 2026-08-08..10 every iteration checked regressions with `node test.mjs`
+# (63 CRTC tests) instead of `node --test` (490+), and a broken determinism
+# contract reached main and stayed there for two days. test-snapshot.mjs was
+# failing the whole time — the detector existed, it just was not in the net.
+#
+# The second job exists because of issue #42. Every other machine here needs a
+# BIOS nobody may redistribute, so its tests skip in CI and "verified" means
+# "verified once, on the author's disk". The Game Boy needs no BIOS and its
+# test ROMs are MIT, so gbroms/ is committed and CI runs 103 mooneye ROMs and
+# dmg-acid2 for real, on a clean checkout, with nothing downloaded.
+#
+# Node is pinned because the repo uses syntax the system node on the author's
+# machine (v12) cannot parse; a version that silently differs would make CI
+# results meaningless.
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      # No install step: the emulator and its tools are dependency-free by
+      # contract, so `npm ci` would have nothing to do and package-lock.json
+      # deliberately does not exist.
+      - name: node --test
+        # Tests that need a ROM skip themselves; everything else must pass.
+        # The globs are exactly what `node --test` collects on its own MINUS
+        # tools/type-test.mjs, which reads roms/N80_2.ROM at module load and so
+        # cannot skip itself on this branch. (The guard for it exists on
+        # m88-parity-autorun, commit b5b5d72; when that merges, the globs can
+        # go and this can be a bare `node --test`.)
+        run: node --test --test-reporter=spec 'test-*.mjs' '*.test.mjs' 'test.mjs'
+
+  gameboy-roms:
+    # Split out so the log shows the score on its own, and so a Game Boy
+    # regression is distinguishable at a glance from a PC-8801 one.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: the Game Boy corpus, executed
+        # Prints "mooneye acceptance 59/75", "mooneye MBC 27/28",
+        # "dmg-acid2 exact match" and the name of every hole. Exits 1 if any of
+        # those numbers goes down. Needs no network and no ROM from outside the
+        # repository — see gbroms/README.md for the licence of each file.
+        run: node gbtools/verify.mjs
+      - name: blargg (not bundled — fetched, and never fatal)
+        # blargg's ROMs carry no licence, so they are not in the repository.
+        # Fetching them is best-effort: if the mirror is down or the network is
+        # blocked, the step reports it and the build stays green, because the
+        # bundled corpus above is what CI is allowed to depend on.
+        continue-on-error: true
+        run: |
+          node gbtools/fetch-blargg.mjs
+          node gbtools/verify.mjs --blargg

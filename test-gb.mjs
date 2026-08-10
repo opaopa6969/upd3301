@@ -17,7 +17,7 @@ import { readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { SM83, FZ, FN, FH, FC } from './sm83.js';
-import { GbPpu, SCREEN_W, SCREEN_H, MODE } from './gbppu.js';
+import { GbPpu, SCREEN_W, SCREEN_H, MODE, DOTS_PER_LINE, LINES_PER_FRAME } from './gbppu.js';
 import { GbApu } from './gbapu.js';
 import {
   parseGbRom, tryParseGbRom, buildGbRom, createMbc, tryCreateMbc, MBCS, summarizeGbRom,
@@ -315,8 +315,15 @@ test('gbmbc: an unimplemented board is an answer too', () => {
 });
 
 test('gbmbc: MBC1 has the bank-0 hole and the mode flag', () => {
-  const rom = buildGbRom({ type: 0x03, size: 512 * 1024, ramSize: 32768 });
-  for (let b = 0; b < 32; b++) rom[b * 0x4000] = b;      // stamp each bank
+  // 1MB, i.e. 64 banks, because that is the smallest cartridge on which the
+  // upper two bits mean anything: the board emits seven bank bits but the ROM
+  // chip only has as many address lines as it needs, so on a 512KB (32-bank)
+  // cartridge bank $25 selects bank $05 and the assertions below could not
+  // tell a working mode flag from a broken one. (The test was written against
+  // 512KB and failed for that reason, not because the board was wrong —
+  // mooneye's whole mbc1/ group passes.)
+  const rom = buildGbRom({ type: 0x03, size: 1024 * 1024, ramSize: 32768 });
+  for (let b = 0; b < 64; b++) rom[b * 0x4000] = b;      // stamp each bank
   const m = createMbc(parseGbRom(rom));
   m.regWrite(0x2000, 0x00);
   assert.equal(m.read(0x4000), 1, 'bank $00 reads as $01');
@@ -428,11 +435,38 @@ test('gbppu: a frame is 154 lines of 456 dots and vblank is an edge', () => {
 });
 
 test('gbppu: the STAT interrupt is the rising edge of an OR, not four sources', () => {
-  const p = new GbPpu({});
-  p.writeReg(0xff41, 0x08 | 0x20);            // HBlank + OAM
-  let n = 0;
-  for (let i = 0; i < 456 / 4; i++) { p.tick(4); if (p.statReq) { n++; p.statReq = false; } }
-  assert.equal(n, 2, 'one per source per line, not one per dot');
+  // Count the interrupts a whole frame produces with each source enabled on
+  // its own, and then with two of them enabled together. If the four
+  // conditions were four sources the two-source count would be the SUM; being
+  // one wire whose rising edge fires, it is barely more than either alone —
+  // the OAM slot and the HBlank of the same line are separated by mode 3, but
+  // the HBlank of one line runs straight into the OAM slot of the next with no
+  // gap for the wire to fall through. That is the mechanism behind mooneye's
+  // stat_irq_blocking, and it is why a game can get FEWER interrupts by
+  // enabling more of them.
+  //
+  // (The original form of this test asserted two interrupts in one line with
+  // both sources on, which is the four-sources answer this file exists to
+  // deny; the one-wire answer is one per line.)
+  const countFrame = (mask) => {
+    const p = new GbPpu({});
+    p.writeReg(0xff41, mask);
+    p.statReq = false;                        // the write's own edge is not what is being counted
+    let n = 0;
+    for (let i = 0; i < DOTS_PER_LINE * LINES_PER_FRAME / 4; i++) {
+      p.tick(4);
+      if (p.statReq) { n++; p.statReq = false; }
+    }
+    return n;
+  };
+  const hblank = countFrame(0x08), oam = countFrame(0x20), both = countFrame(0x28);
+  assert.equal(hblank, 143, 'mode 0 ends 143 of the 144 visible lines from a cold start');
+  assert.equal(oam, 145, 'and mode 2 starts 144 of them, plus the OAM slot vblank still has');
+  assert.equal(both, 144, `${both}: the OR of two lines, not ${hblank + oam}`);
+  assert.ok(both < hblank + oam, 'two sources are not twice the interrupts');
+  // LYC=0 matches once per frame, and stays matched across the whole of line
+  // 0 — one edge, not 456.
+  assert.equal(countFrame(0x40), 1, 'one per source per frame, not one per dot');
 });
 
 test('gbppu: state round-trips', () => {
@@ -485,6 +519,13 @@ test('gbapu: state round-trips and the samples continue', () => {
   a.write(0xff26, 0x80); a.write(0xff12, 0xf0); a.write(0xff14, 0x87);
   for (let i = 0; i < 5000; i++) a.tick(4);
   const s = a.getState();
+  // Drain what has already been produced before comparing. The sample ring is
+  // output and setState() deliberately drops it (it belongs to the future the
+  // restore abandoned), so the machine that never left has to be brought to
+  // the same place — otherwise `want` is the first 64 samples of the run and
+  // `got` is the first 64 samples AFTER the snapshot, and they were never
+  // going to be equal. That was the bug in this test, not in the APU.
+  a.render(new Float32Array(a.available()));
   const want = new Float32Array(64);
   for (let i = 0; i < 5000; i++) a.tick(4);
   a.render(want, 64);
@@ -514,6 +555,37 @@ function counterRom() {
   return buildGbRom({ code, title: 'COUNTER' });
 }
 
+// A ROM whose PICTURE moves, which counterRom()'s does not: with no tile data
+// uploaded, every pixel of every frame is colour 0 and a rewind test against
+// it cannot fail. This one switches the LCD off, uploads one striped tile and
+// a chequered map, switches the LCD back on, and then scrolls. There is no
+// EI here on purpose — an interrupt with no handler restarts at $0100, which
+// would re-run the LCD-off sequence every frame.
+function scrollRom() {
+  const code = [
+    0x3e, 0x00, 0xe0, 0x40,       // LD A,0 ; LDH ($40),A     LCD off, so VRAM is writable
+    0x21, 0x10, 0x80,             // LD HL,$8010              tile 1
+    0x06, 0x10,                   // LD B,$10
+    0x3e, 0x3c,                   // LD A,$3C
+    0x22, 0x05, 0x20, 0xfc,       // LD (HL+),A ; DEC B ; JR NZ,-4
+    0x21, 0x00, 0x98,             // LD HL,$9800              the background map
+    0x01, 0x00, 0x04,             // LD BC,$0400
+    0x7d, 0xe6, 0x01, 0x22,       // LD A,L ; AND 1 ; LD (HL+),A
+    0x0b, 0x78, 0xb1, 0x20, 0xf7, // DEC BC ; LD A,B ; OR C ; JR NZ,-9
+    0x3e, 0xe4, 0xe0, 0x47,       // LD A,$E4 ; LDH ($47),A   BGP
+    0x3e, 0x91, 0xe0, 0x40,       // LD A,$91 ; LDH ($40),A   LCD on, background on
+    0x21, 0x00, 0xc0,             // LD HL,$C000
+    // Scroll once per FRAME, by polling LY, rather than once per loop: a free
+    // -running counter races the raster and lands on only a handful of
+    // distinct screens, which would make the rewind comparison weak again.
+    0xf0, 0x44, 0xfe, 0x90, 0x28, 0xfa,   // wait while LY == 144
+    0xf0, 0x44, 0xfe, 0x90, 0x20, 0xfa,   // wait until LY == 144
+    0x34, 0x7e, 0xe0, 0x43,       // INC (HL) ; LD A,(HL) ; LDH ($43),A   SCX = frame
+    0x18, 0xee,                   // JR -18
+  ];
+  return buildGbRom({ code, title: 'SCROLL' });
+}
+
 test('machinegb: the contract', () => {
   const gb = new GbMachine({ rom: counterRom() });
   assert.equal(typeof gb.stepFrame, 'function');
@@ -536,10 +608,28 @@ test('machinegb: the contract', () => {
 
 test('machinegb: a frame is the right number of cycles', () => {
   const gb = new GbMachine({ rom: counterRom() });
-  const before = gb.cpu.cycles;
+  // The FIRST stepFrame is short on purpose and measuring it was the bug in
+  // the original test. A frame ends where the raster reaches the top of
+  // vblank, and the machine starts at LY=0 — so the first one is 144 lines
+  // (16,418 M-cycles) rather than 154. Every frame after it is a whole
+  // revolution of the raster, and that is the number the contract is about.
   gb.stepFrame();
-  const n = gb.cpu.cycles - before;
-  assert.ok(Math.abs(n - 70224 / 4) < 8, `${n} M-cycles in a frame`);
+  const PER = 70224 / 4;
+  // A single frame is not exactly 17,556: the loop stops at the first
+  // instruction boundary at or after the raster reaches vblank, so it
+  // overshoots by however much of an instruction is left — at most six
+  // M-cycles, and the overshoot is subtracted from the next frame. What must
+  // hold is that nothing is lost: over sixty frames the total is the sum to
+  // within one instruction.
+  const start = gb.cpu.cycles;
+  for (let i = 0; i < 60; i++) {
+    const before = gb.cpu.cycles;
+    gb.stepFrame();
+    const n = gb.cpu.cycles - before;
+    assert.ok(Math.abs(n - PER) <= 6, `${n} M-cycles in one frame`);
+  }
+  const total = gb.cpu.cycles - start;
+  assert.ok(Math.abs(total - 60 * PER) <= 6, `${total} M-cycles in 60 frames, want ${60 * PER}`);
   assert.ok(Math.abs(FRAME_HZ - 59.7275) < 0.001);
 });
 
@@ -595,8 +685,9 @@ test('machinegb: a snapshot carries no ROM, and is small', () => {
   for (let i = 0; i < 60; i++) gb.stepFrame();
   const s = gb.snapshot();
   const size = snapSize(s);
-  // WRAM 8K + VRAM 8K + OAM 160 + HRAM 127 + a few hundred scalars.
-  assert.ok(size > 16000 && size < 24000, `snapshot is ${size} bytes`);
+  // WRAM 8K + VRAM 8K + the picture packed at two bits a pixel (5,760) +
+  // OAM 160 + HRAM 127 + a few hundred scalars.
+  assert.ok(size > 20000 && size < 26000, `snapshot is ${size} bytes`);
   const json = JSON.stringify(s, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v));
   assert.equal(json.includes('"rom"'), false, 'no ROM in the snapshot');
 });
@@ -607,7 +698,10 @@ test('machinegb: a Color cartridge gets a Color, and its snapshot is bigger', ()
   assert.equal(gb.cpu.a, 0x11, 'the boot register that tells a game which console it is on');
   for (let i = 0; i < 10; i++) gb.stepFrame();
   const size = snapSize(gb.snapshot());
-  assert.ok(size > 45000 && size < 60000, `CGB snapshot is ${size} bytes`);
+  // Four times the work RAM, twice the VRAM, two palette blocks — and a
+  // picture that cannot be packed, because a Color pixel is a 15-bit colour
+  // rather than a two-bit index into a palette the snapshot already holds.
+  assert.ok(size > 90000 && size < 105000, `CGB snapshot is ${size} bytes`);
 });
 
 test('machinegb: the joypad reads zero for a pressed button', () => {
@@ -637,7 +731,10 @@ test('machinegb: the timer is a bit of the divider, so writing DIV can tick it',
 // that a restored-and-redrawn frame is the frame that was captured.
 
 test('machinegb: the host rewind ring replays to the same picture', () => {
-  const gb = new GbMachine({ rom: counterRom() });
+  // scrollRom, not counterRom: the ring has to be driven by a program whose
+  // screen actually changes from frame to frame, or every comparison below is
+  // between two identical blank pictures and passes for the wrong reason.
+  const gb = new GbMachine({ rom: scrollRom() });
   const REWIND_EVERY = 6;
   const ring = [];
   for (let f = 0; f < 600; f++) {
@@ -645,6 +742,8 @@ test('machinegb: the host rewind ring replays to the same picture', () => {
     if (f % REWIND_EVERY === 0) ring.push({ frame: gb.frame, snap: gb.snapshot(), rgb: [...gb.render().rgb] });
   }
   assert.equal(ring.length, 100);
+  const distinct = new Set(ring.map((r) => r.rgb.join(','))).size;
+  assert.ok(distinct > 4, `the ring holds ${distinct} distinct pictures — a moving screen is the point`);
   let mismatches = 0;
   for (let i = ring.length - 1; i >= 0; i--) {
     gb.restore(ring[i].snap);
@@ -739,11 +838,46 @@ test('mooneye: the MBC suite', { skip: !haveRoms }, () => {
   assert.equal(roms.length - failed.length, 27);
 });
 
+// blargg's suites are the other half of the corpus and they are NOT in this
+// repository: they carry no licence, and "everybody mirrors it" is not one.
+// `node gbtools/fetch-blargg.mjs` puts them in gbroms/blargg/ (git-ignored);
+// without that this skips, which is the only way a test can depend on a ROM
+// the project does not own. The expected numbers are the ones in
+// docs/gb-design.md §10, so a regression here is a real one.
+const BLARGG = join(GBROMS, 'blargg');
+const haveBlargg = existsSync(join(BLARGG, 'cpu_instrs.gb'));
+test('blargg: cpu_instrs, instr_timing, mem_timing and the rest', { skip: !haveBlargg }, () => {
+  const expected = {
+    'cpu_instrs.gb': true, 'instr_timing.gb': true, 'mem_timing.gb': true,
+    'mem_timing-2.gb': true, 'halt_bug.gb': true, 'interrupt_time.gb': true,
+    // The three open holes, each with its reason in §11: the wave channel's
+    // access window (dmg_sound 09/10/12, cgb_sound 08/09/11/12) and the DMG's
+    // OAM corruption bug, which this PPU does not model at all.
+    'oam_bug.gb': false, 'dmg_sound.gb': false, 'cgb_sound.gb': false,
+  };
+  const got = {};
+  for (const name of readdirSync(BLARGG)) {
+    if (!/\.gbc?$/i.test(name)) continue;
+    got[name] = judgeBlargg(runTest(join(BLARGG, name), { frames: 5000 })).pass;
+  }
+  for (const [name, want] of Object.entries(expected)) {
+    if (!(name in got)) continue;                 // a mirror that no longer has it
+    assert.equal(got[name], want, `${name}: ${got[name] ? 'started passing — update §10/§11' : 'regressed'}`);
+  }
+});
+
 test('dmg-acid2: the picture matches the reference exactly', { skip: !haveRoms }, () => {
   const res = compareAcid2(join(GBROMS, 'dmg-acid2.gb.gz'), join(GBROMS, 'dmg-acid2-reference.png'));
   assert.equal(res.diff, 0, `${res.diff}/${res.total} pixels differ`);
 });
 
+// This is the test the Seta machine did not have. Every slot, restored in
+// REVERSE order (the direction the host's shuttle actually moves), and the
+// picture compared pixel for pixel — the interesting slots are the early ones,
+// where dmg-acid2 is still building its screen and consecutive frames differ.
+// It is also the reason gbppu.js keeps the frame buffer in its state: without
+// that, slots 0 and 7 came back holding frame 120's picture and nothing else
+// in this file noticed.
 test('dmg-acid2 also exercises the rewind ring on a real ROM', { skip: !haveRoms }, () => {
   const gb = new GbMachine({ cart: loadRom(join(GBROMS, 'dmg-acid2.gb.gz')), model: 'dmg' });
   const ring = [];
@@ -751,9 +885,23 @@ test('dmg-acid2 also exercises the rewind ring on a real ROM', { skip: !haveRoms
     gb.stepFrame();
     ring.push({ frame: gb.frame, snap: gb.snapshot(), rgb: [...gb.render().rgb] });
   }
-  for (let i = 0; i < ring.length; i += 7) {
+  // dmg-acid2 builds its screen and then holds it, so the ring is mostly one
+  // picture — but the first slots are NOT that picture, and those are the ones
+  // a stale frame buffer gets wrong.
+  const distinct = new Set(ring.map((r) => r.rgb.join(','))).size;
+  assert.ok(distinct >= 2, `only ${distinct} distinct picture in the ring`);
+  let wrongFrame = 0, wrongPicture = 0;
+  for (let i = ring.length - 1; i >= 0; i--) {
     gb.restore(ring[i].snap);
-    assert.equal(gb.frame, ring[i].frame);
-    assert.deepEqual([...gb.render().rgb], ring[i].rgb, `slot ${i}`);
+    if (gb.frame !== ring[i].frame) { wrongFrame++; continue; }
+    const rgb = gb.render().rgb;
+    for (let k = 0; k < rgb.length; k++) if (rgb[k] !== ring[i].rgb[k]) { wrongPicture++; break; }
   }
+  assert.equal(wrongFrame, 0, `${wrongFrame}/${ring.length} slots landed on another frame`);
+  assert.equal(wrongPicture, 0, `${wrongPicture}/${ring.length} slots drew another frame's picture`);
+  // And re-running from a restored slot has to reproduce the slot after it,
+  // which is what "resume from the previewed point" does in the host.
+  gb.restore(ring[40].snap);
+  gb.stepFrame();
+  assert.deepEqual([...gb.render().rgb], ring[41].rgb, 'replaying forward from a restored slot');
 });

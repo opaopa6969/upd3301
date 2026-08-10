@@ -644,11 +644,13 @@ export class GbMachine {
 
   // ---- time travel ---------------------------------------------------------
   // Everything mutable, nothing immutable. The cartridge ROM stays in the
-  // parsed cartridge this machine already holds; the frame buffer is output,
-  // not state; save RAM that has never been written is omitted entirely. That
-  // lands a snapshot at roughly 20KB for a DMG game — the smallest of any
-  // machine in this repository, which is what makes the host's thousand-slot
-  // rewind ring cheap here. Measured numbers are in docs/gb-design.md §9.
+  // parsed cartridge this machine already holds; save RAM that has never been
+  // written is omitted entirely; the picture, which IS mutable state and not
+  // output (see gbppu.js), rides along packed two bits to the pixel on a DMG.
+  // That lands a snapshot at roughly 24KB for a DMG game — still the smallest
+  // of any machine in this repository, which is what makes the host's
+  // thousand-slot rewind ring cheap here. Measured numbers are in
+  // docs/gb-design.md §9.
   snapshot() {
     return {
       schemaVersion: SCHEMA_VERSION,
