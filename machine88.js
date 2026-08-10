@@ -378,7 +378,17 @@ export class Pc8801Machine {
     if ((port === 0x47 || port === 0xad) && this.opna) return this.opna.readStatus(); // OPNA ext data (status fallback)
     if (port === 0x40) {
       // d5 = VRTC (high during retrace), d1 = CMT carrier etc.
-      const vrtc = this.tInFrame > this.frameT * 0.86;
+      //
+      // The retrace window is whatever the CRTC was programmed with, not a
+      // constant: a title sets displayed rows and the blanking count, and the
+      // fraction of the frame spent in retrace follows from those. This used to
+      // be a fixed 0.86, but the titles here program 20 displayed rows against
+      // 6 blanking rows — a display fraction of 0.769, so retrace really lasts
+      // 23% of the frame and not 14%. Code that times itself off VRTC (a wait
+      // for the edge, or a "draw during blanking" window) sees the wrong budget
+      // with a constant. M88 derives the same window from the CRTC
+      // (`crtc.cpp`: retrace runs `linetime * vretrace`).
+      const vrtc = this.tInFrame > this.frameT * this._dispFrac();
       // b2 = CMT carrier-detect: high while the tape is parked on a MARK
       let cmt = 0;
       if (this.tape) { this.tape.pump(this._tapeNow()); cmt = this.tape.carrier() ? 0x04 : 0; }
@@ -579,6 +589,14 @@ export class Pc8801Machine {
   // So every access to FCh-FFh is a synchronisation point: run the sub up to
   // the main's current time *before* touching the latches. Slices still bound
   // how far the two drift while neither is talking.
+  // Fraction of the frame spent displaying, from what the CRTC was actually
+  // programmed with. Both the polled VRTC bit and the VSYNC interrupt derive
+  // from this one number so they can never disagree.
+  _dispFrac() {
+    const r = this.crtc.rows, b = this.crtc.vblankRows;
+    return r > 0 ? r / (r + b) : 0.86;
+  }
+
   _syncSub() {
     if (!this.sub) return;
     const dt = this.tInFrame - this._subMark;
@@ -596,6 +614,10 @@ export class Pc8801Machine {
     // so without these 10 ticks per frame the machine halts forever
     const timerPeriod = this.frameT / 10;
     let nextTimer = this.tInFrame + timerPeriod;
+    // The display-period end, in T-states — the same boundary port 40h's VRTC
+    // bit is derived from, so the interrupt and the polled bit agree.
+    const vsyncAt = this.frameT * this._dispFrac();
+    this._vsyncFired = false;
     // raster-accurate text fetch: space the CRTC's per-row DMA + palette
     // snapshot across the frame, so mid-frame VRAM/palette rewrites land on the
     // rows actually scanning at that moment.
@@ -636,6 +658,20 @@ export class Pc8801Machine {
           if (this.intMaskBits & 1) this.intPending |= 1 << 2; // RTC, source 2
           nextTimer += timerPeriod;
         }
+        // VSYNC fires on the VRTC *rising edge* — the end of the display
+        // period — not at the end of blanking. The µPD3301's end-of-screen
+        // interrupt and the VRTC bit a program polls at port 40h are the same
+        // event on real hardware, so raising the interrupt a whole blanking
+        // period late makes a handler that reads port 40h see the opposite
+        // answer from what the interrupt implied. Two independent reviews
+        // landed on this from different directions: a datasheet reading of
+        // µPD3301 end-of-screen timing, and a behavioural analysis that put
+        // "the phase model of time" ahead of the 8255 as the shared root of
+        // the remaining divergences. (docs/review/2026-08-10-*.md)
+        if (!this._vsyncFired && this.tInFrame >= vsyncAt) {
+          this._vsyncFired = true;
+          if (this.intMaskBits & 2) this.intPending |= 1 << 1; // VSYNC, source 1
+        }
         this._serviceInterrupts();
       }
       if (this.sub) {
@@ -668,7 +704,7 @@ export class Pc8801Machine {
       this._crtcRow++;
     }
     this.crtc.endFrame();
-    if (this.intMaskBits & 2) this.intPending |= 1 << 1; // VSYNC, source 1
+    // VSYNC was raised at the display-period end above, not here.
     this.frame++;
     return this;
   }
@@ -784,6 +820,14 @@ export class Pc8801Machine {
       },
       ints: { levels: this.intLevels, mask: this.intMaskBits, pending: this.intPending },
       pioPoll: { last: this._pioLast, count: this._pioPoll },
+      // The sub CPU's clock. `_subMark` is how much of this frame the sub has
+      // already been paid for and `_subDebt` the fractional cycles carried
+      // between syncs — leave them out and a restore resumes with the *other*
+      // timeline's debt, so the sub runs a different number of cycles and the
+      // machine lands somewhere else on identical input. That silently broke
+      // the determinism contract (and with it rewind, jog and the ICE's
+      // branching tree) the moment `_syncSub` was introduced.
+      subClock: { mark: this._subMark, debt: this._subDebt },
       tInFrame: this.tInFrame, frame: this.frame, acc: this._acc ?? 0,
     };
     if (this.sub) {
@@ -836,6 +880,9 @@ export class Pc8801Machine {
     this.mono = b.mono; this.line400 = b.line400; this.width80 = b.width80;
     this.intLevels = s.ints.levels; this.intMaskBits = s.ints.mask; this.intPending = s.ints.pending;
     this._pioLast = s.pioPoll.last; this._pioPoll = s.pioPoll.count;
+    // `?? 0` keeps snapshots taken before this field existed loadable.
+    this._subMark = s.subClock?.mark ?? 0;
+    this._subDebt = s.subClock?.debt ?? 0;
     this.tInFrame = s.tInFrame; this.frame = s.frame; this._acc = s.acc;
     if (this.sub && s.sub) {
       restoreObj(this.pio, s.pio);
