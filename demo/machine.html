@@ -69,6 +69,8 @@
   <label style="color:#778;font-size:12px" title="X68000のIPL ROM(IPLROM.DAT 128KB)とCGROM(CGROM.DAT 768KB)を選ぶ。両方まとめて選んでよい">🖥 X68000 ROM: <input type="file" id="fx68rom" multiple style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="X68000のフロッピー(.dim/.xdf/.img/.d88)を読み込む。IPL ROMがあれば機種がX68000に切り替わる">💾 X68000 FD: <input type="file" id="fx68fd" accept=".dim,.DIM,.xdf,.XDF,.img,.IMG,.2hd,.d88,.D88,.88d" multiple style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="Setaアーケード基板のMAME ROMセット(thunderl.zip など)を読み込む。読み込むと機種がアーケードに切り替わる">🕹 Seta基板(.zip): <input type="file" id="fseta" accept=".zip,.ZIP" style="font-size:11px"></label>
+  <label style="color:#778;font-size:12px" title="PC-9801のBIOS ROM(96KB)、ITF ROM(32KB)、FONT ROM、SOUND ROMをまとめて選べる">🖥 PC-98 ROM: <input type="file" id="fpc98rom" multiple style="font-size:11px"></label>
+  <label style="color:#778;font-size:12px" title="PC-9801のフロッピー(.d88/.fdi/.hdm/.2hd/.img)を2枚まで読み込む">💾 PC-98 FD: <input type="file" id="fpc98fd" accept=".d88,.D88,.88d,.fdi,.FDI,.hdm,.HDM,.2hd,.2HD,.img,.IMG,.dup,.DUP" multiple style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <span id="grp-tape" style="display:inline-flex;gap:4px;align-items:center">
     <label style="color:#778;font-size:12px" title="カセットテープ(.t88/.cas/.cmt)を読み込む。N88モードで CLOAD するとテープから読める">📼 テープ: <input type="file" id="ftape" accept=".t88,.cas,.cmt,.T88,.CAS,.CMT" style="font-size:11px"></label>
@@ -113,7 +115,8 @@
   <button id="mpce" title="PCエンジン。.pce を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">PCエンジン</button>
   <button id="mmd" title="メガドライブ。.md/.bin/.gen/.smd を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">メガドライブ</button>
   <button id="mx68" title="X68000。IPL ROMとフロッピーを読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">X68000</button>
-  <button id="mseta" title="Setaアーケード基板(サンダー＆ライトニング等)。MAMEのROMセット(.zip)を読み込むと選べる。スナップショットが50KBと小さいので巻き戻しが一番よく効く">アーケード/Seta</button></span>
+  <button id="mseta" title="Setaアーケード基板(サンダー＆ライトニング等)。MAMEのROMセット(.zip)を読み込むと選べる。スナップショットが50KBと小さいので巻き戻しが一番よく効く">アーケード/Seta</button>
+  <button id="mpc98" title="PC-9801。V30世代のBIOS/ITFとフロッピーを読み込むと選べる。80386搭載RS系のITFは未対応">PC-9801</button></span>
   <label style="color:#778;font-size:12px" title="サウンドボードII (OPNA/YM2608) を有効にする">SB2 <input type="checkbox" id="sb2" style="vertical-align:middle"></label>
   <label style="color:#778;font-size:12px" title="エミュレーション速度。倍速・早送り（実CPUが追いつく範囲まで）">速度 <select id="speed" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
     <option value="0.25">×0.25</option><option value="0.5">×0.5</option>
@@ -162,6 +165,8 @@ import { tryParsePce, summarizePce } from '../pcerom.js';
 import { MegaDriveMachine, BUTTON as MD_BUTTON } from '../machinemd.js';
 import { X68000Machine, KEY as X68_KEY, JOY as X68_JOY } from '../machinex68.js';
 import { tryParseX68Disk, summarizeX68Disk } from '../x68fdd.js';
+import { Pc98Machine, KEY as PC98_KEY } from '../machinepc98.js';
+import { tryParsePc98Disk, summarizePc98Disk } from '../pc98fdd.js';
 import { tryParseMdRom, summarizeMdRom } from '../mdrom.js';
 import { SetaMachine, BUTTON as SETA_BUTTON } from '../machineseta.js';
 import { loadSetaRomSet } from '../setarom.js';
@@ -535,6 +540,39 @@ $('fx68fd').onchange = async (e) => {
   if (x68Ipl) switchMode('x68');
   else guts.textContent = 'X68000のIPL ROM(128KB)も選んでね';
 };
+// PC-98 ROMs are identified by their physical image size, not by a filename.
+// This keeps locally renamed dumps usable. Image size cannot distinguish the
+// V30 and 386 generations, so the mode selector states that scope explicitly.
+$('fpc98rom').onchange = async (e) => {
+  const unknown = [];
+  for (const f of e.target.files) {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    if (bytes.length === 0x18000) { pc98Bios = bytes; pc98BiosName = f.name; }
+    else if (bytes.length === 0x8000) pc98Itf = bytes;
+    else if (bytes.length >= 0x46800) pc98Font = bytes;
+    else if (bytes.length === 0x4000) pc98Sound = bytes;
+    else unknown.push(`${f.name}(${bytes.length}B)`);
+  }
+  guts.textContent = `PC-98: BIOS=${pc98Bios ? pc98BiosName : '未'} ITF=${pc98Itf ? 'あり' : '未'} FONT=${pc98Font ? 'あり' : '未'}`
+    + (unknown.length ? ` 未識別=${unknown.join(', ')}` : '');
+  if (pc98Bios) switchMode('pc98');
+};
+$('fpc98fd').onchange = async (e) => {
+  pc98Disks = [null, null]; pc98DiskName = '';
+  const errors = [];
+  const files = [...e.target.files].slice(0, 2);
+  for (let i = 0; i < files.length; i++) {
+    const bytes = new Uint8Array(await files[i].arrayBuffer());
+    const parsed = tryParsePc98Disk(bytes);
+    if (!parsed.disk) { errors.push(`${files[i].name}: ${parsed.error}`); continue; }
+    pc98Disks[i] = parsed.disk;
+    const info = summarizePc98Disk(parsed.disk);
+    if (!pc98DiskName) pc98DiskName = `${files[i].name} · ${info.media}`;
+  }
+  if (errors.length) guts.textContent = errors.join(' / ');
+  if (pc98Bios) switchMode('pc98');
+  else guts.textContent = 'PC-9801のBIOS ROM(96KB)も選んでね';
+};
 $('ffont').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
@@ -640,7 +678,14 @@ function renderMachine(extra = {}) {
   if (hasOwnRender(machine)) return machine.render({ cgrom, ...renderOpts(), ...extra });
   return machine.sys.render({ cgrom });
 }
-const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', pce: 'PCエンジン/PC Engine', md: 'メガドライブ/MD', x68: 'X68000', seta: 'アーケード/Seta' };
+const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', pce: 'PCエンジン/PC Engine', md: 'メガドライブ/MD', x68: 'X68000', seta: 'アーケード/Seta', pc98: 'PC-9801' };
+// Where the program counter lives is the CPU's business: a Z80/6502/68000 calls
+// it `pc`, an 8086 calls it `ip`. Ask for whichever exists instead of assuming.
+const cpuPcText = (m) => {
+  if (!m?.cpu) return '----';
+  const pc = m.cpu.pc ?? m.cpu.ip ?? 0;
+  return pc.toString(16).padStart(4, '0');
+};
 // Raw-frame PNG: the machine's OWN render() (full 512-colour palette), with NO
 // phosphor / tube / interlace / line-double and no CSS scaling — the emulation's
 // ground truth at 640×200. Lets a corrupted scene be diagnosed as emulation vs
@@ -657,7 +702,7 @@ $('bpng').onclick = () => {
   cx.putImageData(im, 0, 0);
   const crtc = crtcOf(machine);
   const is88 = machine instanceof Pc8801Machine;
-  console.log(`[raw PNG] ${W}x${H}  ${crtc ? `crtc=${crtc.cols}x${crtc.rows} linesPerChar=${crtc.linesPerChar} ` : ''}pc=${machine.cpu.pc.toString(16)}`);
+  console.log(`[raw PNG] ${W}x${H}  ${crtc ? `crtc=${crtc.cols}x${crtc.rows} linesPerChar=${crtc.linesPerChar} ` : ''}pc=${cpuPcText(machine)}`);
   if (is88) { // palette diagnostic (R,G,B per index 0-7, each 0-7) + analog/mono flags
     const pal = []; for (let n = 0; n < 8; n++) pal.push(`${n}:${machine.palette[n * 3]}${machine.palette[n * 3 + 1]}${machine.palette[n * 3 + 2]}`);
     const line = `crtc ${crtc.cols}x${crtc.rows}×${crtc.linesPerChar}=${crtc.rows * crtc.linesPerChar}ln  pal ${(machine._port32 & 0x20) ? 'analog' : 'digital'}  ${pal.join(' ')}`;
@@ -701,7 +746,8 @@ $('bpng').onclick = () => {
 // defaults (the user can still override before reset).
 function switchMode(mode) {
   bootMode = mode;
-  const is88 = mode === 'n88', isNes = mode === 'nes', isPce = mode === 'pce', isMd = mode === 'md', isX68 = mode === 'x68', isSeta = mode === 'seta';
+  const is88 = mode === 'n88', isNes = mode === 'nes', isPce = mode === 'pce', isMd = mode === 'md',
+    isX68 = mode === 'x68', isSeta = mode === 'seta', isPc98 = mode === 'pc98';
   $('mn88').classList.toggle('on', is88);
   $('mn80').classList.toggle('on', mode === 'n80');
   $('mnes').classList.toggle('on', isNes);
@@ -709,10 +755,11 @@ function switchMode(mode) {
   $('mmd').classList.toggle('on', isMd);
   $('mx68').classList.toggle('on', isX68);
   $('mseta').classList.toggle('on', isSeta);
-  // Only the PC-88 family reads DIP switches; for everything else leave the
-  // fields where they are so switching away and back does not lose the user's
-  // PC-88 setup.
-  if (!isNes && !isPce && !isMd && !isX68 && !isSeta) {
+  $('mpc98').classList.toggle('on', isPc98);
+  // Only the PC-88 family reads THESE DIP fields (ports 30h/31h); for everything
+  // else leave them where they are so switching away and back does not lose the
+  // user's PC-88 setup.
+  if (!isNes && !isPce && !isMd && !isX68 && !isSeta && !isPc98) {
     $('dip1').value = is88 ? 'DB' : 'FF';
     $('dip2').value = is88 ? '79' : 'FF';
   }
@@ -724,6 +771,8 @@ function switchMode(mode) {
     $('dipnote').textContent = 'X68000のIPL ROM(128KB)とCGROM(768KB)を選ぶと起動する';
   } else if (isSeta && !setaRomset) {
     $('dipnote').textContent = 'SetaアーケードのROMセット(.zip、例 thunderl.zip)を選ぶと起動する';
+  } else if (isPc98 && !pc98Bios) {
+    $('dipnote').textContent = 'PC-9801のBIOS ROM(96KB)を選ぶと起動する（V30世代。RS系80386 ITFは未対応）';
   } else if (isNes && !nesCart) {
     $('dipnote').textContent = fdsBios
       ? 'ファミコンのROM(.nes)かディスク(.fds)を選ぶと起動する'
@@ -744,6 +793,7 @@ $('mpce').onclick = () => switchMode('pce');
 $('mmd').onclick = () => switchMode('md');
 $('mx68').onclick = () => switchMode('x68');
 $('mseta').onclick = () => switchMode('seta');
+$('mpc98').onclick = () => switchMode('pc98');
 for (const id of ['dip1', 'dip2']) $(id).onchange = () => boot();
 
 // Disk pool + drive assignment. A .d88 file can hold SEVERAL disk images, and a
@@ -1884,6 +1934,10 @@ let x68Joy = 0;   // live joystick mask (see X68_JOY) — a PORT, not a pad, so 
 // X68000's ROMs are: it is megabytes, it never changes, and it must not end up
 // in a snapshot. `setaPad` is the live keyboard mask, ORed with the gamepad.
 let setaRomset = null, setaName = '', setaPad = 0, setaCoinAt = -1;
+// PC-98 firmware and media are immutable session inputs. Like the X68000 ROMs,
+// they remain outside snapshots so the rewind ring only carries mutable state.
+let pc98Bios = null, pc98Itf = null, pc98Font = null, pc98Sound = null, pc98BiosName = '';
+let pc98Disks = [null, null], pc98DiskName = '';
 const dipOf = (id, dflt) => {
   const v = parseInt($(id).value.trim(), 16);
   return Number.isFinite(v) ? (v & 0xff) : dflt;
@@ -1985,6 +2039,13 @@ function boot() {
     machine = new SetaMachine({ romset: setaRomset });
     setaPad = 0; setaCoinAt = -1;
     ensureAudio();
+    canvas.focus();
+    return;
+  }
+  if (bootMode === 'pc98') {
+    if (!pc98Bios) { guts.textContent = 'PC-9801のBIOS ROM(96KB)を選んでね'; return; }
+    machine = new Pc98Machine({ bios: pc98Bios, itf: pc98Itf, font: pc98Font, sound: pc98Sound });
+    pc98Disks.forEach((d, i) => { if (d) machine.insertDisk(i, d); });
     canvas.focus();
     return;
   }
@@ -2148,6 +2209,7 @@ canvas.addEventListener('click', () => { if (machine && typeof machine.renderAud
       it('fmd', '🕹 メガドライブ(.md)', lab('fmd')),
       it('fx68rom', '🖥 X68000 ROM', lab('fx68rom')), it('fx68fd', '💾 X68000 FD', lab('fx68fd')),
       it('fseta', '🕹 Seta基板(.zip)', lab('fseta')),
+      it('fpc98rom', '🖥 PC-98 ROM', lab('fpc98rom')), it('fpc98fd', '💾 PC-98 FD', lab('fpc98fd')),
       it('grp-fds', '💽 ディスクシステム(.fds)', $('grp-fds')),
       it('romstore', '保存済ROM', $('romstore')),
     ].filter(Boolean) },
@@ -2460,6 +2522,28 @@ function setaKeySet(e, down) {
   setaPad = down ? (setaPad | bit) : (setaPad & ~bit);
   return true;
 }
+// Keyboard -> PC-9801. Another machine with a real keyboard of its own, so the
+// same shape as the X68000's: names go to the machine's key codes, not to the
+// 8801 matrix.
+const PC98_KEYMAP = {
+  ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT',
+  Enter: 'RETURN', Backspace: 'BS', Delete: 'DEL', Home: 'HOME', Tab: 'TAB',
+  ' ': 'SPACE', Escape: 'ESC', Shift: 'SHIFT', Control: 'CTRL',
+  '-': 'MINUS', '^': 'CARET', '\\': 'YEN', '@': 'AT', '[': 'LBRACKET',
+  ']': 'RBRACKET', ';': 'SEMICOLON', ':': 'COLON', ',': 'COMMA',
+  '.': 'PERIOD', '/': 'SLASH',
+};
+function pc98KeySet(e, down) {
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  let name = PC98_KEYMAP[key];
+  if (!name && /^[a-z]$/.test(key)) name = key.toUpperCase();
+  if (!name && /^[0-9]$/.test(key)) name = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE'][+key];
+  if (!name && /^F(?:10|[1-9])$/.test(key)) name = key;
+  const code = name === undefined ? undefined : PC98_KEY[name];
+  if (code === undefined) return false;
+  if (down) machine.keyDown(code); else machine.keyUp(code);
+  return true;
+}
 // Sticks and control panels that the machine reads as a PORT (machine.joy /
 // machine.inputs), rather than as a console pad (machine.pads). `port` is the
 // property applyPad() writes, `bits` the bit numbers for UP DOWN LEFT RIGHT
@@ -2479,7 +2563,7 @@ const JOY_PORTS = {
 // Machines that own their whole keyboard / control panel — neither the 8801
 // matrix nor a console pad. A new one plugs in here instead of adding another
 // arm to the key handlers.
-const OWN_KEYS = { x68: x68KeySet, seta: setaKeySet };
+const OWN_KEYS = { x68: x68KeySet, seta: setaKeySet, pc98: pc98KeySet };
 function padKeySet(e, down) {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const name = padKeymapFor(bootMode)[key];
@@ -2506,7 +2590,10 @@ function matrixKey(e) {
 // lifts a pause/scrub — pressing a direction just resumes and plays.
 const isFormFocused = () => { const el = document.activeElement; return el && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName); };
 window.addEventListener('keydown', (e) => {
-  if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
+  // `e.key !== 'Control'` so CTRL itself still reaches a machine that has a
+  // CTRL key of its own (the PC-9801 does); Ctrl+<something> stays the
+  // browser's (Ctrl+R must still reload).
+  if (!machine || isFormFocused() || (e.ctrlKey && e.key !== 'Control') || e.metaKey || e.altKey) return;
   const ownKeys = OWN_KEYS[bootMode];
   if (ownKeys || isConsole(bootMode)) {
     if (!(ownKeys ? ownKeys(e, true) : padKeySet(e, true))) return;
@@ -2525,7 +2612,7 @@ window.addEventListener('keydown', (e) => {
   if (k) { kbSet(cellsOf(k), true); e.preventDefault(); }
 });
 window.addEventListener('keyup', (e) => {
-  if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (!machine || isFormFocused() || (e.ctrlKey && e.key !== 'Control') || e.metaKey || e.altKey) return;
   const ownKeysUp = OWN_KEYS[bootMode];
   if (ownKeysUp) { if (ownKeysUp(e, false)) e.preventDefault(); return; }
   if (isConsole(bootMode)) { if (padKeySet(e, false)) e.preventDefault(); return; }
@@ -2894,13 +2981,14 @@ function loop(now) {
     const nowP = performance.now();
     workMs = workMs * 0.9 + (nowP - t0) * 0.1;
     perfAccountRender(nowP - tEmu, nowP);
-    guts.textContent = `${MACHINE_LABEL[bootMode] || 'machine'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
+    guts.textContent = `${MACHINE_LABEL[bootMode] || 'machine'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${cpuPcText(machine)}h`
       + (crtc ? `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz`
         : bootMode === 'pce' && pceInfo ? `  ${pceName} · ${pceInfo.board}`
         // `machine.crtc &&` guards the window where the mode is x68 but boot()
         // bailed out (no IPL yet) and `machine` is still the previous machine.
         : bootMode === 'x68' && machine.crtc ? `  ${machine.crtc.width}x${machine.crtc.height} ${machine.crtc.highReso ? '31kHz' : '15kHz'}${x68DiskName ? '  ' + x68DiskName : ''}`
         : bootMode === 'seta' && machine.board ? `  ${setaName}  ${machine.board.rotation ? 'ROT' + machine.board.rotation : ''}`
+        : bootMode === 'pc98' ? `  640x400${pc98DiskName ? '  ' + pc98DiskName : ''}`
         : bootMode === 'md' && mdInfo ? `  ${mdName} · ${mdInfo.title || '(no title)'} · ${mdInfo.regions}`
         : (nesInfo ? `  ${nesName} · ${nesInfo.board}` : ''))
       + (machine.effectiveCpuPct !== undefined ? `  CPU ${machine.effectiveCpuPct}%` : '')
