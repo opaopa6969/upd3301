@@ -56,6 +56,7 @@ import { HuC6270, MAX_WIDTH, MAX_HEIGHT } from './huc6270.js';
 import { HuC6260, buildVcePaletteRgb, buildVceGrayRgb } from './huc6260.js';
 import { PcePsg } from './pcepsg.js';
 import { parsePce, buildBankMap, MAPPER, BANK_SIZE } from './pcerom.js';
+import { packPixels, unpackPixels } from './snap.js';
 
 export const SCHEMA_VERSION = 1;
 
@@ -129,9 +130,14 @@ export class PceMachine {
     this.line = 0;
     this.frameComplete = false;
 
-    // Output, not state: a 512x242 window big enough for every video mode,
-    // holding 9-bit VCE colours (converted line by line, so a palette change in
-    // a raster interrupt splits the screen as it should).
+    // A 512x242 window big enough for every video mode, holding 9-bit VCE
+    // colours (converted line by line, so a palette change in a raster
+    // interrupt splits the screen as it should).
+    //
+    // This used to say "output, not state" and stayed out of the snapshot. It
+    // is state: the host restores and draws without stepping a frame, so
+    // leaving it out makes every slot of the rewind ring show the newest
+    // picture. See the snapshot below and snap.js's picture section.
     this.frameBuf = new Uint16Array(MAX_WIDTH * MAX_HEIGHT);
     this.frameWidth = 256;
     this.frameHeight = 224;
@@ -479,7 +485,22 @@ export class PceMachine {
       acc: this._acc,
       frameWidth: this.frameWidth,
       frameHeight: this.frameHeight,
+      // The picture. render() reads exactly the frameWidth x frameHeight window
+      // out of the 512x242 buffer, so that window is exactly what has to come
+      // back — 9 bits of VCE colour per pixel, 64,512 bytes at 256x224. See
+      // snap.js for why a frame buffer is state and not output.
+      frameBuf: this._packPicture(),
     };
+  }
+
+  // The visible window, row by row (the buffer's stride is MAX_WIDTH, the
+  // picture's is frameWidth), packed to its 9 significant bits.
+  _packPicture() {
+    const W = Math.max(1, Math.min(this.frameWidth, MAX_WIDTH));
+    const H = Math.max(1, Math.min(this.frameHeight, MAX_HEIGHT));
+    const win = new Uint16Array(W * H);
+    for (let y = 0; y < H; y++) win.set(this.frameBuf.subarray(y * MAX_WIDTH, y * MAX_WIDTH + W), y * W);
+    return packPixels(win, 9);
   }
 
   restore(s) {
@@ -507,6 +528,15 @@ export class PceMachine {
     this._acc = s.acc ?? 0;
     this.frameWidth = s.frameWidth;
     this.frameHeight = s.frameHeight;
+    // A snapshot from before the picture went in comes back black rather than
+    // silently keeping whatever was drawn last — that silence is the bug.
+    this.frameBuf.fill(0);
+    if (s.frameBuf) {
+      const W = Math.max(1, Math.min(this.frameWidth, MAX_WIDTH));
+      const H = Math.max(1, Math.min(this.frameHeight, MAX_HEIGHT));
+      const win = unpackPixels(s.frameBuf, 9, W * H);
+      for (let y = 0; y < H; y++) this.frameBuf.set(win.subarray(y * W, (y + 1) * W), y * MAX_WIDTH);
+    }
     // The interrupt lines the machine drives are ours, not the CPU's, so
     // re-assert them: the first cycle after a restore has to see the same wires
     // as the first cycle before it.

@@ -109,7 +109,14 @@ test('a snapshot restores onto a *different* machine instance', () => {
   // field missing from restore() entirely.
   const src = boot();
   for (let f = 0; f < 40; f++) src.stepFrame();
-  const snap = JSON.parse(JSON.stringify(src.snapshot())); // force plain data
+  // structuredClone, not JSON.parse(JSON.stringify(...)). That line was here to
+  // "force plain data" and did the opposite: a Uint8Array comes back from JSON
+  // as {"0":…,"1":…}, and `TypedArray.set()` copies ZERO elements from that
+  // without throwing — so the snapshot arrived with every buffer empty and the
+  // case still passed, because the test program overwrites the compared RAM
+  // within a frame. The check was watching a machine restored from nothing.
+  // See test-contract.mjs (`the snapshot is plain data`, and the raw-JSON todo).
+  const snap = structuredClone(src.snapshot());
   for (let f = 0; f < 25; f++) src.stepFrame();
 
   const dst = boot();
@@ -164,22 +171,32 @@ test('a snapshot never carries ROM bytes', () => {
 
 test('the snapshot is plain data, so the host can store and diff it', () => {
   // The rewind ring, the ICE's undo tree and the analysis format all assume a
-  // snapshot survives JSON. Anything holding a class instance, a Map or a
-  // function silently loses state on the way back.
+  // snapshot is copyable state and nothing else. Anything holding a class
+  // instance, a Map or a function silently loses state on the way back.
+  //
+  // This case used to round-trip through JSON and then run fifteen frames
+  // before comparing. Both halves were wrong. JSON turns the typed arrays into
+  // {"0":…} objects that TypedArray.set() silently ignores, so the copy was
+  // empty; and running frames first let the test program rewrite the compared
+  // RAM, so an empty copy converged to the right answer anyway. The check
+  // passed for two reasons that cancelled out. Compare IMMEDIATELY, and copy
+  // the way the host actually copies.
   const m = boot();
   for (let f = 0; f < 20; f++) m.stepFrame();
   const s = m.snapshot();
-  const round = JSON.parse(JSON.stringify(s));
+  const copy = structuredClone(s);
 
   const fresh = boot();
-  fresh.restore(round);
+  fresh.restore(copy);
+  assert.equal(fingerprint(fresh), fingerprint(m), 'a copied snapshot must restore identically');
+
   for (let f = 0; f < 15; f++) fresh.stepFrame();
-  const viaJson = fingerprint(fresh);
+  const viaCopy = fingerprint(fresh);
 
   const direct = boot();
   direct.restore(s);
   for (let f = 0; f < 15; f++) direct.stepFrame();
-  assert.equal(viaJson, fingerprint(direct), 'a JSON round-trip must change nothing');
+  assert.equal(viaCopy, fingerprint(direct), 'a copy must change nothing');
 });
 
 test('a mounted disk does not make the machine non-deterministic', () => {

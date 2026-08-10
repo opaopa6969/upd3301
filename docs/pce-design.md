@@ -15,10 +15,15 @@ pure JavaScript, has no DOM dependency and uses no random source.
 
 The cartridge is immutable and is held by reference. It is never included in a
 snapshot. A snapshot contains mutable CPU, RAM, VDC, VCE, PSG, pad, mapper and
-master-clock state; the framebuffer and audio output ring are outputs and are
-also omitted. This keeps a measured snapshot below 200 KB (normally about 80
-KB, dominated by 64 KB of VRAM), so the existing rewind ring, jog shuttle and
-fast-forward logic work without machine-specific transport code.
+master-clock state, ~~and the framebuffer and audio output ring are outputs and
+are also omitted~~ — **the framebuffer was wrongly on that list until
+2026-08-11**. The host restores and draws without stepping a frame
+(`demo/machine.html`'s `restoreIdx()`), so a snapshot with no picture in it
+returns the frame that was on screen before the rewind. It now carries the
+`frameWidth x frameHeight` window packed to its nine significant bits: 64,512
+bytes at 256x224, on top of the ~80 KB the VRAM already dominates, for a
+measured 143 KB. The audio ring is still an output and still omitted. See
+[docs/machine-contract.md](./machine-contract.md) §2.6.
 
 ## 2. HuC6280 CPU
 

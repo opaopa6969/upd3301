@@ -22,6 +22,11 @@ export const SCHEMA_VERSION = 1;
 export class Pc8001Machine {
   constructor({ rom, frameHz = 60, clockHz = 4_000_000, dmaSteal = 0.3, extRamBanks = 4 } = {}) {
     if (!rom || rom.length < 0x1000) throw new Error('need an N-BASIC ROM image');
+    // Every machine in the repository says which contract it speaks, on the
+    // instance and on everything it hands out (see docs/machine-contract.md).
+    // A host that has to guess is a host that will guess wrong once the
+    // snapshot layout moves.
+    this.schemaVersion = SCHEMA_VERSION;
     this.sys = new Pc8001TextSystem({ frameHz });
     this.romTop = Math.min(0x8000, rom.length);
     this.sys.memory.set(rom.subarray(0, this.romTop), 0);
@@ -176,6 +181,7 @@ export class Pc8001Machine {
   // the exact same timeline. Restore writes into the live objects.
   snapshot() {
     return {
+      schemaVersion: SCHEMA_VERSION,
       cpu: this.cpu.getState(),
       memory: this.sys.memory.slice(),
       crtc: snapObj(this.sys.crtc),
