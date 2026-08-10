@@ -3,9 +3,11 @@
 # ICE 設計 — デバッガ・アセンブラ・石器一式
 
 実機時代のICE（In-Circuit Emulator）が本体より高かった問題を、2026年に
-タダで清算する。対象は PC-8001 / PC-8801（メインZ80＋FDDサブ基板のZ80の
-両方）。UIは `demo/ice.html`（別ウィンドウ、`window.opener.__machine` を
-掴む）、道具はすべて repo 直下の純粋モジュール。
+タダで清算する。計測の土台は **`icecore.js`**（pure・DOM非依存・機種非依存）で、
+その上に顔が2つ載る: ブラウザUI `demo/ice.html` / `demo/ice.js`
+（別ウィンドウ、`window.opener.__machine` を掴む）と、ヘッドレスCLI
+`tools/ice.mjs`。アーキ固有の知識は **`icearch.js`** に「ただのデータ」として
+置いてあるので、CPUを増やす作業は表を埋める作業になる。
 
 ## 原則
 
@@ -15,13 +17,77 @@
 - **決定論を武器にする**。時間旅行も等価性検証も、同入力→同結果という
   repoの鉄則の配当。`Math.random` 禁止はUI層（フリッカー等）にも及ぶ
 - **正直な尻尾**。観測できなかったものは「未分類」と表示する。
-  推定で埋めない
+  推定で埋めない。これはデバッガ自身の限界にも適用する——逆アセンブラの
+  無いアーキではバイト列を出し、かつ「デコーダが無い」と明示する。
+  空のペインを見せて黙らない
+- **命令の途中で止めない**。busタップがブレークしたいときはフラグを立て、
+  stepのwrapが「命令完了後」にブレークへ変える。opcode途中で中断したら
+  CPUは半端実行のまま、決定論は崩壊する
+- **機種非依存は capability probe で実現する（`instanceof` は使わない）**。
+  マシンとは「`stepFrame()` と CPU 形のオブジェクトを持つ何か」。メモリの
+  読み方は探索して決め（`readMem` → `peek` → `sys.memory` → CPU自身のbus）、
+  **どれを使ったか報告する**。生きたbusを通した読み出しは観測対象を乱しうるから
+
+## アーキ契約（`icearch.js`）
+
+CPU1つにつき記述子1つ。`name` / `addrMask` / `pcOf` 以外は全部任意。
+
+| フィールド | 意味 |
+|---|---|
+| `addrMask` / `ioMask` | アドレスの折り返し。`ioMask: null` ＝ I/O空間なし |
+| `pcOf` / `setPc` / `spOf` / `spMask` / `pushBytes` | シャドウスタックが要るもの |
+| `disasm(read, addr, opts) → {text, len, bytes}` | **逆アセンブラ契約**。`z80dis.js` が既にこの形 |
+| `callAt(read, pc) → {target, retTo} \| null` | シャドウスタック用のCALL検出 |
+| `condVars` / `condValues(cpu, read)` | 条件式から見える名前 |
+| `regFields` / `regsModel` / `writeReg` | レジスタペイン |
+| `tapBus(cpu, hooks) → untap` | 全アクセスの覗き方 |
+
+同梱: `Z80_ARCH`（完全）、`M6502_ARCH`（逆アセンブラ未実装なので
+ニーモニックは出ない。それ以外は全部動く）、`M68K_ARCH`（68000 ICE の
+受け入れ口。busタップと24bitウォッチポイントは**今日から動く**。
+`disasm` と `callAt` は `null` で、デコーダが来たら2つ同時に埋める）、
+`GENERIC_ARCH`（`pc` と `step()` があれば何でも）。
+
+選択は `detectArch(cpu)`＝レジスタ形状のprobe（Z80のシャドウセット、
+68000の `d`/`a` 型付き配列8本、6502の `A/X/Y/P/S`）。外から足すなら
+`registerArch(arch, probe)`。
+
+4機種で実証済み: PC-8001 / PC-8801（メインZ80＋FDDサブZ80）/
+ファミコン（6502）/ メガドライブ——メガドライブでは probe が
+**1枚の基板の上で別アーキのCPU 2つ**（68000 と Z80）を見つけ、
+それぞれに正しい記述子を割り当てる。
+
+## ヘッドレス（`tools/ice.mjs`）
+
+M88パリティ走行（#32）は、ICEがブラウザに閉じていたせいで同じ計測を
+6本の単発スクリプトとして書き直した。それらは今、同じ計装のサブコマンド:
+
+| サブコマンド | 単発版 | 何をするか |
+|---|---|---|
+| `trace` | `tools/pc-trace.mjs` | PCトレース（連続重複を潰す）。**PCで武装**する（フレーム番号はエミュ間で揃わない。揃うのは「あるアドレスの初回実行」） |
+| `diff` | `tools/trace-diff.mjs` | 片側にしか無いPCの国勢調査＋再同期しない最初の乖離 |
+| `read` | `tools/watch-read.mjs` | CPUが実際に見たバイト列（バンクの曖昧さが無い） |
+| `write` | `tools/watch-write.mjs` | 誰が書いたか＋その書き込みがどこへ流れたか |
+| `life` | `tools/life-scan.mjs` | 走行全体を通した「生息域」 |
+| `loop` | `tools/loop-profile.mjs` | 待ちか暴走か。distinct PC＋叩いているポート |
+| `caps` | — | CPUは何本・どのアーキ・メモリをどう読んでいるか |
+| `break` | — | ブレーク/ウォッチで止めて現場を出す（単発版が絶対にできなかったこと） |
+
+`trace` は main / sub どちらでも、武装ありでもフレーム0からでも
+`pc-trace.mjs` と**バイト一致**。`read`/`write`/`life`/`loop` も同じ行・
+同じ合計を出す。単発6本はそのまま置いてある——#32 の手順書がそれらを
+指しているし、走行中の調査は家具を動かす場所じゃない。
+
+判定ルールはここに**複製しない**。`tools/verdict.js` に pure 関数として
+（3回間違えた履歴ごと `test-verdict.mjs` に固定して）置いてあるので、
+`tools/ice.mjs` は在ればimportし、無ければ生の数値だけを出す。
 
 ## 構成要素
 
 ### 観測と制御
-- レジスタ一式（シャドウ・**R**・IM/IFF込み。Rは本物: M1毎7bit増分＋
-  bit7保持）。pause中はクリック編集（PC書き換え＝実行位置ジャンプ）
+- レジスタ一式はアーキ記述子から（Z80: シャドウ・**R**・IM/IFF込み。
+  Rは本物: M1毎7bit増分＋bit7保持）。pause中はクリック編集
+  （PC書き換え＝実行位置ジャンプ）
 - 逆アセンブル（`z80dis.js`。Zilog形式デフォルト＋**Intel 8080形式**
   トグル — 88のモニタ文化準拠。Z80拡張はZilogのまま）
 - メモリhexダンプ（編集可）、サブ側はFDC状態・モーターも
@@ -84,12 +150,31 @@
 ## 依存の向き
 
 ```
-ice.html ──wrap──▶ machine(.88).js ──▶ chips
-   │
-   ├─▶ z80dis.js（純関数）
-   ├─▶ z80asm.js（純関数）──▶ z80anal.js
-   └─▶ snap.js 経由の snapshot/restore（core提供）
+demo/ice.js（ペイン） ─┐                  tools/ice.mjs（CLI）─┐
+                       ├─▶ icecore.js ──wrap──▶ 任意のmachine ──▶ chips
+                       │        │
+                       │        └─▶ icearch.js ──▶ z80dis.js（純関数）
+                       ├─▶ z80asm.js（純関数）──▶ z80anal.js
+                       └─▶ snap.js 経由の snapshot/restore（core提供）
 ```
 
-UIはcoreを読むだけ。coreはUIを知らない。石器はすべて純粋モジュールで
-headlessテスト可能——ICEはそれらの見せ方にすぎない。
+`icecore.js` はどの machine も import せず DOM も触らない。`icearch.js` は
+`icecore.js` を import しない。2つの顔はどちらもクライアント。UIはcoreを
+読むだけ。coreはUIを知らない。石器はすべて純粋モジュールで headless
+テスト可能——ICEはそれらの見せ方にすぎない。
+
+テスト: `test-icecore.mjs`（headless・ROM不要・DOM不要。6502形と68000形の
+玩具CPUを同梱してあるので、機種非依存は「主張」ではなく「assert」）と
+`test-ice.mjs`（コントローラ級の受け入れ。core抽出後もグリーン）。
+
+## 既知の穴
+
+- `demo/ice.html` のペインは抽出後**visual未検証**。コントローラ級の
+  テストは通っているが、ブラウザで実際に目視した人はまだいない
+- 68000 / 6502 の逆アセンブラはまだ無いので、それらのタブはバイト列表示。
+  68000 の `callAt` はデコーダ待ち（命令長を推測したらシャドウスタックが壊れる）
+- ウォッチポイントはCPUの計器。DMAの吸い出しは `dmac.readMemory` を通り
+  CPU busの外なので見えない（元の設計から変わらず）
+- ファミコン/メガドライブはバンク解決済みの読み出しAPIを出していないので、
+  ICEはCPU busを通して読み、その旨を報告する（`caps` が警告を出す）。
+  それらのmachineに `peek()` が付けば注記は消える
