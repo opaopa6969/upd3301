@@ -305,7 +305,11 @@ test('machine: adding the APU did not blow up the snapshot', () => {
   const m = new NesMachine({ cart: cartWith([0x4c, 0x00, 0x80]) });
   runFrames(m, 120);
   const s = m.snapshot();
-  const json = JSON.stringify(s, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v));
+  // The frame buffer joined the snapshot after this budget was written (see
+  // nesppu.js): it is ~46KB of packed pixels and is not what this test is
+  // asking about, which is whether the APU's ~90 numbers grew into something.
+  const { frameBuf, frameEmph, ...ppu } = s.ppu;
+  const json = JSON.stringify({ ...s, ppu }, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v));
   const apuJson = JSON.stringify(s.apu);
   assert.ok(apuJson.length < 800, `APU share of the snapshot is ${apuJson.length} bytes`);
   assert.ok(json.length < 60000, `whole snapshot is ${json.length} bytes`);
