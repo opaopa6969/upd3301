@@ -450,11 +450,20 @@ test('host contract: the demo page can fast-forward and rewind this machine', ()
 test('snapshot: immutable cartridge data never travels', () => {
   const m = idleMachine({ prgBanks: 8, mapper: 4 });
   const s = m.snapshot();
-  const json = JSON.stringify(s, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v));
+  // The picture is in the snapshot deliberately (see nesppu.js's state section:
+  // the host restores and draws without stepping a frame). It is ~46KB of
+  // packed pixels and would swamp a budget whose entire question is "did
+  // cartridge data leak in", so measure everything else.
+  const { frameBuf, frameEmph, ...ppu } = s.ppu;
+  const json = JSON.stringify({ ...s, ppu }, (k, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v));
   // 8 x 16KB of PRG plus 8KB of CHR would be ~140,000 numbers; the budget is
   // the host's 1000-snapshot ring, so this must stay in the low kilobytes.
   assert.ok(json.length < 60000, `snapshot is ${json.length} bytes of JSON — cartridge data leaked in?`);
   assert.equal(s.mapper.prgRam, null, 'untouched work RAM is not copied');
+  // …and the picture is there, at six bits per pixel, with the emphasis plane
+  // as runs. 256 x 240 x 6 / 8 = 46,080.
+  assert.equal(frameBuf.length, 46080, 'the frame buffer must be packed, not raw');
+  assert.ok(frameEmph.length <= 64, `colour emphasis is ${frameEmph.length} runs — it should be flat`);
 });
 
 test('restore() writes into the existing objects (no reallocation)', () => {

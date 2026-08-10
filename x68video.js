@@ -573,6 +573,18 @@ export class X68Video {
   // after main RAM — 512 KB of graphics plus 512 KB of text.
   getState() {
     return {
+      // The finished picture. It reads like output — and was left out on that
+      // reasoning — but a frame is painted line by line with the palette and
+      // registers as they stood when the raster crossed them, so end-of-frame
+      // state does not reproduce it. The host's jog/shuttle restores and draws
+      // *without* stepping, which is how the Game Boy's version of this bug was
+      // found (2026-08-10) and how test-contract.mjs measures it here.
+      //
+      // Only the live window is stored, not the 1024x1024 worst case: at
+      // 3,145,728 B the full buffer would dominate the rewind ring, and
+      // everything outside width x height is stale by construction.
+      frameRgb: this.frameRgb.slice(0, Math.max(0, this.width) * Math.max(0, this.height) * 3),
+      frameW: this.width, frameH: this.height,
       schemaVersion: SCHEMA_VERSION,
       // `null` here is not "unknown", it is "still all zeroes" — the flags are
       // monotonic, so restoring a snapshot without a copy clears the memory.
@@ -590,6 +602,12 @@ export class X68Video {
   }
 
   setState(s) {
+    // Older snapshots predate the picture; leave the buffer alone for those
+    // rather than blanking a screen the caller may still be looking at.
+    if (s.frameRgb && s.frameW > 0 && s.frameH > 0) {
+      this.frameRgb.fill(0);
+      this.frameRgb.set(s.frameRgb.subarray ? s.frameRgb : Uint8Array.from(s.frameRgb), 0);
+    }
     if (s.gvram) this.gvram.set(s.gvram); else this.gvram.fill(0);
     this.gvramDirty = !!s.gvramDirty;
     this.tvram.set(s.tvram);
