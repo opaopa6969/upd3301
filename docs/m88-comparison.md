@@ -431,3 +431,33 @@ window — sees the wrong budget when the constant disagrees with what the title
 353 titles at 1500f: **exact 328 and tracking 338, unchanged, with no regressions**;
 FIREHAWK's screen fill improved from 69% to 79%. The headline numbers do not move, but this
 is strictly more faithful than a constant.
+
+## Deliver VSYNC on the VRTC rising edge (2026-08-10)
+
+The VSYNC interrupt was raised at the end of `stepFrame` — the **end of blanking** — while port
+40h's VRTC bit goes high at the **end of the display period**. On real hardware the µPD3301's
+end-of-screen interrupt and the VRTC bit a program polls are the *same event*, so delaying the
+interrupt by a whole blanking period makes **a handler that reads `IN 40h` immediately after VSYNC
+see the opposite of what the interrupt implied**. At 20+6 rows that is about 3.8 ms.
+
+VSYNC now fires at the display-period end, and `_dispFrac()` is a shared helper so **the polled bit
+and the interrupt derive from one number** and cannot disagree.
+
+**Two independent reviews arrived here from different directions**:
+- [the FDC adversarial review](./review/2026-08-10-fdc-adversarial-review.md), finding 9 (µPD3301
+  end-of-screen timing, read from the datasheet)
+- [the second opinion](https://github.com/opaopa6969/upd3301/issues/32#issuecomment-5234276932),
+  which named "the phase model of time" rather than the 8255 as the shared root of what remains
+
+### Measured over 353 titles at 1500f
+
+| | before | after |
+|---|---|---|
+| exact | 328 | **327** (−1) |
+| tracking | 338 | **339** (+1) |
+| divergence leads | 13 | **12** (−1; FIREHAWK dropped out) |
+
+**Exact match fell by one and the change was kept anyway** — the first case of deciding on primary
+sources rather than on agreement with M88. As [#40](https://github.com/opaopa6969/upd3301/issues/40)
+puts it: where M88 itself departs from the specification, fixing our side correctly *lowers* the
+match rate. With tracking up one and a lead removed, the net is not a regression.

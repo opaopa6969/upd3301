@@ -388,9 +388,7 @@ export class Pc8801Machine {
       // for the edge, or a "draw during blanking" window) sees the wrong budget
       // with a constant. M88 derives the same window from the CRTC
       // (`crtc.cpp`: retrace runs `linetime * vretrace`).
-      const dispRows = this.crtc.rows, blankRows = this.crtc.vblankRows;
-      const dispFrac = dispRows > 0 ? dispRows / (dispRows + blankRows) : 0.86;
-      const vrtc = this.tInFrame > this.frameT * dispFrac;
+      const vrtc = this.tInFrame > this.frameT * this._dispFrac();
       // b2 = CMT carrier-detect: high while the tape is parked on a MARK
       let cmt = 0;
       if (this.tape) { this.tape.pump(this._tapeNow()); cmt = this.tape.carrier() ? 0x04 : 0; }
@@ -591,6 +589,14 @@ export class Pc8801Machine {
   // So every access to FCh-FFh is a synchronisation point: run the sub up to
   // the main's current time *before* touching the latches. Slices still bound
   // how far the two drift while neither is talking.
+  // Fraction of the frame spent displaying, from what the CRTC was actually
+  // programmed with. Both the polled VRTC bit and the VSYNC interrupt derive
+  // from this one number so they can never disagree.
+  _dispFrac() {
+    const r = this.crtc.rows, b = this.crtc.vblankRows;
+    return r > 0 ? r / (r + b) : 0.86;
+  }
+
   _syncSub() {
     if (!this.sub) return;
     const dt = this.tInFrame - this._subMark;
@@ -608,6 +614,10 @@ export class Pc8801Machine {
     // so without these 10 ticks per frame the machine halts forever
     const timerPeriod = this.frameT / 10;
     let nextTimer = this.tInFrame + timerPeriod;
+    // The display-period end, in T-states — the same boundary port 40h's VRTC
+    // bit is derived from, so the interrupt and the polled bit agree.
+    const vsyncAt = this.frameT * this._dispFrac();
+    this._vsyncFired = false;
     // raster-accurate text fetch: space the CRTC's per-row DMA + palette
     // snapshot across the frame, so mid-frame VRAM/palette rewrites land on the
     // rows actually scanning at that moment.
@@ -648,6 +658,20 @@ export class Pc8801Machine {
           if (this.intMaskBits & 1) this.intPending |= 1 << 2; // RTC, source 2
           nextTimer += timerPeriod;
         }
+        // VSYNC fires on the VRTC *rising edge* — the end of the display
+        // period — not at the end of blanking. The µPD3301's end-of-screen
+        // interrupt and the VRTC bit a program polls at port 40h are the same
+        // event on real hardware, so raising the interrupt a whole blanking
+        // period late makes a handler that reads port 40h see the opposite
+        // answer from what the interrupt implied. Two independent reviews
+        // landed on this from different directions: a datasheet reading of
+        // µPD3301 end-of-screen timing, and a behavioural analysis that put
+        // "the phase model of time" ahead of the 8255 as the shared root of
+        // the remaining divergences. (docs/review/2026-08-10-*.md)
+        if (!this._vsyncFired && this.tInFrame >= vsyncAt) {
+          this._vsyncFired = true;
+          if (this.intMaskBits & 2) this.intPending |= 1 << 1; // VSYNC, source 1
+        }
         this._serviceInterrupts();
       }
       if (this.sub) {
@@ -680,7 +704,7 @@ export class Pc8801Machine {
       this._crtcRow++;
     }
     this.crtc.endFrame();
-    if (this.intMaskBits & 2) this.intPending |= 1 << 1; // VSYNC, source 1
+    // VSYNC was raised at the display-period end above, not here.
     this.frame++;
     return this;
   }
