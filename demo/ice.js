@@ -1,23 +1,25 @@
-// ice — an ICE-style debugger that clamps onto a *live* machine in another
-// window. demo/ice.html opens from machine.html and grabs
-// window.opener.__machine; everything here works from the outside: no core
-// file is touched, the hooks are method wraps installed at attach() and
-// removed at detach().
+// ice — the browser face of the ICE. demo/ice.html opens from machine.html and
+// grabs window.opener.__machine; every measurement underneath is icecore.js,
+// which is pure and knows nothing about a DOM.
 //
-// The wrap trick: machine.stepFrame and cpu.step are replaced on the machine
-// *instance*. While paused, stepFrame returns immediately, so the host page's
-// rAF loop spins without advancing the world (its update(dt) still drains the
-// accumulator — no catch-up burst on resume). A breakpoint fires inside
-// cpu.step by throwing a sentinel that the stepFrame wrap catches — that
-// aborts the frame mid-slice, exactly what an ICE does when it yanks WAIT.
+// What lives here and what does not (issue #37): this file owns *panes* —
+// laying out registers, disassembly, the hex dump, the timeline tree, the label
+// notebook, the assembler pane. It owns nothing that observes the machine. All
+// of that (the step/stepFrame wraps, breakpoints, watchpoints, I/O breaks, the
+// trace ring, the shadow call stack, the profiler, the recorders) moved to
+// ../icecore.js so tools/ice.mjs can run the same instrumentation headless.
 //
-// Breakpoints are per-CPU (main / FDD sub board) and optionally conditional:
-// the condition is a JS expression compiled once with new Function, seeing
-// registers (a f b c d e h l af bc de hl ix iy sp pc i r im iff1) and
-// mem(addr). A condition that throws disables its breakpoint and reports —
-// better than silently breaking (or not breaking) forever.
+// The wrap trick, for readers who used to find it here: machine.stepFrame and
+// cpu.step are replaced on the machine *instance*. While paused, stepFrame
+// returns immediately, so the host page rAF loop spins without advancing the
+// world. A breakpoint fires inside cpu.step by throwing a sentinel the
+// stepFrame wrap catches — that aborts the frame mid-slice, exactly what an ICE
+// does when it yanks WAIT. See icecore.js for the rest.
+//
+// Time travel (snapshot tree, branching, replay) stays here because it is a
+// *view* built on core-provided snapshot()/restore() plus the input log the
+// core records for us.
 
-import { disasm } from '../z80dis.js';
 import { assemble } from '../z80asm.js';
 import { analyze, exportSource } from '../z80anal.js';
 import { PORTS_PC88_MAIN, PORTS_PC88_SUB } from '../z80anal.js';
@@ -27,573 +29,18 @@ import {
   parsePattern, searchBytes, ChangeSearch, textVramModel, attrShort,
   thinTimeline, timelineView,
 } from './ice-tools.js';
+import {
+  BREAK, IceController, hex, parseNum, compileCond, compileAccessCond, compileCondFor,
+  writeReg, REG_FIELDS, regsModel, disasmList, hexDump,
+} from '../icecore.js';
+import { Z80_ARCH } from '../icearch.js';
+import { fromLabelMap, stringify as analysisStringify, hashBytes } from '../analysisdb.js';
 
-export const BREAK = Symbol('ice-break');
-
-export const hex = (v, w) => (v ?? 0).toString(16).toUpperCase().padStart(w, '0');
-
-export function parseNum(s) {
-  // ICE culture: bare digits are hex. 0x…, …h, and #decimal also accepted.
-  if (typeof s !== 'string') return null;
-  const x = s.trim();
-  if (!x) return null;
-  let m;
-  if ((m = /^0[xX]([0-9A-Fa-f]+)$/.exec(x))) return parseInt(m[1], 16);
-  if ((m = /^([0-9A-Fa-f]+)[hH]$/.exec(x))) return parseInt(m[1], 16);
-  if ((m = /^#([0-9]+)$/.exec(x))) return parseInt(m[1], 10);
-  if ((m = /^([0-9A-Fa-f]+)$/.exec(x))) return parseInt(m[1], 16);
-  return null;
-}
-
-export function compileCond(cond) {
-  // new Function: compiled once, no scope capture — the expression only sees
-  // the registers and mem() we hand it on each check
-  return new Function(
-    'a', 'f', 'b', 'c', 'd', 'e', 'h', 'l', 'af', 'bc', 'de', 'hl',
-    'ix', 'iy', 'sp', 'pc', 'i', 'r', 'im', 'iff1', 'mem',
-    `return (${cond});`
-  );
-}
-
-// watch/IO-break conditions additionally see the access itself: value, and
-// addr (the address or port that was touched)
-export function compileAccessCond(cond) {
-  return new Function(
-    'value', 'addr',
-    'a', 'f', 'b', 'c', 'd', 'e', 'h', 'l', 'af', 'bc', 'de', 'hl',
-    'ix', 'iy', 'sp', 'pc', 'i', 'r', 'im', 'iff1', 'mem',
-    `return (${cond});`
-  );
-}
-
-export class IceController {
-  constructor() {
-    this.machine = null;
-    this.paused = false;
-    this.hit = null;
-    this.cpus = [];
-    this._origStepFrame = null;
-    this._origKeys = null;
-    this.replaying = false; // breakpoints hold their fire during a replay
-    this.onInput = null; // (type, frame, row, bit) — the time-travel input log
-    // set inside a bus callback mid-instruction; the step wrap turns it into
-    // a clean break AFTER the instruction completes (never abort mid-opcode —
-    // that would leave the CPU half-executed and determinism in pieces)
-    this.pendingBreak = null;
-    this._accessId = 0;
-  }
-
-  cpu(name) { return this.cpus.find((c) => c.name === name) ?? null; }
-
-  attach(machine) {
-    this.detach();
-    this.machine = machine;
-    this.paused = false;
-    this.hit = null;
-    this.cpus = [];
-    const self = this;
-    // memory access adapts to whichever machine shape we got:
-    // Pc8801Machine has readMem/writeMem (bank-aware), Pc8001Machine
-    // exposes the flat text-system memory
-    const mainRead = typeof machine.readMem === 'function'
-      ? (a) => machine.readMem(a & 0xffff)
-      : (a) => machine.sys?.memory?.[a & 0xffff] ?? 0xff;
-    const mainWrite = typeof machine.writeMem === 'function'
-      ? (a, v) => machine.writeMem(a & 0xffff, v & 0xff)
-      : (a, v) => { if (machine.sys?.memory) machine.sys.memory[a & 0xffff] = v & 0xff; };
-    if (machine.cpu) {
-      this._addCpu('main', machine.cpu, mainRead, mainWrite, {
-        post: () => machine._serviceInterrupts?.(), // mirror stepFrame's per-step IRQ check
-      });
-    }
-    if (machine.sub?.cpu) {
-      this._addCpu('sub', machine.sub.cpu,
-        (a) => machine.sub.mem[a & 0x7fff] ?? 0xff,
-        (a, v) => { machine.sub.mem[a & 0x7fff] = v & 0xff; },
-        { pre: () => { if (machine.sub.fdc?.intLine) machine.sub.cpu.intRequest(0x00); } }); // same as Pc80s31.run
-    }
-    if (typeof machine.stepFrame === 'function') {
-      const orig = machine.stepFrame;
-      this._origStepFrame = orig;
-      machine.stepFrame = function (...args) {
-        if (self.paused) return machine; // frozen: the host rAF loop spins harmlessly
-        try { return orig.apply(this, args); }
-        catch (e) { if (e !== BREAK) throw e; return machine; }
-      };
-    }
-    // input taps: replaying a deterministic machine only works if the key
-    // events are re-injected on the same frames they originally landed on
-    if (typeof machine.keyDown === 'function' && typeof machine.keyUp === 'function') {
-      const kd = machine.keyDown, ku = machine.keyUp;
-      this._origKeys = { kd, ku };
-      machine.keyDown = function (row, bit) {
-        self.onInput?.(0, machine.frame, row, bit);
-        return kd.call(machine, row, bit);
-      };
-      machine.keyUp = function (row, bit) {
-        self.onInput?.(1, machine.frame, row, bit);
-        return ku.call(machine, row, bit);
-      };
-    }
-  }
-
-  detach() {
-    if (this.machine) {
-      if (this._origStepFrame) this.machine.stepFrame = this._origStepFrame;
-      if (this._origKeys) {
-        this.machine.keyDown = this._origKeys.kd;
-        this.machine.keyUp = this._origKeys.ku;
-      }
-    }
-    for (const c of this.cpus) {
-      c.cpu.step = c.origStep;
-      if (c.origBus) { // untap the bus
-        c.origBus.bus.read = c.origBus.read;
-        c.origBus.bus.write = c.origBus.write;
-        c.origBus.bus.in = c.origBus.in;
-        c.origBus.bus.out = c.origBus.out;
-      }
-    }
-    this._origStepFrame = null;
-    this._origKeys = null;
-    this.machine = null;
-    this.cpus = [];
-    this.paused = false; // never leave a closed debugger holding the machine frozen
-    this.hit = null;
-    this.pendingBreak = null;
-  }
-
-  rawKey(type, row, bit) { // replay injection — bypasses the recording tap
-    if (!this._origKeys || !this.machine) return;
-    (type === 0 ? this._origKeys.kd : this._origKeys.ku).call(this.machine, row, bit);
-  }
-
-  _addCpu(name, cpu, read, write, irq = {}) {
-    const self = this;
-    const origStep = cpu.step;
-    const TRACE_CAP = 4096;
-    const entry = {
-      name, cpu, read, write, origStep, irq,
-      bps: new Map(), skipOnce: -1,
-      watches: [], // {id, lo, hi, r, w, cond, fn, enabled, error}
-      iobps: [], // {id, lo, hi, in, out, cond, fn, enabled, error}
-      tTotal: 0, // T-states executed since attach (clock / wall-time display)
-      stackOn: true, // shadow call stack (backtrace / step-out) — always cheapish
-      profOn: false, // T accounting into the routines map
-      profData: { stack: [], routines: new Map(), rootSelf: 0 },
-      traceOn: true, // instruction trace ring
-      trace: {
-        cap: TRACE_CAP, n: 0,
-        pc: new Uint16Array(TRACE_CAP), af: new Uint16Array(TRACE_CAP),
-        bc: new Uint16Array(TRACE_CAP), de: new Uint16Array(TRACE_CAP),
-        hl: new Uint16Array(TRACE_CAP), sp: new Uint16Array(TRACE_CAP),
-        frame: new Uint32Array(TRACE_CAP),
-      },
-      // executed-PC coverage (main only) — feeds memmap.estimateUnused
-      coverage: name === 'main' ? new Uint8Array(0x10000) : null,
-      origBus: null,
-    };
-
-    // bus taps: watchpoints and I/O breaks see every CPU access without the
-    // core knowing. ICE's own peeks (hex dump, disasm) use entry.read, which
-    // bypasses the bus — the debugger never trips its own wire. DMA pulls go
-    // through dmac.readMemory, also outside the bus: watchpoints are a CPU
-    // instrument, by design.
-    const bus = cpu.bus;
-    if (bus) {
-      entry.origBus = { bus, read: bus.read, write: bus.write, in: bus.in, out: bus.out };
-      bus.read = (a) => {
-        const v = entry.origBus.read(a);
-        if (entry.watches.length && !self.replaying) self._accessCheck(entry, entry.watches, a & 0xffff, v & 0xff, 'r', 'watch');
-        return v;
-      };
-      bus.write = (a, v) => {
-        entry.origBus.write(a, v);
-        if (entry.watches.length && !self.replaying) self._accessCheck(entry, entry.watches, a & 0xffff, v & 0xff, 'w', 'watch');
-      };
-      bus.in = (p) => {
-        const v = entry.origBus.in(p);
-        if (entry.iobps.length && !self.replaying) self._accessCheck(entry, entry.iobps, p & 0xff, v & 0xff, 'in', 'io');
-        return v;
-      };
-      bus.out = (p, v) => {
-        entry.origBus.out(p, v);
-        if (entry.iobps.length && !self.replaying) self._accessCheck(entry, entry.iobps, p & 0xff, v & 0xff, 'out', 'io');
-      };
-    }
-
-    cpu.step = function () {
-      if (!self.replaying) { // breakpoints hold their fire during a replay
-        const bp = entry.bps.get(cpu.pc);
-        if (bp && bp.enabled) {
-          if (entry.skipOnce === cpu.pc) entry.skipOnce = -1; // resuming off this bp
-          else {
-            let fire = true;
-            if (bp.fn) {
-              try {
-                fire = !!bp.fn(cpu.a, cpu.f, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l,
-                  cpu.af, cpu.bc, cpu.de, cpu.hl, cpu.ix, cpu.iy, cpu.sp, cpu.pc,
-                  cpu.i, cpu.r, cpu.im, cpu.iff1, entry.read);
-              } catch (e) {
-                bp.enabled = false; // a broken condition must not wedge the machine
-                bp.error = String(e?.message ?? e);
-                fire = false;
-              }
-            }
-            if (fire) {
-              self.paused = true;
-              self.hit = { cpu: name, pc: cpu.pc };
-              entry.skipOnce = -1;
-              throw BREAK;
-            }
-          }
-        } else if (entry.skipOnce !== cpu.pc) entry.skipOnce = -1;
-      }
-      const pcB = cpu.pc, spB = cpu.sp;
-      if (entry.traceOn) { // ring: pre-execution state of every instruction
-        const tr = entry.trace, i2 = tr.n % tr.cap;
-        tr.pc[i2] = pcB;
-        tr.af[i2] = cpu.af; tr.bc[i2] = cpu.bc; tr.de[i2] = cpu.de;
-        tr.hl[i2] = cpu.hl; tr.sp[i2] = spB;
-        tr.frame[i2] = self.machine?.frame ?? 0;
-        tr.n++;
-      }
-      if (entry.coverage) entry.coverage[pcB] = 1;
-      // shadow call stack: detect CALL/RST before executing, confirm after
-      // (conditional calls only push when actually taken). Unwind by SP, so
-      // RET variants / popped return addresses / interrupts all resolve
-      // without opcode bookkeeping.
-      let target = -1, retTo = 0;
-      if (entry.stackOn) {
-        const op = entry.read(pcB) & 0xff;
-        if (op === 0xcd || (op & 0xc7) === 0xc4) {
-          target = (entry.read((pcB + 1) & 0xffff) | (entry.read((pcB + 2) & 0xffff) << 8)) & 0xffff;
-          retTo = (pcB + 3) & 0xffff;
-        } else if ((op & 0xc7) === 0xc7) { target = op & 0x38; retTo = (pcB + 1) & 0xffff; } // RST
-      }
-      const t = origStep.call(cpu);
-      entry.tTotal += t;
-      if (entry.stackOn) {
-        const P = entry.profData;
-        const top = P.stack[P.stack.length - 1];
-        if (top) top.self += t; else P.rootSelf += t;
-        if (target >= 0 && cpu.pc === target && cpu.sp === ((spB - 2) & 0xffff) && P.stack.length < 512) {
-          P.stack.push({ entry: target, sp: cpu.sp, retTo, self: 0, child: 0 });
-          if (entry.profOn) {
-            let r = P.routines.get(target);
-            if (!r) { r = { calls: 0, self: 0, total: 0 }; P.routines.set(target, r); }
-            r.calls++;
-          }
-        }
-        while (P.stack.length) { // unwind every frame whose return slot is gone
-          const f = P.stack[P.stack.length - 1];
-          const d = (cpu.sp - f.sp) & 0xffff;
-          if (d < 2 || d >= 0x8000) break;
-          P.stack.pop();
-          const tot = f.self + f.child;
-          if (entry.profOn) {
-            let r = P.routines.get(f.entry);
-            if (!r) { r = { calls: 0, self: 0, total: 0 }; P.routines.set(f.entry, r); }
-            r.self += f.self;
-            r.total += tot;
-          }
-          const nt = P.stack[P.stack.length - 1];
-          if (nt) nt.child += tot;
-        }
-      }
-      if (self.pendingBreak) { // a watch/IO tap fired inside this instruction
-        const pb = self.pendingBreak;
-        self.pendingBreak = null;
-        pb.pc = pcB; // the instruction that did the deed
-        self.paused = true;
-        self.hit = pb;
-        throw BREAK;
-      }
-      return t;
-    };
-    this.cpus.push(entry);
-  }
-
-  // shared checker for watchpoints (rw: r/w) and I/O breaks (rw: in/out)
-  _accessCheck(entry, list, addr, value, rw, type) {
-    if (this.pendingBreak) return; // first hit of the instruction wins
-    for (const w of list) {
-      if (!w.enabled) continue;
-      if (!w[rw]) continue;
-      if (addr < w.lo || addr > w.hi) continue;
-      if (w.fn) {
-        const cpu = entry.cpu;
-        let ok = false;
-        try {
-          ok = !!w.fn(value, addr,
-            cpu.a, cpu.f, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l,
-            cpu.af, cpu.bc, cpu.de, cpu.hl, cpu.ix, cpu.iy, cpu.sp, cpu.pc,
-            cpu.i, cpu.r, cpu.im, cpu.iff1, entry.read);
-        } catch (e) {
-          w.enabled = false; // a broken condition must not wedge the machine
-          w.error = String(e?.message ?? e);
-          continue;
-        }
-        if (!ok) continue;
-      }
-      this.pendingBreak = { type, cpu: entry.name, addr, value, rw, id: w.id };
-      return;
-    }
-  }
-
-  _addAccessBreak(list, { lo, hi = null, cond = null, ...flags }) {
-    let fn = null;
-    if (cond) {
-      try { fn = compileAccessCond(cond); }
-      catch (e) { return { ok: false, error: String(e?.message ?? e) }; }
-    }
-    const id = ++this._accessId;
-    list.push({ id, lo: lo & 0xffff, hi: (hi ?? lo) & 0xffff, cond, fn, enabled: true, error: null, ...flags });
-    return { ok: true, id };
-  }
-
-  setWatch(name, { lo, hi = null, r = false, w = true, cond = null }) {
-    const c = this.cpu(name);
-    if (!c) return { ok: false, error: 'no such CPU' };
-    return this._addAccessBreak(c.watches, { lo, hi, cond, r, w });
-  }
-
-  setIoBreak(name, { lo, hi = null, dirIn = false, dirOut = true, cond = null }) {
-    const c = this.cpu(name);
-    if (!c) return { ok: false, error: 'no such CPU' };
-    return this._addAccessBreak(c.iobps, { lo: lo & 0xff, hi: (hi ?? lo) & 0xff, cond, in: dirIn, out: dirOut });
-  }
-
-  clearWatch(name, id) {
-    const c = this.cpu(name);
-    if (c) c.watches = c.watches.filter((x) => x.id !== id);
-  }
-
-  clearIoBreak(name, id) {
-    const c = this.cpu(name);
-    if (c) c.iobps = c.iobps.filter((x) => x.id !== id);
-  }
-
-  // shadow-stack backtrace, innermost first: [{entry, retTo, sp}]
-  backtrace(name) {
-    const c = this.cpu(name);
-    if (!c) return [];
-    return [...c.profData.stack].reverse().map((f) => ({ entry: f.entry, retTo: f.retTo ?? 0, sp: f.sp }));
-  }
-
-  // run until the current shadow frame returns. Falls back to the SP
-  // heuristic (run until SP rises above here) when the stack is empty —
-  // e.g. right after attach, before any CALL was observed.
-  stepOut(name) {
-    const c = this.cpu(name);
-    if (!c) return { done: false };
-    const depth0 = c.profData.stack.length;
-    const sp0 = c.cpu.sp;
-    const hit0 = this.hit;
-    let budget = 2_000_000;
-    let first = true;
-    while (budget-- > 0) {
-      // the first step walks off the breakpoint we're parked on; after
-      // that, breakpoints stay armed on the way out
-      this.stepInto(name, first);
-      first = false;
-      if (this.hit !== hit0) return { done: false, brk: true };
-      if (depth0 > 0) {
-        if (c.profData.stack.length < depth0) return { done: true };
-      } else {
-        const d = (c.cpu.sp - sp0) & 0xffff;
-        if (d >= 2 && d < 0x8000) return { done: true }; // return slot consumed
-      }
-    }
-    return { done: false, budget: false };
-  }
-
-  // trace ring, oldest→newest: [{pc, af, bc, de, hl, sp, frame}]
-  traceView(name, count = 32) {
-    const c = this.cpu(name);
-    if (!c) return [];
-    const tr = c.trace;
-    const n = Math.min(count, tr.n, tr.cap);
-    const out = [];
-    for (let k = tr.n - n; k < tr.n; k++) {
-      const i = k % tr.cap;
-      out.push({
-        pc: tr.pc[i], af: tr.af[i], bc: tr.bc[i], de: tr.de[i],
-        hl: tr.hl[i], sp: tr.sp[i], frame: tr.frame[i],
-      });
-    }
-    return out;
-  }
-
-  traceClear(name) {
-    const c = this.cpu(name);
-    if (c) c.trace.n = 0;
-  }
-
-  profReset(name) {
-    const c = this.cpu(name);
-    if (c) c.profData = { stack: [], routines: new Map(), rootSelf: 0 };
-  }
-
-  setBreak(name, addr, cond = null) {
-    const c = this.cpu(name);
-    if (!c) return { ok: false, error: 'no such CPU' };
-    let fn = null;
-    if (cond) {
-      try { fn = compileCond(cond); }
-      catch (e) { return { ok: false, error: String(e?.message ?? e) }; }
-    }
-    c.bps.set(addr & 0xffff, { cond, fn, enabled: true, error: null });
-    return { ok: true };
-  }
-
-  clearBreak(name, addr) { this.cpu(name)?.bps.delete(addr & 0xffff); }
-
-  pause() { this.paused = true; }
-
-  resume() {
-    // stepping off a breakpoint: give the instruction under the cursor one
-    // free pass, or we'd break forever on the same spot
-    for (const c of this.cpus) if (c.bps.has(c.cpu.pc)) c.skipOnce = c.cpu.pc;
-    this.paused = false;
-    this.hit = null;
-  }
-
-  stepInto(name, skipBp = true) {
-    // goes through the wrapped step so T-states and the profiler see manual
-    // steps too; skipOnce keeps a breakpoint under the cursor quiet
-    const c = this.cpu(name);
-    if (!c) return 0;
-    if (skipBp) c.skipOnce = c.cpu.pc;
-    c.irq.pre?.();
-    let t = 0;
-    try { t = c.cpu.step(); } catch (e) { if (e !== BREAK) throw e; }
-    c.irq.post?.();
-    return t;
-  }
-
-  stepOver(name) {
-    const c = this.cpu(name);
-    if (!c) return { done: false };
-    const d = disasm(c.read, c.cpu.pc);
-    if (!/^(CALL|RST)\b/.test(d.text)) { this.stepInto(name); return { done: true }; }
-    const target = (c.cpu.pc + d.len) & 0xffff;
-    const hit0 = this.hit;
-    this.stepInto(name);
-    let budget = 2_000_000; // a runaway callee must not hang the debugger
-    while (c.cpu.pc !== target && budget-- > 0) {
-      this.stepInto(name, false); // callee breakpoints stay armed
-      if (this.hit !== hit0) return { done: false, brk: true };
-    }
-    return { done: c.cpu.pc === target, budget: budget > 0 };
-  }
-
-  // deterministic re-execution: restore was done by the caller, this runs
-  // forward to targetFrame re-injecting the logged inputs on their frames
-  replayTo(targetFrame, inputLog) {
-    const m = this.machine;
-    if (!m || !this._origStepFrame) return;
-    this.replaying = true;
-    this.paused = false;
-    try {
-      let guard = 100000;
-      while (m.frame < targetFrame && guard-- > 0) {
-        for (const ev of inputLog) if (ev[0] === m.frame) this.rawKey(ev[1], ev[2], ev[3]);
-        try { this._origStepFrame.call(m); } catch (e) { if (e !== BREAK) throw e; }
-      }
-    } finally {
-      this.replaying = false;
-      this.paused = true;
-    }
-  }
-
-  frameStep() {
-    if (!this._origStepFrame || !this.machine) return;
-    for (const c of this.cpus) if (c.bps.has(c.cpu.pc)) c.skipOnce = c.cpu.pc;
-    this.paused = false;
-    try { this._origStepFrame.call(this.machine); }
-    catch (e) { if (e !== BREAK) throw e; }
-    this.paused = true;
-  }
-}
-
-// ---- pure view models --------------------------------------------------------
-
-export function writeReg(cpu, name, v) {
-  const n = String(name).toLowerCase();
-  if (['af', 'bc', 'de', 'hl', 'ix', 'iy', 'sp', 'pc'].includes(n)) { cpu[n] = v & 0xffff; return true; }
-  if (n === 'i' || n === 'r') { cpu[n] = v & 0xff; return true; }
-  if (n === 'im') { cpu.im = Math.min(2, Math.max(0, v | 0)); return true; }
-  return false;
-}
-
-export const REG_FIELDS = [
-  ['PC', 4], ['SP', 4], ['AF', 4], ['BC', 4], ['DE', 4], ['HL', 4],
-  ['IX', 4], ['IY', 4], ['I', 2], ['R', 2], ['IM', 1],
-];
-
-export function regsModel(cpu) {
-  const s = cpu.getState();
-  const val = {
-    PC: s.pc, SP: s.sp, AF: (s.a << 8) | s.f, BC: (s.b << 8) | s.c,
-    DE: (s.d << 8) | s.e, HL: (s.h << 8) | s.l, IX: s.ix, IY: s.iy,
-    I: s.i, R: s.r, IM: s.im,
-  };
-  const flags = 'SZ5H3PNC'.split('').map((ch, i) => ((s.f & (0x80 >> i)) ? ch : '·')).join('');
-  const sh = s.shadow;
-  return {
-    val,
-    flags,
-    info: `F ${flags}  IFF ${s.iff1 ? 1 : 0}${s.iff2 ? 1 : 0}${s.halted ? '  ⏸HALT' : ''}`,
-    shadow: `AF' ${hex((sh.a << 8) | sh.f, 4)}  BC' ${hex((sh.b << 8) | sh.c, 4)}`
-      + `  DE' ${hex((sh.d << 8) | sh.e, 4)}  HL' ${hex((sh.h << 8) | sh.l, 4)}`,
-  };
-}
-
-// disassembly window around pc: walk back a few candidate offsets until one
-// lands exactly on pc (instructions are ≤4 bytes, so a resync is usually
-// found), then decode forward
-export function disasmList(read, pc, count = 16, back = 6, opts = {}) {
-  pc &= 0xffff;
-  let pre = [];
-  for (let off = Math.min(back * 4, 32); off >= 1; off--) {
-    let a = (pc - off) & 0xffff;
-    const rows = [];
-    while (a !== pc && ((pc - a) & 0xffff) <= off) {
-      const d = disasm(read, a, opts);
-      rows.push({ addr: a, text: d.text, len: d.len, bytes: d.bytes, current: false });
-      a = (a + d.len) & 0xffff;
-    }
-    if (a === pc && rows.length > pre.length) {
-      pre = rows.slice(-back);
-      if (pre.length >= back) break;
-    }
-  }
-  const rows = pre;
-  let a = pc;
-  while (rows.length < count) {
-    const d = disasm(read, a, opts);
-    rows.push({ addr: a, text: d.text, len: d.len, bytes: d.bytes, current: a === pc });
-    a = (a + d.len) & 0xffff;
-  }
-  if (opts.label) for (const r of rows) r.label = opts.label(r.addr) ?? null;
-  return rows;
-}
-
-export function hexDump(read, addr, rows = 16) {
-  const lines = [];
-  for (let r = 0; r < rows; r++) {
-    const base = (addr + r * 16) & 0xffff;
-    let hx = '', asc = '';
-    for (let i = 0; i < 16; i++) {
-      const v = read((base + i) & 0xffff) & 0xff;
-      hx += hex(v, 2) + (i === 7 ? '  ' : ' ');
-      asc += v >= 0x20 && v < 0x7f ? String.fromCharCode(v) : '·';
-    }
-    lines.push(`${hex(base, 4)}: ${hx} ${asc}`);
-  }
-  return lines.join('\n');
-}
+// Re-exported so demo/ice.html, tests and any future pane keep one import site.
+export {
+  BREAK, IceController, hex, parseNum, compileCond, compileAccessCond, compileCondFor,
+  writeReg, REG_FIELDS, regsModel, disasmList, hexDump,
+};
 
 // ---- the page ------------------------------------------------------------------
 // ---- the page ------------------------------------------------------------------
@@ -615,7 +62,10 @@ export function mountIcePage(doc, env) {
     active: 'main',
     memAddr: 0,
     syntax: 'zilog',
-    savedBps: { main: new Map(), sub: new Map() }, // survive machine reboots
+    // Breakpoints survive machine reboots. Keyed by the *probed* CPU name, so a
+    // board with a third CPU (the Mega Drive's sound Z80) gets its own drawer
+    // instead of writing into an undefined one.
+    savedBps: {},
     labels: new Map(), // addr → name: user labeling + merged asm symbols
     labelsKey: null,
     lastAsm: null,
@@ -644,7 +94,7 @@ export function mountIcePage(doc, env) {
     'asrc', 'aorg', 'basm', 'bsetpc', 'brun', 'aout', 'anal',
     'btundo', 'btredo', 'btsnap', 'tree', 'ttinfo',
     'bprof', 'bprofreset', 'prof', 'stack',
-    'laddr', 'lname', 'bladd', 'blexport', 'blimport',
+    'laddr', 'lname', 'bladd', 'blexport', 'blexpanal', 'blimport',
     'exps', 'expe', 'expo', 'bexp', 'bexpsave', 'bexpwrite', 'exptext', 'pinnote',
     'bpromasm', 'bpromexp',
     'walo', 'wahi', 'war', 'waw', 'wacond', 'bwadd', 'wlist',
@@ -670,21 +120,32 @@ export function mountIcePage(doc, env) {
   };
 
   // --- register cells (click to edit while paused) -------------------------
+  // Built from the architecture descriptor, not from a fixed Z80 list: the
+  // sub-board is a Z80 today, but a 68000 or 6502 tab has a different set and
+  // the pane has to follow it. Rebuilt only when the arch actually changes.
   const regCells = new Map();
-  for (const [name, width] of REG_FIELDS) {
-    const cell = doc.createElement('span');
-    cell.className = 'regcell';
-    cell.onclick = () => beginRegEdit(name, width, cell);
-    els.regs.appendChild(cell);
-    regCells.set(name, cell);
+  let regArch = null;
+  function buildRegCells(arch) {
+    if (regArch === arch) return;
+    regArch = arch;
+    regCells.clear();
+    els.regs.textContent = '';
+    for (const [name, width] of arch?.regFields ?? REG_FIELDS) {
+      const cell = doc.createElement('span');
+      cell.className = 'regcell';
+      cell.onclick = () => beginRegEdit(name, width, cell);
+      els.regs.appendChild(cell);
+      regCells.set(name, cell);
+    }
   }
+  buildRegCells(null);
 
   function beginRegEdit(name, width, cell) {
     if (!ctrl.paused || state.editing) return; // live registers are a moving target
     const c = activeCpu();
     if (!c) return;
     const input = doc.createElement('input');
-    input.value = hex(regsModel(c.cpu).val[name], width);
+    input.value = hex(regsModel(c.cpu, c.arch).val[name], width);
     input.size = width + 1;
     input.className = 'regedit';
     const commit = (apply) => {
@@ -692,7 +153,7 @@ export function mountIcePage(doc, env) {
       state.editing = null;
       if (apply) {
         const v = parseNum(input.value);
-        if (v !== null) writeReg(c.cpu, name, v);
+        if (v !== null) writeReg(c.cpu, name, v, c.arch);
       }
       try { cell.removeChild(input); } catch { /* already re-rendered */ }
       renderAll();
@@ -891,8 +352,9 @@ export function mountIcePage(doc, env) {
 
   // --- rendering ---------------------------------------------------------------
   function renderRegs(c) {
-    const m = regsModel(c.cpu);
-    for (const [name, width] of REG_FIELDS) {
+    buildRegCells(c.arch);
+    const m = regsModel(c.cpu, c.arch);
+    for (const [name, width] of c.arch.regFields) {
       if (state.editing?.field === name) continue; // don't clobber the input
       regCells.get(name).textContent = `${name} ${hex(m.val[name], width)}`;
     }
@@ -947,8 +409,8 @@ export function mountIcePage(doc, env) {
     return lines.join('\n');
   }
   function renderDis(c) {
-    const center = state.disFocus ?? c.cpu.pc; // a clicked backtrace frame wins
-    const rows = disasmList(c.read, center, 20, 6, { syntax: state.syntax, label: labelOf });
+    const center = state.disFocus ?? c.arch.pcOf(c.cpu); // a clicked backtrace frame wins
+    const rows = disasmList(c.read, center, 20, 6, { arch: c.arch, syntax: state.syntax, label: labelOf });
     let i = 0;
     for (const r of rows) {
       if (r.label) {
@@ -972,7 +434,8 @@ export function mountIcePage(doc, env) {
   }
 
   function renderMem(c) {
-    els.mem.textContent = hexDump(c.read, state.memAddr, 16);
+    els.mem.textContent = hexDump(c.read, state.memAddr, 16,
+      { mask: c.arch.addrMask, width: c.arch.addrMask > 0xffff ? 6 : 4 });
     els.memregion.textContent = regionText(state.memAddr); // memmap annotation
     els.memregion.className = 'region' + (/approx/.test(els.memregion.textContent) ? ' approx' : '');
   }
@@ -1045,10 +508,10 @@ export function mountIcePage(doc, env) {
       row.className = 'listrow';
       let text;
       try {
-        const cpu = c.cpu;
-        const v = wx.fn(cpu.a, cpu.f, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l,
-          cpu.af, cpu.bc, cpu.de, cpu.hl, cpu.ix, cpu.iy, cpu.sp, cpu.pc,
-          cpu.i, cpu.r, cpu.im, cpu.iff1, c.read);
+        // The argument list comes from the architecture, so an expression
+        // compiled for the sub tab and one compiled for a 68000 tab each see
+        // their own register names. A stale expression just throws and says so.
+        const v = wx.fn(...c.arch.condValues(c.cpu, c.read));
         text = typeof v === 'number' ? `${wx.expr} = ${hex(v & 0xffff, v > 0xff ? 4 : 2)} (${v})` : `${wx.expr} = ${v}`;
       } catch (e) { text = `${wx.expr} — ${String(e?.message ?? e)}`; }
       row.textContent = text;
@@ -1066,7 +529,7 @@ export function mountIcePage(doc, env) {
       const row = doc.createElement('div');
       row.className = 'listrow';
       let text = '';
-      try { text = disasm(c.read, r.pc, { syntax: state.syntax }).text; } catch { text = '?'; }
+      try { text = c.arch.disasm ? c.arch.disasm(c.read, r.pc, { syntax: state.syntax }).text : ''; } catch { text = '?'; }
       row.textContent = `f=${String(r.frame).padStart(6)} ${hex(r.pc, 4)} ${text.padEnd(18)}`
         + ` AF=${hex(r.af, 4)} BC=${hex(r.bc, 4)} DE=${hex(r.de, 4)} HL=${hex(r.hl, 4)} SP=${hex(r.sp, 4)}`;
       row.onclick = () => traceJump(r);
@@ -1323,14 +786,15 @@ export function mountIcePage(doc, env) {
     const cond = els.bpcond.value.trim() || null;
     const c = activeCpu();
     if (!c) return;
-    const saved = state.savedBps[c.name];
-    if (c.bps.has(addr & 0xffff) && !cond) { // toggle off
+    const saved = (state.savedBps[c.name] ??= new Map());
+    const key = addr & c.arch.addrMask;
+    if (c.bps.has(key) && !cond) { // toggle off
       ctrl.clearBreak(c.name, addr);
-      saved.delete(addr & 0xffff);
+      saved.delete(key);
     } else {
       const r = ctrl.setBreak(c.name, addr, cond);
       if (!r.ok) { els.bplist.textContent = t('条件式エラー') + ': ' + r.error; return; }
-      saved.set(addr & 0xffff, cond);
+      saved.set(key, cond);
     }
     renderAll();
   };
@@ -1426,7 +890,8 @@ export function mountIcePage(doc, env) {
   els.bwxadd.onclick = () => {
     const expr = els.wxexpr.value.trim();
     if (!expr) return;
-    try { state.watchExprs.push({ expr, fn: compileCond(expr) }); }
+    const ac = activeCpu();
+    try { state.watchExprs.push({ expr, fn: compileCondFor(ac?.arch ?? Z80_ARCH, expr) }); }
     catch (e) { els.wxlist.textContent = t('条件式エラー') + ': ' + String(e?.message ?? e); return; }
     els.wxexpr.value = '';
     renderAll();
@@ -1453,6 +918,53 @@ export function mountIcePage(doc, env) {
   els.blexport.onclick = () => {
     env.download?.('ice-labels.json', JSON.stringify([...state.labels], null, 1));
   };
+  // A second export port, in the shared analysis format (../analysisdb.js), so a
+  // session can leave here as a pull request instead of as a private JSON blob.
+  // Two things are deliberately NOT flattered on the way out:
+  // - the names go out as `guess`. They were typed by hand while stepping and
+  //   the DB kept no observation behind them; the format refuses to guess in the
+  //   reader's favour (raise them by hand once a trace backs them up).
+  // - the ROM identity IS exact, because that is the field that keeps these
+  //   labels off someone else's ROM revision.
+  function romHashOfMachine(m) {
+    const roles = {};
+    const put = (role, bytes) => { if (bytes?.length) roles[role] = hashBytes(bytes); };
+    put(kindOf(m) === 'pc8801' ? 'main' : 'rom',
+      m.romMain ?? m.sys?.memory?.subarray?.(0, m.romTop ?? 0));
+    put('ext', m.romExt);
+    if (m.sub?.mem) {
+      // the sub board mirrors a 2KB disk.rom four times over its 8KB space, so
+      // hash the 2KB prefix in that case — the value must match the FILE a
+      // reviewer can hash, not our mapping of it.
+      const mem = m.sub.mem;
+      let mirrored = true;
+      for (let i = 0; i < 0x800 && mirrored; i++) if (mem[i] !== mem[0x800 + i]) mirrored = false;
+      put('sub', mem.subarray(0, mirrored ? 0x800 : (m.sub.romTop ?? 0x2000)));
+    }
+    return roles;
+  }
+  if (els.blexpanal) els.blexpanal.onclick = () => {
+    const m = ctrl.machine;
+    if (!m) { els.bplist.textContent = t('マシン未接続'); return; }
+    const kind = kindOf(m);
+    const doc = fromLabelMap([...state.labels], {
+      machine: kind,
+      cpu: state.active,
+      title: `ICE label DB (${kind} / ${state.active})`,
+      romHash: romHashOfMachine(m),
+      generator: 'demo/ice.js label DB export',
+      unclassified: [{
+        reason: 'the label DB names only the addresses someone stopped at; nothing here claims anything about the rest of the address space',
+      }],
+      notes: [
+        'Exported from the ICE label DB. Every name is `guess`: the DB stores a name, not the observation behind it. Raise a name to `inferred`/`observed` by hand, and put the trace or the count in its evidence, before anyone leans on it.',
+        'Known hole: the ICE keeps ONE label map for both CPUs, so this file may contain addresses from the other address space than the `cpu` field says. Split it before committing under analysis/.',
+        'romHash is computed with the pure fallback algorithm (fnv1a64 over the ROM images this machine was built from). A document stamped only with sha256 cannot be compared against it — stamp both if you can.',
+      ].join('\n\n'),
+    });
+    env.download?.(`analysis-${kind}-${state.active}.json`, analysisStringify(doc));
+  };
+
   els.blimport.onchange = async (e) => {
     const f = e.target?.files?.[0];
     if (!f) return;

@@ -89,6 +89,11 @@ ICE設計 — デバッガ・時間旅行・アセンブラ・リバース用「
 （ラベル・ソース書き出し・検証付きリロケート）:
 [docs/ice-design.ja.md](./docs/ice-design.ja.md)。
 
+解析成果の共有形式（`analysisdb.js` / `analysis/<machine>/<slug>.json`）— ラベル・乱数
+マップ・調査記録を、**confidence と evidence と romHash つき**で PR として共有する。
+衝突は黙って上書きせず conflicts に残す:
+[docs/analysis-format.ja.md](./docs/analysis-format.ja.md)。
+
 各部品をライブラリとして使う（CRTレンダラー・ターミナル・マシン）:
 [docs/library.ja.md](./docs/library.ja.md)。
 
@@ -117,7 +122,7 @@ const { width, height, pixels } = sys.render({ cgrom }); // 0..7 の色インデ
 完全なシーケンスは `test.mjs` を見て。
 
 ```sh
-node --test              # 27ファイル・299ケースの決定論テスト
+node --test              # 決定論テスト一式（要 node>=24）
 python3 -m http.server   # リポジトリ直下で実行 → http://localhost:8000/demo/ を開く
 ```
 

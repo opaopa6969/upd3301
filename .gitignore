@@ -1,6 +1,12 @@
 node_modules/
 roms/*
 !roms/README.md
+
+# blargg's Game Boy test ROMs. Everything else in gbroms/ is committed because
+# it is MIT-licensed and redistributable; blargg's carry no licence at all, so
+# they are fetched on demand (node gbtools/fetch-blargg.mjs) and never
+# committed. The tests that use them skip when they are absent.
+gbroms/blargg/
 hw/gerber/
 
 # opn-scope demo performance data — large generated OPN register traces + audio
@@ -12,3 +18,7 @@ demo/*.mp3
 
 # per-user ROM/disk library written by serve.py /api/store (user dumps; never in git)
 userdata/
+
+# SingleStepTests 68000 vectors, fetched by m68ktools/fetch-tests.sh (~138 MB).
+# Reference data, regenerated upstream — never committed.
+m68k-tests/

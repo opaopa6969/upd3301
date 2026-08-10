@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { Z80 } from './z80.js';
 import { assemble } from './z80asm.js';
-import { IceController } from './demo/ice.js';
+import { IceController, mountIcePage } from './demo/ice.js';
 import {
   parsePattern, searchBytes, ChangeSearch, textVramModel, attrShort,
   thinTimeline, timelineView,
@@ -439,4 +439,108 @@ test('ice-tools: timelineView folds boring runs into counted gaps', () => {
   // expanding a gap reveals its nodes
   const rows2 = timelineView(t.nodes, root, { current: tipB, nearCurrent: 3, expanded: new Set(gaps[0].ids) });
   assert.ok(rows2.filter((r) => r.type === 'node').length > nodesShown.length, 'expansion shows more');
+});
+
+
+// ---- the browser pane, mounted headless (issue #37) --------------------------
+// After icecore.js was extracted, demo/ice.js is panes only. Nobody can see a
+// browser from here, so this is not a visual test — it is the "does the page
+// still mount, wire its handlers and render a full frame without throwing"
+// test, which is the failure mode a refactor actually causes.
+
+class FakeEl {
+  constructor(id) {
+    this.id = id; this.className = ""; this.value = ""; this.style = {};
+    this.children = []; this._text = ""; this.checked = false; this._addr = -1;
+  }
+  get textContent() { return this._text; }
+  set textContent(v) { this._text = String(v); this.children.length = 0; } // like the real thing: assigning text drops children
+  appendChild(c) { this.children.push(c); return c; }
+  removeChild(c) { this.children = this.children.filter((x) => x !== c); }
+  focus() {}
+}
+
+function fakeDoc() {
+  const els = new Map();
+  return {
+    els,
+    getElementById(id) {
+      if (!els.has(id)) els.set(id, new FakeEl(id));
+      return els.get(id);
+    },
+    createElement() { return new FakeEl(""); },
+  };
+}
+
+test("ice page: mounts, renders and drives a real machine with no DOM", () => {
+  const doc = fakeDoc();
+  const m = new Pc8001Machine({ rom: new Uint8Array(0x6000) }); // blank ROM: we are testing the wiring
+  let pending = null;
+  const page = mountIcePage(doc, {
+    getMachine: () => m,
+    openerAlive: () => true,
+    raf: (cb) => { pending = cb; },   // hand-cranked, so the loop cannot run away
+    t: (s) => s,
+    storage: { get: () => null, set: () => {} },
+    download: () => {},
+    lang: "ja",
+  });
+  assert.ok(pending, "the page asked for a frame");
+  pending(); pending = null;          // first tick: attach + render everything
+  assert.ok(page.ctrl.machine === m, "attached to the live machine");
+  assert.equal(page.ctrl.cpus.length, 1);
+  assert.match(doc.getElementById("conn").textContent, /実行中/);
+  assert.equal(doc.getElementById("regs").children.length, 11, "Z80 register cells built from the arch descriptor");
+  assert.ok(doc.getElementById("dis").children.length > 0, "disassembly rendered");
+  assert.match(doc.getElementById("mem").textContent, /^0000: /, "hex dump rendered");
+
+  // the controls still reach the core
+  doc.getElementById("bpause").onclick();
+  assert.equal(page.ctrl.paused, true);
+  doc.getElementById("bstep").onclick();
+  assert.ok(page.ctrl.cpu("main").trace.n > 0, "single step went through the wrapped step");
+  doc.getElementById("bcont").onclick();
+  assert.equal(page.ctrl.paused, false);
+
+  // a breakpoint round-trips through the pane
+  doc.getElementById("bpaddr").value = "0100";
+  doc.getElementById("bpbtn").onclick();
+  assert.ok(page.ctrl.cpu("main").bps.has(0x0100));
+  assert.match(doc.getElementById("bplist").textContent, /0100/);
+
+  // a watch expression compiles against the active CPU architecture
+  doc.getElementById("wxexpr").value = "hl";
+  doc.getElementById("bwxadd").onclick();
+  assert.match(doc.getElementById("wxlist").children[0].textContent, /^hl = /);
+
+  page.ctrl.detach();
+});
+
+test("ice page: the PC-8801 sub tab, FDC pane and ROM presets still wire up", async () => {
+  const { Pc8801Machine } = await import("./machine88.js");
+  const doc = fakeDoc();
+  const m = new Pc8801Machine({
+    main: new Uint8Array(0x8000), ext: new Uint8Array(0x8000),
+    sub: new Uint8Array(0x2000), mode: "n88",
+  });
+  let pending = null;
+  const page = mountIcePage(doc, {
+    getMachine: () => m, openerAlive: () => true,
+    raf: (cb) => { pending = cb; }, t: (s) => s,
+    storage: { get: () => null, set: () => {} }, download: () => {}, lang: "ja",
+  });
+  pending(); pending = null;
+  assert.deepEqual(page.ctrl.cpus.map((c) => c.name), ["main", "sub"]);
+  assert.equal(doc.getElementById("tabsub").style.display, "", "the sub tab is shown when a sub CPU exists");
+  assert.match(doc.getElementById("minfo").textContent, /PC-8801 main\+sub/);
+  // switching tabs re-renders against the sub CPU (same arch here, different memory)
+  doc.getElementById("tabsub").onclick();
+  assert.equal(page.state.active, "sub");
+  assert.equal(doc.getElementById("fdcbox").style.display, "");
+  pending = null;
+  page.renderAll();
+  assert.ok(doc.getElementById("fdc").textContent.length > 0, "FDC state pane filled");
+  // the timeline knows this core can snapshot
+  assert.ok(page.tl.nodes.size >= 1, "a root snapshot was taken");
+  page.ctrl.detach();
 });

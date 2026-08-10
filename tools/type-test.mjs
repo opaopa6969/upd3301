@@ -1,6 +1,6 @@
 // type-test — boot N-BASIC, type a command through the keyboard matrix,
 // verify the answer. The final loop closure.
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { Pc8001Machine } from '../machine.js';
 
 // PC-8001 keyboard matrix (port = row, bit = column, active low)
@@ -14,7 +14,15 @@ const KEY = {
   ENTER: [1, 7], SPACE: [9, 6],
 };
 
-const rom = readFileSync(process.argv[2] ?? 'roms/N80_2.ROM');
+// BYO-ROM. `node --test` picks this file up by its name, so it must not throw
+// at import when the ROM is absent — a hard failure here makes the whole suite
+// red on any machine without ROMs (CI included) and drowns real regressions.
+const romPath = process.argv[2] ?? 'roms/N80_2.ROM';
+if (!existsSync(romPath)) {
+  console.log(`# SKIP type-test: no ROM at ${romPath} (pass one as argv[2])`);
+  process.exit(0);
+}
+const rom = readFileSync(romPath);
 const m = new Pc8001Machine({ rom });
 for (let i = 0; i < 180; i++) m.stepFrame(); // boot to Ok
 

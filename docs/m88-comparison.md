@@ -2,6 +2,27 @@
 
 # upd3301 vs M88 — behavioural comparison
 
+> **Current state (2026-08-11, 1500 frames, m88204 ROM set)**
+>
+> | | |
+> |---|---|
+> | exact match | **327/353 (93%)** |
+> | tracking (exact + phase noise) | **339/353 (96%)** |
+> | divergence leads | **12 → really 7 titles** |
+>
+> **The body below still carries the older 250-frame numbers (335/353 and so on).**
+> They are kept as a record of how the work went; **for current figures read this
+> box and the appended sections at the end.**
+>
+> Four of the twelve leads turned out to be **M88 failing to boot the disk**
+> (Hydlide3, Stercru, starclsr, PRO_FAN). `tv2678` is the N88-BASIC opening
+> screen, and M88 is sitting on it. **M88 is only gold when M88 actually ran the
+> disk.** `isBasicScreen()` in `tools/verdict.js` now says so.
+>
+> What is actually left: JIKO_PZL, OHOTUKU, volguard, Yaksa, Seena, harakiri,
+> うる星やつら.
+
+
 A living record of how `upd3301` compares to **M88** (`bubio/M88M`), produced with
 the headless reference oracle in [`../m88ref/`](../m88ref/). The method: boot the
 same `.d88` in both, headless, for the same number of frames, and compare a
@@ -375,13 +396,16 @@ Measured over 353 titles at 1500f:
 | boost removed | 328 | 338 | **regressed (tv190)** | **became a lead** |
 | **phase-gated** | **328/353 (93%)** | **338/353 (96%)** | ok | ok |
 
-**Fundamentally this is the price of not modelling the drive motor.** Model the real time a
-spindle takes to come up to speed and neither hack is needed; the FDC phase is standing in
-for that. Left as future work.
+~~**Fundamentally this is the price of not modelling the drive motor.**~~
 
-## Wait states do not explain the boot-speed difference (2026-08-10, hypothesis rejected)
-
-`machine88.js` does not model memory wait states (it says so in a comment), while M88 runs
+**Correction (2026-08-10, from an adversarial review)**: that has the causality backwards.
+`pc80s31.js:49` only stores the motor output — it drives neither READY nor the index — SEEK
+completes instantly, and READ DATA enters `execute` with no head load, settling or ID search.
+**Not modelling the motor makes the drive ready *earlier* than real hardware, which is no
+physical reason to also run the CPU 16x faster.** Calling `phase !== 'execute'` "waiting on
+mechanics" does not describe any real FDC state either; this is suspected to be a compatibility
+hack of the same family as M88's ROM patch. See
+[the adversarial review](./review/2026-08-10-fdc-adversarial-review.md). model memory wait states (it says so in a comment), while M88 runs
 with `Config::enablewait`. That looked like a candidate for the long-standing "our emulator
 boots ~20 frames ahead of M88". **Reading M88's actual table rejects it.**
 
@@ -413,3 +437,48 @@ require tracking `waittype`: VRTC, display status, and port 40h bit 4 for GVRAM 
 during display.)
 
 **Remaining candidates**: the DMA bus-steal estimate, the sub-CPU ratio, FDC transfer pacing.
+
+## Derive the VRTC window from the CRTC (2026-08-10)
+
+We generated retrace as `tInFrame > frameT * 0.86` — a fixed 14% of the frame. The titles in
+this set actually program **rows=20 / vblankRows=6**, a display fraction of 0.769, so retrace
+really occupies **23%**. M88 derives the same window from the CRTC (`crtc.cpp`: retrace runs
+for `linetime * vretrace`).
+
+`crtc.rows` and `crtc.vblankRows` were already available, so the threshold now comes from
+them. Code that times itself off VRTC — waiting for the edge, or drawing inside the blanking
+window — sees the wrong budget when the constant disagrees with what the title programmed.
+
+353 titles at 1500f: **exact 328 and tracking 338, unchanged, with no regressions**;
+FIREHAWK's screen fill improved from 69% to 79%. The headline numbers do not move, but this
+is strictly more faithful than a constant.
+
+## Deliver VSYNC on the VRTC rising edge (2026-08-10)
+
+The VSYNC interrupt was raised at the end of `stepFrame` — the **end of blanking** — while port
+40h's VRTC bit goes high at the **end of the display period**. On real hardware the µPD3301's
+end-of-screen interrupt and the VRTC bit a program polls are the *same event*, so delaying the
+interrupt by a whole blanking period makes **a handler that reads `IN 40h` immediately after VSYNC
+see the opposite of what the interrupt implied**. At 20+6 rows that is about 3.8 ms.
+
+VSYNC now fires at the display-period end, and `_dispFrac()` is a shared helper so **the polled bit
+and the interrupt derive from one number** and cannot disagree.
+
+**Two independent reviews arrived here from different directions**:
+- [the FDC adversarial review](./review/2026-08-10-fdc-adversarial-review.md), finding 9 (µPD3301
+  end-of-screen timing, read from the datasheet)
+- [the second opinion](https://github.com/opaopa6969/upd3301/issues/32#issuecomment-5234276932),
+  which named "the phase model of time" rather than the 8255 as the shared root of what remains
+
+### Measured over 353 titles at 1500f
+
+| | before | after |
+|---|---|---|
+| exact | 328 | **327** (−1) |
+| tracking | 338 | **339** (+1) |
+| divergence leads | 13 | **12** (−1; FIREHAWK dropped out) |
+
+**Exact match fell by one and the change was kept anyway** — the first case of deciding on primary
+sources rather than on agreement with M88. As [#40](https://github.com/opaopa6969/upd3301/issues/40)
+puts it: where M88 itself departs from the specification, fixing our side correctly *lowers* the
+match rate. With tracking up one and a lead removed, the net is not a regression.
