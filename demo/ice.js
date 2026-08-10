@@ -34,6 +34,7 @@ import {
   writeReg, REG_FIELDS, regsModel, disasmList, hexDump,
 } from '../icecore.js';
 import { Z80_ARCH } from '../icearch.js';
+import { fromLabelMap, stringify as analysisStringify, hashBytes } from '../analysisdb.js';
 
 // Re-exported so demo/ice.html, tests and any future pane keep one import site.
 export {
@@ -93,7 +94,7 @@ export function mountIcePage(doc, env) {
     'asrc', 'aorg', 'basm', 'bsetpc', 'brun', 'aout', 'anal',
     'btundo', 'btredo', 'btsnap', 'tree', 'ttinfo',
     'bprof', 'bprofreset', 'prof', 'stack',
-    'laddr', 'lname', 'bladd', 'blexport', 'blimport',
+    'laddr', 'lname', 'bladd', 'blexport', 'blexpanal', 'blimport',
     'exps', 'expe', 'expo', 'bexp', 'bexpsave', 'bexpwrite', 'exptext', 'pinnote',
     'bpromasm', 'bpromexp',
     'walo', 'wahi', 'war', 'waw', 'wacond', 'bwadd', 'wlist',
@@ -917,6 +918,53 @@ export function mountIcePage(doc, env) {
   els.blexport.onclick = () => {
     env.download?.('ice-labels.json', JSON.stringify([...state.labels], null, 1));
   };
+  // A second export port, in the shared analysis format (../analysisdb.js), so a
+  // session can leave here as a pull request instead of as a private JSON blob.
+  // Two things are deliberately NOT flattered on the way out:
+  // - the names go out as `guess`. They were typed by hand while stepping and
+  //   the DB kept no observation behind them; the format refuses to guess in the
+  //   reader's favour (raise them by hand once a trace backs them up).
+  // - the ROM identity IS exact, because that is the field that keeps these
+  //   labels off someone else's ROM revision.
+  function romHashOfMachine(m) {
+    const roles = {};
+    const put = (role, bytes) => { if (bytes?.length) roles[role] = hashBytes(bytes); };
+    put(kindOf(m) === 'pc8801' ? 'main' : 'rom',
+      m.romMain ?? m.sys?.memory?.subarray?.(0, m.romTop ?? 0));
+    put('ext', m.romExt);
+    if (m.sub?.mem) {
+      // the sub board mirrors a 2KB disk.rom four times over its 8KB space, so
+      // hash the 2KB prefix in that case — the value must match the FILE a
+      // reviewer can hash, not our mapping of it.
+      const mem = m.sub.mem;
+      let mirrored = true;
+      for (let i = 0; i < 0x800 && mirrored; i++) if (mem[i] !== mem[0x800 + i]) mirrored = false;
+      put('sub', mem.subarray(0, mirrored ? 0x800 : (m.sub.romTop ?? 0x2000)));
+    }
+    return roles;
+  }
+  if (els.blexpanal) els.blexpanal.onclick = () => {
+    const m = ctrl.machine;
+    if (!m) { els.bplist.textContent = t('マシン未接続'); return; }
+    const kind = kindOf(m);
+    const doc = fromLabelMap([...state.labels], {
+      machine: kind,
+      cpu: state.active,
+      title: `ICE label DB (${kind} / ${state.active})`,
+      romHash: romHashOfMachine(m),
+      generator: 'demo/ice.js label DB export',
+      unclassified: [{
+        reason: 'the label DB names only the addresses someone stopped at; nothing here claims anything about the rest of the address space',
+      }],
+      notes: [
+        'Exported from the ICE label DB. Every name is `guess`: the DB stores a name, not the observation behind it. Raise a name to `inferred`/`observed` by hand, and put the trace or the count in its evidence, before anyone leans on it.',
+        'Known hole: the ICE keeps ONE label map for both CPUs, so this file may contain addresses from the other address space than the `cpu` field says. Split it before committing under analysis/.',
+        'romHash is computed with the pure fallback algorithm (fnv1a64 over the ROM images this machine was built from). A document stamped only with sha256 cannot be compared against it — stamp both if you can.',
+      ].join('\n\n'),
+    });
+    env.download?.(`analysis-${kind}-${state.active}.json`, analysisStringify(doc));
+  };
+
   els.blimport.onchange = async (e) => {
     const f = e.target?.files?.[0];
     if (!f) return;

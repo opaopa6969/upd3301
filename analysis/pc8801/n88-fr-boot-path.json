@@ -1,0 +1,263 @@
+{
+  "schemaVersion": 1,
+  "machine": "pc8801",
+  "cpu": "main",
+  "title": "N88-BASIC main ROM — the disk boot path and the sub-board handshake",
+  "romHash": {
+    "main": [
+      "sha256:4644eb74574fbd24b54d439d876dc2e9e0de3178952529b4fddb72ea3115a8e8",
+      "fnv1a64:92f541f044383460"
+    ]
+  },
+  "source": "upd3301 boot investigations (romlabels.js n88-fr, docs/m88-comparison.md)",
+  "labels": {
+    "3700": {
+      "name": "sub_init_and_count",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "send cmd 00 (init), then cmd 07; counts set bits of the drive map high nibble",
+      "source": "romlabels.js"
+    },
+    "3722": {
+      "name": "sub_send_rw_cmd",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "call with A = command; sends (EF4A) unit, (EF5F) track, B, C as parameters",
+      "source": "romlabels.js"
+    },
+    "3766": {
+      "name": "sub_send_data",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "send a data block from (DE) to the sub (the write-side twin of 373A)",
+      "source": "romlabels.js"
+    },
+    "3790": {
+      "name": "sub_check_result",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "cmd 06 result status; (res & 41h) == 01h takes a non-local success exit, else plain RET NZ",
+      "source": "romlabels.js"
+    },
+    "3847": {
+      "name": "sub_recv_byte",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "receive one byte from the sub (wait FE bit0, then IN FCh)",
+      "source": "romlabels.js"
+    },
+    "4551": {
+      "name": "veccall_enter",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "CALL 4551 + inline vector byte = tail-call via bank0 table at 600D; returns to the caller's caller",
+      "source": "romlabels.js"
+    },
+    "4581": {
+      "name": "veccall_restore_a71",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "vector-call return path (restores A and port 71h)",
+      "source": "romlabels.js"
+    },
+    "36DB": {
+      "name": "check_boot_dipsw",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "reads port 40h bit3: ROM vs DISK boot (0 = boot from disk)",
+      "source": "romlabels.js"
+    },
+    "36E2": {
+      "name": "sub_ensure_init",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "init the disk sub-system and count drives (cmd 00→07); returns count in A",
+      "source": "romlabels.js"
+    },
+    "373A": {
+      "name": "sub_recv_data",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "cmd 03 (send data) → receive B pages of 256 bytes into (DE); EF5D=2 selects the packed mode",
+      "source": "romlabels.js"
+    },
+    "37C9": {
+      "name": "sub_send_byte",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "send one byte through the 8255: raise ATN (C7), wait FE&6==2, OUT FDh, ack dance; BC×D timeout",
+      "source": "romlabels.js"
+    },
+    "382B": {
+      "name": "sub_hs_timeout",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "handshake timeout countdown (C→B→D); on expiry (EF10) picks the bail-out path",
+      "source": "romlabels.js"
+    },
+    "3AB4": {
+      "name": "oscall_dispatch_3b",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "cross-bank OS call, 3 inline operand bytes (addr lo/hi + bank); saves full context",
+      "source": "romlabels.js"
+    },
+    "3ABE": {
+      "name": "oscall_dispatch_2b",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "cross-bank OS call, 2 inline bytes — includes the trick of reusing its own code bytes as operands",
+      "source": "romlabels.js"
+    },
+    "3CC0": {
+      "name": "install_ram_hooks",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "installs the C3 xx xx RAM hooks in ED00-EEFF (15 entries from the table at 3CFF)",
+      "source": "romlabels.js"
+    },
+    "3DBE": {
+      "name": "bank_restore_32_71",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "trampoline restoring ports 32h/71h from a stacked word, then RET",
+      "source": "romlabels.js"
+    },
+    "6F06": {
+      "name": "boot_negotiate",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "disk boot: negotiate sub features (tail-calls vector #1C = 75A1)",
+      "source": "romlabels.js"
+    },
+    "6F0A": {
+      "name": "boot_build_drivetab",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "tail-calls vector #1D = 754F (drive table build); invoked from 458F",
+      "source": "romlabels.js"
+    },
+    "72CD": {
+      "name": "coldstart_block",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "cold start: restore port shadows, sub init, OPN init, IM 2, E4h←FF, screen init, EI",
+      "source": "romlabels.js"
+    },
+    "754F": {
+      "name": "drivetab_build",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "(bank0) builds the EF64 interface table and EC7D total from EF35/EF2D presence tables + sub count",
+      "source": "romlabels.js"
+    },
+    "75A1": {
+      "name": "sub_read_feature",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "(bank0) cmd 0B reads sub ROM 075F, CPL&F0 → EF63; nonzero → cmd 17 0F (extended mode)",
+      "source": "romlabels.js"
+    },
+    "780A": {
+      "name": "boot_stop_key_fork",
+      "confidence": "inferred",
+      "evidence": {
+        "from": "romlabels.js \"n88-fr\" (confidence: verified) — walked instruction by instruction during this repo's boot investigations",
+        "method": "static disassembly plus a live boot trace; no occurrence count was recorded"
+      },
+      "note": "boot path fork on port 09h bit0 (the STOP key)",
+      "source": "romlabels.js"
+    }
+  },
+  "unclassified": [
+    {
+      "addr": "0000",
+      "reason": "the other ~32KB. This is a boot-path map: 22 routines out of a 32768-byte ROM. Anything not named below is unanalysed, not empty."
+    },
+    {
+      "addr": "E6CD",
+      "reason": "RAM, not ROM: the byte the M88 comparison harness fingerprints. It is game-specific (for many titles the keyboard-scan gate) and its meaning in the ROM has never been established — 0xFF is not necessarily \"stuck\", several titles hold it there in M88 too.",
+      "evidence": {
+        "basis": "docs/m88-comparison.md, 353-title sweep"
+      }
+    },
+    {
+      "addr": "FCCF",
+      "reason": "a lead that did NOT pan out. At frame 80 this address writes CD FF 00 (CALL 00FFh) into C444 while executing from inside the F000-FFFF text-VRAM window (tools/watch-write.mjs). It was pursued as the root cause of the Makaimura divergence; the real cause turned out to be the missing uPD765 MT (multi-track) feature. Kept because the observation is real and the interpretation was wrong — exactly the pair this format keeps together.",
+      "evidence": {
+        "samples": 1,
+        "basis": "tools/watch-write.mjs at f80; retracted as a cause in docs/m88-comparison.md"
+      }
+    }
+  ],
+  "notes": "Scope: how the main CPU talks to the FDD sub board and reaches a disk boot. 6F06-780A are in the main ROM image (verified: n88.rom holds CD 51 45 1C at 6F06, matching the vector-call form) even though the N88 extension ROM banks over 6000-7FFF when selected — read the bank state before trusting an address in that window.\n\nConfidence mapping: as in the sub-board document, romlabels.js \"verified\" becomes `inferred` here because no occurrence count survives from those sessions.\n\nROM revision, measured 2026-08-10: this FR n88.rom differs from the m88204 set's n88.rom in 18 of 32768 bytes, at 322E-3232, 3C08-3C0E, 79D7 and 7C5F-7C63. None of them falls inside a routine named below, so these labels happen to survive the swap — \"happen to\" being the entire argument for romHash. The same set's Pc88.rom differs from its own n88.rom in 107 bytes, which is how two emulators ended up running different revisions of the same ROM without anyone noticing (docs/m88-comparison.md).",
+  "sources": [
+    "romlabels.js",
+    "docs/m88-comparison.md",
+    "docs/io-ports.md"
+  ],
+  "generator": "hand-assembled from romlabels.js and docs/m88-comparison.md; serialized with analysisdb.stringify()"
+}
