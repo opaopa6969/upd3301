@@ -7,7 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyScreen, classifyLoop, isConverged } from './tools/verdict.js';
+import { classifyScreen, classifyLoop, isConverged, isBasicScreen } from './tools/verdict.js';
 
 test('a title that turned the text plane off is judged on GVRAM, not tvram', () => {
   // Ys1 at 1500f, after the MT fix regressed it: our screen was genuinely
@@ -97,4 +97,47 @@ test('one sample is never converged; repeated identical samples are', () => {
   assert.equal(isConverged([s]), false, 'a single frame cannot prove convergence');
   assert.equal(isConverged([s, { ...s }]), true);
   assert.equal(isConverged([s, { ...s, tvnz: 2678 }]), false);
+});
+
+test('the BASIC opening screen is recognised for what it is', () => {
+  // Measured: boot with no disk at all for 1500 frames and the text plane holds
+  // exactly 2678 non-zero bytes with nothing in GVRAM. Any side showing this
+  // never loaded the disk.
+  assert.equal(isBasicScreen({ e6cd: 0x00, tvnz: 2678, gvnz: 0 }), true);
+  assert.equal(isBasicScreen({ e6cd: 0x00, tvnz: 2678, gvnz: null }), true);
+  // …but the same text count with graphics drawn is a game that happens to use
+  // that much text, not a BASIC prompt.
+  assert.equal(isBasicScreen({ e6cd: 0x00, tvnz: 2678, gvnz: 4060 }), false);
+  assert.equal(isBasicScreen({ e6cd: 0x00, tvnz: 1660, gvnz: 0 }), false);
+});
+
+test('a reference that never booted is named as such, not called our divergence', () => {
+  // Hydlide3, measured 2026-08-10: M88 sits on the BASIC screen with an empty
+  // graphics plane while we draw 8005 bytes of game. For days this read as
+  // "we diverge from M88" and sent the investigation at our emulator. The gold
+  // standard is only gold when it actually ran the disk.
+  const v = classifyScreen(
+    { e6cd: 0x00, tvnz: 2678, gvnz: 0 },
+    { e6cd: 0x24, tvnz: 1660, gvnz: 8005 },
+  );
+  assert.equal(v.kind, 'ref-not-booted');
+});
+
+test('and the same rule catches us failing to boot', () => {
+  // うる星やつら, measured the same day: the sides are the other way round.
+  const v = classifyScreen(
+    { e6cd: 0x00, tvnz: 3194, gvnz: 5000 },
+    { e6cd: 0x01, tvnz: 2678, gvnz: 0 },
+  );
+  assert.equal(v.kind, 'ours-not-booted');
+});
+
+test('both sides on the BASIC screen is not a boot failure verdict', () => {
+  // Neither side loaded, so neither is at fault relative to the other — this is
+  // the existing "blank"/"exact" territory, not a one-sided finding.
+  const v = classifyScreen(
+    { e6cd: 0x00, tvnz: 2678, gvnz: 0 },
+    { e6cd: 0x00, tvnz: 2678, gvnz: 0 },
+  );
+  assert.equal(v.kind, 'exact');
 });

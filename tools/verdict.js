@@ -18,6 +18,10 @@
 //      matches M88 exactly, spends 100% of its frames below 0x1000. What
 //      separates alive from dead is how many distinct PCs are touched and
 //      whether the machine still talks to devices.
+//   4. Comparing two fill counts cannot say *which* side is broken. Four titles
+//      sat on the divergence list for days reading as "we diverge from M88",
+//      when in fact M88 was parked on the N88-BASIC opening screen and had
+//      never loaded the disk at all — we were the side running the game.
 //
 // Pure, zero deps, no ROM needed.
 
@@ -31,12 +35,26 @@ const BLANK_FLOOR = 200;
 // A loop revisiting more distinct addresses than this per sample window is
 // marching through memory rather than looping — it is executing data as code.
 const RUNAWAY_PCS = 500;
+// The text plane of an N88-BASIC opening screen with no disk loaded. Measured
+// by booting with no disk at all for 1500 frames: a machine showing exactly this
+// much text and no graphics never got as far as the game.
+const BASIC_SCREEN_TVNZ = 2678;
 
 /**
  * Which plane actually carries this title's picture, and how well the two sides
  * agree on it. Pass `null` for a gvram count when the emulator did not report
  * one (older refdrv builds); the text plane is then the only evidence available.
  */
+/**
+ * Did this side ever leave the BASIC prompt? A machine sitting on the opening
+ * screen with an empty graphics plane never loaded the disk — which is a
+ * different fact from "the two sides drew different pictures", and the one that
+ * says whose fault a divergence is.
+ */
+export function isBasicScreen(s) {
+  return s.tvnz === BASIC_SCREEN_TVNZ && (s.gvnz == null || s.gvnz === 0);
+}
+
 export function classifyScreen(ref, ours) {
   // Judge on whichever plane is being drawn. If either side has the text plane
   // off, its tvram count is meaningless and GVRAM is the only comparable thing.
@@ -49,6 +67,13 @@ export function classifyScreen(ref, ours) {
   const ratio = Math.min(r, o) / Math.max(r, o, 1);
 
   if (ref.e6cd === ours.e6cd && r === o) return { kind: 'exact', plane, ratio: 1 };
+  // Before calling anything a divergence, check whether one side simply never
+  // booted. Saying "we differ from M88" about a title M88 could not load sends
+  // the investigation at our emulator for no reason — it cost four titles days
+  // on the lead list (Hydlide3, Stercru, starclsr, PRO_FAN).
+  const refDead = isBasicScreen(ref), oursDead = isBasicScreen(ours);
+  if (refDead && !oursDead) return { kind: 'ref-not-booted', plane, ratio };
+  if (oursDead && !refDead) return { kind: 'ours-not-booted', plane, ratio };
   if (r < BLANK_FLOOR && o < BLANK_FLOOR) return { kind: 'blank', plane, ratio };
   // Same amount of picture, different flag byte: the two sides are at different
   // points of the same running program, not in different states.
