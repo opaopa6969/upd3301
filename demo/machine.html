@@ -64,6 +64,7 @@
     <label style="color:#778;font-size:12px" title="ディスクシステムBIOS disksys.rom（8192バイト）。一度選ぶとこのブラウザに保存される">BIOS: <input type="file" id="ffdsbios" accept=".rom,.ROM,.bin" style="font-size:11px"></label>
     <select id="fdsside" title="ディスクの面を入れ替える（ゲームが『ディスクカードを裏返してください』と言ったとき）" style="display:none;background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px"></select>
   </span>
+  <label style="color:#778;font-size:12px" title="PCエンジンのHuCard(.pce)を読み込む。読み込むと機種がPCエンジンに切り替わる">🕹 PCエンジン(.pce): <input type="file" id="fpce" accept=".pce,.PCE" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <span id="grp-tape" style="display:inline-flex;gap:4px;align-items:center">
     <label style="color:#778;font-size:12px" title="カセットテープ(.t88/.cas/.cmt)を読み込む。N88モードで CLOAD するとテープから読める">📼 テープ: <input type="file" id="ftape" accept=".t88,.cas,.cmt,.T88,.CAS,.CMT" style="font-size:11px"></label>
@@ -104,7 +105,8 @@
 <div class="row" id="row-sys2"><span class="lbl">起動モード:</span>
   <span id="grp-bootmode"><button id="mn80" class="on">N-BASIC (N80)</button>
   <button id="mn88">N88-BASIC</button>
-  <button id="mnes" title="ファミコン(NES)。.nes を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">ファミコン</button></span>
+  <button id="mnes" title="ファミコン(NES)。.nes を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">ファミコン</button>
+  <button id="mpce" title="PCエンジン。.pce を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">PCエンジン</button></span>
   <label style="color:#778;font-size:12px" title="サウンドボードII (OPNA/YM2608) を有効にする">SB2 <input type="checkbox" id="sb2" style="vertical-align:middle"></label>
   <label style="color:#778;font-size:12px" title="エミュレーション速度。倍速・早送り（実CPUが追いつく範囲まで）">速度 <select id="speed" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
     <option value="0.25">×0.25</option><option value="0.5">×0.5</option>
@@ -148,6 +150,8 @@ import { NesMachine, BUTTON as NES_BUTTON } from '../machinenes.js';
 import { tryParseINes, summarizeINes } from '../ines.js';
 import { tryParseFds, makeFdsCart } from '../fds.js';
 import { tryCreateMapper } from '../nesmapper.js';
+import { PceMachine, BUTTON as PCE_BUTTON } from '../machinepce.js';
+import { tryParsePce, summarizePce } from '../pcerom.js';
 import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 import { parseD88All, summarize } from '../d88.js';
@@ -390,6 +394,23 @@ $('fnes').onchange = async (e) => {
   switchMode('nes');
   if (nesCart.warnings.length) guts.textContent = `${f.name}: ${nesCart.warnings.join(' / ')}`;
 };
+// ---- PC Engine HuCard (.pce) ----------------------------------------------
+// Same shape as the Famicom picker: the parse answers with data rather than an
+// exception, so a bad dump says what is wrong instead of throwing into the
+// console. pcerom.js also repairs what it can (copier header, bit-reversed
+// dump, trailing junk) and reports it in cart.warnings.
+$('fpce').onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  const parsed = tryParsePce(bytes, { name: f.name });
+  if (!parsed.ok) { guts.textContent = `${f.name}: ${parsed.error}`; return; }
+  pceCart = parsed.cart;
+  pceInfo = summarizePce(pceCart);
+  pceName = f.name;
+  switchMode('pce');
+  if (pceCart.warnings.length) guts.textContent = `${f.name}: ${pceCart.warnings.join(' / ')}`;
+};
+
 // ---- Famicom Disk System (.fds + disksys.rom) ------------------------------
 // Two files, not one: the game is on the disk and the program that boots it is
 // in the drive's BIOS, which Nintendo never put on the disks. The BIOS is
@@ -534,7 +555,7 @@ function renderMachine(extra = {}) {
   if (hasOwnRender(machine)) return machine.render({ cgrom, ...renderOpts(), ...extra });
   return machine.sys.render({ cgrom });
 }
-const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES' };
+const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', pce: 'PCエンジン/PC Engine' };
 // Raw-frame PNG: the machine's OWN render() (full 512-colour palette), with NO
 // phosphor / tube / interlace / line-double and no CSS scaling — the emulation's
 // ground truth at 640×200. Lets a corrupted scene be diagnosed as emulation vs
@@ -595,17 +616,20 @@ $('bpng').onclick = () => {
 // defaults (the user can still override before reset).
 function switchMode(mode) {
   bootMode = mode;
-  const is88 = mode === 'n88', isNes = mode === 'nes';
+  const is88 = mode === 'n88', isNes = mode === 'nes', isPce = mode === 'pce';
   $('mn88').classList.toggle('on', is88);
   $('mn80').classList.toggle('on', mode === 'n80');
   $('mnes').classList.toggle('on', isNes);
-  // The Famicom has no DIP switches; leave the fields where they are so
+  $('mpce').classList.toggle('on', isPce);
+  // Neither console has DIP switches; leave the fields where they are so
   // switching away and back does not lose the user's PC-88 setup.
-  if (!isNes) {
+  if (!isNes && !isPce) {
     $('dip1').value = is88 ? 'DB' : 'FF';
     $('dip2').value = is88 ? '79' : 'FF';
   }
-  if (isNes && !nesCart) {
+  if (isPce && !pceCart) {
+    $('dipnote').textContent = 'PCエンジンのHuCard(.pce)を選ぶと起動する';
+  } else if (isNes && !nesCart) {
     $('dipnote').textContent = fdsBios
       ? 'ファミコンのROM(.nes)かディスク(.fds)を選ぶと起動する'
       : 'ファミコンのROM(.nes)、またはディスクシステムBIOS(disksys.rom)＋ディスク(.fds)を選ぶと起動する';
@@ -621,6 +645,7 @@ function switchMode(mode) {
 $('mn80').onclick = () => switchMode('n80');
 $('mn88').onclick = () => switchMode('n88');
 $('mnes').onclick = () => switchMode('nes');
+$('mpce').onclick = () => switchMode('pce');
 for (const id of ['dip1', 'dip2']) $(id).onchange = () => boot();
 
 // Disk pool + drive assignment. A .d88 file can hold SEVERAL disk images, and a
@@ -1706,13 +1731,19 @@ let nesCart = null, nesInfo = null, nesName = '';
 // drive keeps its own writable copy), `fdsBios` the 8KB disksys.rom. Neither is
 // in this repository; the BIOS is remembered in IndexedDB between visits.
 let nesDisk = null, fdsBios = null;
+// The parsed HuCard, held by reference for exactly the same reason as the
+// Famicom cartridge: it is immutable, so no snapshot ever copies it and a PC
+// Engine snapshot stays at its VRAM-dominated ~80KB.
+let pceCart = null, pceInfo = null, pceName = '';
 // Picked once, kept for good. Unlike a disk, the BIOS is not something anyone
 // wants to choose twice, and this runs whether or not the PC-88 side of the
 // store had anything in it.
 (async () => {
   try { const r = await getRom('fdsbios'); if (r && r.bytes && r.bytes.length === 8192) fdsBios = r.bytes; } catch {}
 })();
-let nesPad = 0; // live Famicom button mask (see NES_KEYMAP), ORed with the gamepad
+// Live console button mask, in whichever console's own bit order is running
+// (see PAD_BITS), ORed with the gamepad.
+let consolePad = 0;
 const dipOf = (id, dflt) => {
   const v = parseInt($(id).value.trim(), 16);
   return Number.isFinite(v) ? (v & 0xff) : dflt;
@@ -1773,7 +1804,17 @@ function boot() {
     // has to be put back — otherwise switching modes silently turns the disk
     // back over to side A.
     if (machine.hasDisk && $('fdsside').value) machine.insertDiskSide(+$('fdsside').value);
-    nesPad = 0;
+    consolePad = 0;
+    canvas.focus();
+    return;
+  }
+  if (bootMode === 'pce') {
+    if (!pceCart) { guts.textContent = 'PCエンジンのHuCard(.pce)を選んでね'; return; }
+    // Nothing to configure: the HuCard IS the configuration. Everything the
+    // host does from here — fast forward, rewind, jog-shuttle — runs on the
+    // same contract as the PC-88s and the Famicom.
+    machine = new PceMachine({ cart: pceCart });
+    consolePad = 0;
     canvas.focus();
     return;
   }
@@ -1913,7 +1954,7 @@ function ensureAudio() {
     startScriptProcessor();
   }
 }
-canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); });
+canvas.addEventListener('click', () => { if (bootMode !== 'n80') ensureAudio(); });
 
 // ---- fold the piecemeal control rows into a grouped menu bar + pinnable dock ---
 {
@@ -1927,6 +1968,10 @@ canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); 
       // an entry here they are invisible — the same way 📼テープ was orphaned
       // when the bar took over the rows.
       it('fnes', '🎮 ファミコン(.nes)', lab('fnes')),
+      // row-sys1 is hidden by this menu bar, so a picker with no entry here is
+      // invisible. The Famicom stage lost 📼テープ that way and then .nes; this
+      // is the same trap, one console later.
+      it('fpce', '🕹 PCエンジン(.pce)', lab('fpce')),
       it('grp-fds', '💽 ディスクシステム(.fds)', $('grp-fds')),
       it('romstore', '保存済ROM', $('romstore')),
     ].filter(Boolean) },
@@ -2135,30 +2180,51 @@ function applyPad() {
   // (active LOW) are translated rather than mapped a second time, so the pad
   // config panel keeps working for both families.
   if (machine.pads) {
+    const bits = PAD_BITS[bootMode];
     const j = ~padJoy & 0x3f;
-    let b = nesPad;
-    if (j & 0x01) b |= 1 << NES_BUTTON.UP;
-    if (j & 0x02) b |= 1 << NES_BUTTON.DOWN;
-    if (j & 0x04) b |= 1 << NES_BUTTON.LEFT;
-    if (j & 0x08) b |= 1 << NES_BUTTON.RIGHT;
-    if (j & 0x10) b |= 1 << NES_BUTTON.A;
-    if (j & 0x20) b |= 1 << NES_BUTTON.B;
+    let b = consolePad;
+    if (j & 0x01) b |= 1 << bits.UP;
+    if (j & 0x02) b |= 1 << bits.DOWN;
+    if (j & 0x04) b |= 1 << bits.LEFT;
+    if (j & 0x08) b |= 1 << bits.RIGHT;
+    if (j & 0x10) b |= 1 << bits.A;
+    if (j & 0x20) b |= 1 << bits.B;
     machine.pads[0] = b;
   }
 }
-// Keyboard -> Famicom pad. Z/X are the de-facto B/A on a QWERTY keyboard;
-// Enter is START and Shift (or Space) is SELECT.
-const NES_KEYMAP = {
+// Both consoles hand the host a `pads` array of button masks, but the bit
+// NUMBERING is each console's own — the Famicom's is the order its shift
+// register clocks out, the PC Engine's is the order its two nibbles appear at
+// $1000. So the host keeps one small table per family and asks it, instead of
+// growing a second copy of the key handler.
+const PAD_BITS = {
+  nes: {
+    UP: NES_BUTTON.UP, DOWN: NES_BUTTON.DOWN, LEFT: NES_BUTTON.LEFT, RIGHT: NES_BUTTON.RIGHT,
+    A: NES_BUTTON.A, B: NES_BUTTON.B, START: NES_BUTTON.START, SELECT: NES_BUTTON.SELECT,
+  },
+  pce: {
+    UP: PCE_BUTTON.UP, DOWN: PCE_BUTTON.DOWN, LEFT: PCE_BUTTON.LEFT, RIGHT: PCE_BUTTON.RIGHT,
+    // The PC Engine pad's two buttons are I and II, with II where a Famicom
+    // player expects A. RUN is the start button and SELECT is SELECT.
+    A: PCE_BUTTON.II, B: PCE_BUTTON.I, START: PCE_BUTTON.RUN, SELECT: PCE_BUTTON.SELECT,
+  },
+};
+const isConsole = (m) => m === 'nes' || m === 'pce';
+// Keyboard -> pad. Z/X are the de-facto B/A on a QWERTY keyboard; Enter is
+// START (RUN on a PC Engine) and Shift or Space is SELECT.
+const PAD_KEYMAP = {
   ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT',
   z: 'B', x: 'A', a: 'B', s: 'A',
   Enter: 'START', ' ': 'SELECT', Shift: 'SELECT',
 };
-function nesKeySet(e, down) {
+function padKeySet(e, down) {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  const name = NES_KEYMAP[key];
+  const name = PAD_KEYMAP[key];
   if (!name) return false;
-  const bit = 1 << NES_BUTTON[name];
-  nesPad = down ? (nesPad | bit) : (nesPad & ~bit);
+  const bits = PAD_BITS[bootMode];
+  if (!bits || bits[name] === undefined) return false;
+  const bit = 1 << bits[name];
+  consolePad = down ? (consolePad | bit) : (consolePad & ~bit);
   return true;
 }
 function matrixKey(e) {
@@ -2178,8 +2244,8 @@ function matrixKey(e) {
 const isFormFocused = () => { const el = document.activeElement; return el && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName); };
 window.addEventListener('keydown', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (bootMode === 'nes') {
-    if (!nesKeySet(e, true)) return;
+  if (isConsole(bootMode)) {
+    if (!padKeySet(e, true)) return;
     if (frozen()) resumePlay();
     e.preventDefault();
     return;
@@ -2195,7 +2261,7 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (bootMode === 'nes') { if (nesKeySet(e, false)) e.preventDefault(); return; }
+  if (isConsole(bootMode)) { if (padKeySet(e, false)) e.preventDefault(); return; }
   const k = matrixKey(e);
   if (!e.shiftKey) kbSet([[8, 6]], false);
   const jb = joyBitFor(e);
@@ -2559,7 +2625,9 @@ function loop(now) {
     workMs = workMs * 0.9 + (nowP - t0) * 0.1;
     perfAccountRender(nowP - tEmu, nowP);
     guts.textContent = `${MACHINE_LABEL[bootMode] || 'machine'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
-      + (crtc ? `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz` : (nesInfo ? `  ${nesName} · ${nesInfo.board}` : ''))
+      + (crtc ? `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz`
+        : bootMode === 'pce' && pceInfo ? `  ${pceName} · ${pceInfo.board}`
+        : (nesInfo ? `  ${nesName} · ${nesInfo.board}` : ''))
       + (machine.effectiveCpuPct !== undefined ? `  CPU ${machine.effectiveCpuPct}%` : '')
       + (perfHud ? `\n${perfHud}` : '');
     updatePlayerBar();
