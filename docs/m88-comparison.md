@@ -2,6 +2,27 @@
 
 # upd3301 vs M88 — behavioural comparison
 
+> **Current state (2026-08-11, 1500 frames, m88204 ROM set)**
+>
+> | | |
+> |---|---|
+> | exact match | **327/353 (93%)** |
+> | tracking (exact + phase noise) | **339/353 (96%)** |
+> | divergence leads | **12 → really 7 titles** |
+>
+> **The body below still carries the older 250-frame numbers (335/353 and so on).**
+> They are kept as a record of how the work went; **for current figures read this
+> box and the appended sections at the end.**
+>
+> Four of the twelve leads turned out to be **M88 failing to boot the disk**
+> (Hydlide3, Stercru, starclsr, PRO_FAN). `tv2678` is the N88-BASIC opening
+> screen, and M88 is sitting on it. **M88 is only gold when M88 actually ran the
+> disk.** `isBasicScreen()` in `tools/verdict.js` now says so.
+>
+> What is actually left: JIKO_PZL, OHOTUKU, volguard, Yaksa, Seena, harakiri,
+> うる星やつら.
+
+
 A living record of how `upd3301` compares to **M88** (`bubio/M88M`), produced with
 the headless reference oracle in [`../m88ref/`](../m88ref/). The method: boot the
 same `.d88` in both, headless, for the same number of frames, and compare a

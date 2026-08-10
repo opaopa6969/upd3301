@@ -1,6 +1,9 @@
 {
   "name": "upd3301",
   "version": "0.2.0",
+  "engines": {
+    "node": ">=24"
+  },
   "description": "NEC uPD3301 CRT controller + uPD8257 DMA emulator, CRT glass physics (phosphor/shadow mask), PC-8001/8801 machines - pure JS, zero deps, deterministic, headless",
   "type": "module",
   "main": "index.js",
