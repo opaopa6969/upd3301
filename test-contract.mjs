@@ -634,18 +634,6 @@ const REGISTRY = [
       line: m.line,
     }),
     todos: {
-      'picture':
-        'mdvdp.js keeps the picture out of getState() — "output, not state, and ' +
-        'at 230KB it would be two thirds of a Mega Drive snapshot". Measured on ' +
-        'the branch: restore-then-render gives the pre-rewind frame, exactly the ' +
-        'Game Boy bug of 2026-08-10. Adding `frameRgb: this.frameRgb.slice()` to ' +
-        'getState() and the matching set() to setState() makes both picture cases ' +
-        'pass (verified against origin/megadrive). 320x240x3 = 230,400 B is the ' +
-        'lazy shape, though: renderLine() resolves CRAM to RGB per pixel, so a ' +
-        'parallel 8-bit plane (6-bit CRAM entry + 2 shadow/highlight bits) would ' +
-        'be 76,800 B and snap.js already has packPixels for it. Owner: whoever ' +
-        'lands machinemd.js — this branch does not carry the file.',
-      'picture-cross': 'Same cause as `restoring a snapshot brings its picture back`.',
       'plain-data':
         'machinemd.js puts `sramDirty: this._sramDirty` in the snapshot and ' +
         '_sramDirty is undefined until the game writes save RAM, so a fresh ' +
@@ -673,24 +661,6 @@ const REGISTRY = [
       line: m.line,
     }),
     todos: {
-      'picture':
-        'x68video.js keeps the picture out of getState() ("output, not state"), ' +
-        'so restore-then-render shows the pre-rewind frame. Verified against ' +
-        'origin/x68000: adding frameRgb to getState()/setState() fixes this case. ' +
-        'The size is the hard part — the buffer is MAX_W x MAX_H x 3 = 3,145,728 ' +
-        'B and even the 512x512 window is 786,432 B, so the honest options are a ' +
-        'palette-index plane through snap.js packPixels, or Seta\'s answer: ' +
-        're-derive the picture inside restore() from the state that is already ' +
-        'there. Owner: whoever lands machinex68.js.',
-      'picture-cross':
-        'Two causes, not one. The picture is missing from the snapshot (see ' +
-        'above) AND the video\'s screen size is never re-derived on restore: ' +
-        'x68video.beginFrame() is what copies the CRTC size into width/height, ' +
-        'and only stepFrame() calls it, so a fresh machine that has been restored ' +
-        'but not stepped renders a 1x1 picture. One line — `this.video.' +
-        'beginFrame()` at the end of machinex68.restore() — fixes that half, ' +
-        'verified. This is the case that only a restore onto a DIFFERENT instance ' +
-        'can see, which is why that check exists.',
     },
   },
   {

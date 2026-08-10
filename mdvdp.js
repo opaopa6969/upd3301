@@ -778,6 +778,14 @@ export class MdVdp {
   getState() {
     return {
       schemaVersion: SCHEMA_VERSION,
+      // The finished picture. It reads like output rather than state — and it
+      // was left out on exactly that reasoning — but a frame is 240 lines each
+      // painted with CRAM and the registers as they stood when the raster
+      // crossed them, so no amount of end-of-frame state reproduces it. The
+      // host's jog/shuttle restores a snapshot and draws *without* stepping, so
+      // leaving it out makes every rewound frame show the last one the emulator
+      // actually ran (found on the Game Boy, 2026-08-10, then measured here).
+      frameRgb: this.frameRgb.slice(),
       vram: this.vram.slice(),
       cram: Array.from(this.cram),
       vsram: Array.from(this.vsram),
@@ -797,6 +805,9 @@ export class MdVdp {
   }
 
   setState(s) {
+    // Older snapshots predate the picture; leave the buffer as-is for those
+    // rather than blanking a screen the caller may still be looking at.
+    if (s.frameRgb) this.frameRgb.set(s.frameRgb);
     this.vram.set(s.vram);
     for (let i = 0; i < 64; i++) this.cram[i] = s.cram[i];
     for (let i = 0; i < 40; i++) this.vsram[i] = s.vsram[i];

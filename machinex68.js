@@ -758,6 +758,14 @@ export class X68000Machine {
     const lvl = this._pendingLevel();
     this.cpu.setIRQ(lvl);
     this._irqLevel = lvl;
+    // Re-derive the screen size. `beginFrame()` is the only thing that copies
+    // the CRTC's dimensions into the video's width/height, and only stepFrame()
+    // calls it — so a machine that has been restored but not stepped renders a
+    // 1x1 picture. The host does exactly that: the jog/shuttle preview restores
+    // and draws without advancing a frame. Invisible to an in-place restore,
+    // because the live object still holds the old size; only a restore onto a
+    // fresh instance shows it (test-contract.mjs).
+    this.video.beginFrame();
     return this;
   }
 }
