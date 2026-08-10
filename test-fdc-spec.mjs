@@ -26,6 +26,33 @@
 // The lesson worth keeping: **a matrix passing and four titles matching is not
 // evidence.** Both attempts at this looked correct until the sweep ran.
 //
+// WHY, measured rather than guessed: the sub ROM ships **two** transfer drivers,
+// and EXM means opposite things to them.
+//
+//   0300 (Aggres, Zarth, Rayieza, Wingman):
+//       IN A,(0FAh) / AND 20h / JR Z,0318h   <- EXM low means "transfer over"
+//       ...then IN A,(0FBh) for the byte, and TC at 0332
+//   0790 (Ys1, GAZZEL, ...):
+//       IN A,(0FEh) / BIT 2,A / RET Z        <- watches the 8255, not EXM
+//
+// To the 0300 driver **EXM is the promise that another byte exists**. Dropping
+// it while holding the ending open is indistinguishable from a transfer that
+// stopped early, so those titles abandon the load with bytes still outstanding —
+// which is why narrowing the window changed nothing. The problem was never
+// whether to report EOC; it was dropping EXM at all.
+//
+// EOT is also unreachable on this board: 0300 pulls TC once its own counter runs
+// out (measured: 29 byte reads, then TC while still in execute, ending with a
+// normal status), and 0790 finishes through the 8255. Neither driver ever lets
+// the chip run off the end of the cylinder.
+//
+// So these todos are not "not implemented yet" — they are **not expressible in
+// the current model**, where one JS call yields one byte and no time passes in
+// between. Reaching them needs the FDC to have a byte period (27us FM, 13us
+// MFM), so that "no next byte yet, waiting for TC" is a state that can exist at
+// all. That means putting the FDC into the frame scheduler: a large change, and
+// one to attempt on its own branch with the 353-title sweep after every step.
+//
 // STATUS (2026-08-10): five of these fail against the current implementation,
 // and that is deliberate — they are the specification, not a description of
 // what we do. An attempt to satisfy them wholesale broke real titles: raising
