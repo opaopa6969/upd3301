@@ -273,7 +273,9 @@ async function cmdWatch(rw) {
   let printed = 0, lastKey = '', lastRun = 0;
   const dis = c.arch.disasm;
   ice.recordMem(cpu, {
-    lo, hi, r: rw === 'r', w: rw === 'w', pcLo, pcHi, max: Number.MAX_SAFE_INTEGER,
+    // keep: 0 — this command prints from onHit and never looks at the retained
+    // array, so retaining anything is pure leak over a few hundred frames.
+    lo, hi, r: rw === 'r', w: rw === 'w', pcLo, pcHi, keep: 0,
     annotate: rw === 'w' ? profile.annotate : null,
     onHit(h) {
       if (bytes) { if (printed < max) { printed++; console.log(hex(h.value)); } return; }

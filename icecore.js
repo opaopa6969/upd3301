@@ -72,20 +72,19 @@ function probeMem(machine, cpu, arch, hint = {}) {
   // A machine-level accessor is the right answer when it exists: it resolves
   // banking the way the program sees it (this is why watch-write.mjs wrapped
   // machine.writeMem rather than the bus).
+  // A read-only accessor is common; falling back to the bus for the *write*
+  // half keeps memory editing working instead of silently doing nothing.
+  const busW = () => arch.busWrite?.(cpu) ?? (() => {});
   if (cpu === machine.cpu) {
     if (typeof machine.readMem === 'function') {
-      return {
-        read: (a) => machine.readMem(a & mask) & 0xff,
-        write: (a, v) => machine.writeMem?.(a & mask, v & 0xff),
-        how: 'machine.readMem', intrusive: false,
-      };
+      const w = typeof machine.writeMem === 'function'
+        ? (a, v) => machine.writeMem(a & mask, v & 0xff) : busW();
+      return { read: (a) => machine.readMem(a & mask) & 0xff, write: w, how: 'machine.readMem', intrusive: false };
     }
     if (typeof machine.peek === 'function') {
-      return {
-        read: (a) => machine.peek(a & mask) & 0xff,
-        write: (a, v) => machine.poke?.(a & mask, v & 0xff),
-        how: 'machine.peek', intrusive: false,
-      };
+      const w = typeof machine.poke === 'function'
+        ? (a, v) => machine.poke(a & mask, v & 0xff) : busW();
+      return { read: (a) => machine.peek(a & mask) & 0xff, write: w, how: 'machine.peek', intrusive: false };
     }
     const flat = machine.sys?.memory ?? (machine.memory instanceof Uint8Array ? machine.memory : null);
     if (flat) {
@@ -133,11 +132,15 @@ export function probeCpus(machine) {
   // one in this repo). Probed by shape: `.cpu` plus a flat `.mem`.
   if (machine.sub?.cpu && machine.sub.cpu !== machine.cpu) {
     const smem = machine.sub.mem;
-    const smask = smem?.length ? smem.length - 1 : 0x7fff;
+    // Mask only when the size is a power of two (it is: 0x8000 on the PC-8801
+    // FDD board). Anything else wraps with a modulo instead of quietly reading
+    // the wrong byte.
+    const n = smem?.length ?? 0;
+    const wrap = n && (n & (n - 1)) === 0 ? (a) => a & (n - 1) : (a) => ((a % n) + n) % n;
     push('sub', machine.sub.cpu,
-      smem ? {
-        read: (a) => smem[a & smask] ?? 0xff,
-        write: (a, v) => { smem[a & smask] = v & 0xff; },
+      n ? {
+        read: (a) => smem[wrap(a)] ?? 0xff,
+        write: (a, v) => { smem[wrap(a)] = v & 0xff; },
         how: 'sub.mem',
       } : {},
       {
@@ -334,8 +337,12 @@ export class IceCore {
         const spMask = arch.spMask ?? 0xffff;
         const push = arch.pushBytes ?? 2;
         const half = ((spMask >>> 1) + 1) >>> 0;
+        // `>>> 0` is load-bearing on a 32-bit mask: `(a - b) & 0xffffffff` is a
+        // *signed* int32 in JS, so a wrapped subtraction comes back negative and
+        // every comparison below silently reads as "has not returned yet". On
+        // 0xffff and 0xff it is a no-op, which is why the Z80 never showed this.
         if (target >= 0 && arch.pcOf(cpu) === target
-          && spNow === ((spB - push) & spMask) && P.stack.length < 512) {
+          && spNow === (((spB - push) & spMask) >>> 0) && P.stack.length < 512) {
           P.stack.push({ entry: target, sp: spNow, retTo, self: 0, child: 0 });
           if (entry.profOn) {
             let r = P.routines.get(target);
@@ -345,7 +352,7 @@ export class IceCore {
         }
         while (P.stack.length) { // unwind every frame whose return slot is gone
           const f = P.stack[P.stack.length - 1];
-          const d = (spNow - f.sp) & spMask;
+          const d = ((spNow - f.sp) & spMask) >>> 0;
           if (d < push || d >= half) break;
           P.stack.pop();
           const tot = f.self + f.child;
@@ -418,16 +425,20 @@ export class IceCore {
     return !!untap;
   }
 
+  // Counting, retention and streaming are three different budgets, and
+  // conflating them was a bug: a caller that wanted every hit streamed had to
+  // raise the retention cap to infinity, and then `hits` grew without bound over
+  // a few hundred frames. `total` always counts, `onHit` always fires, `hits`
+  // only keeps the first `keep`.
   _logMem(entry, L, addr, value, rw) {
     if (!L[rw]) return;
     if (addr < L.lo || addr > L.hi) return;
     const pc = entry.arch.pcOf(entry.cpu);
     if (L.pcLo >= 0 && (pc < L.pcLo || pc > L.pcHi)) return;
     L.total++;
-    if (L.hits.length >= L.max) { L.capped = true; return; }
     const hit = { frame: this.machine?.frame ?? 0, pc, addr, value, rw };
     if (L.annotate) Object.assign(hit, L.annotate(this.machine, hit) ?? {});
-    L.hits.push(hit);
+    if (L.hits.length < L.keep) L.hits.push(hit); else L.capped = true;
     L.onHit?.(hit);
   }
 
@@ -566,13 +577,13 @@ export class IceCore {
    * `annotate(machine, hit)` lets a caller fold in machine-specific routing
    * (which bank the write landed in); the core stays machine-independent.
    */
-  recordMem(name, { lo, hi = null, r = false, w = true, pcLo = -1, pcHi = pcLo, max = 4000, onHit = null, annotate = null } = {}) {
+  recordMem(name, { lo, hi = null, r = false, w = true, pcLo = -1, pcHi = pcLo, keep = 4000, onHit = null, annotate = null } = {}) {
     const c = this.cpu(name);
     if (!c) return null;
     if (!this._ensureBus(c)) return null;
     c.rec.memLog = {
       lo: lo & c.arch.addrMask, hi: (hi ?? lo) & c.arch.addrMask,
-      r, w, pcLo, pcHi, max, hits: [], total: 0, capped: false, onHit, annotate,
+      r, w, pcLo, pcHi, keep, hits: [], total: 0, capped: false, onHit, annotate,
     };
     return c.rec.memLog;
   }
@@ -612,7 +623,7 @@ export class IceCore {
       if (depth0 > 0) {
         if (c.profData.stack.length < depth0) return { done: true };
       } else {
-        const d = ((arch.spOf ? arch.spOf(c.cpu) : 0) - sp0) & spMask;
+        const d = (((arch.spOf ? arch.spOf(c.cpu) : 0) - sp0) & spMask) >>> 0;
         if (d >= push && d < half) return { done: true }; // return slot consumed
       }
     }
@@ -847,12 +858,18 @@ export function traceDiff(A, B, { window: WIN = 200000 } = {}) {
  */
 export function bucketize(hist, edges) {
   const out = new Map(edges.map(([, name]) => [name, 0]));
+  // Anything past the last edge lands here rather than vanishing. A silently
+  // dropped bucket makes the percentages add up to less than 100 and reads as
+  // "nothing happened there", which is the opposite of what it means.
+  out.set('above', 0);
   let total = 0;
   for (const [pc, n] of hist) {
     total += n;
+    let placed = false;
     for (const [limit, name] of edges) {
-      if (pc < limit) { out.set(name, out.get(name) + n); break; }
+      if (pc < limit) { out.set(name, out.get(name) + n); placed = true; break; }
     }
+    if (!placed) out.set('above', out.get('above') + n);
   }
   return { buckets: out, total, distinct: hist.size };
 }

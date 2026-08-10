@@ -552,3 +552,105 @@ function synthMdRom() {
   for (let i = 0; i < name.length; i++) out[0x100 + i] = name.charCodeAt(i);
   return out;
 }
+
+// ---- regressions found reviewing the extraction ------------------------------
+
+test('icecore: the shadow stack unwinds on a 32-bit stack pointer', () => {
+  // The bug: `(spNow - f.sp) & 0xffffffff` is a *signed* int32 in JS, so a
+  // wrapped subtraction came back negative and every comparison read as "has
+  // not returned yet". The Z80 never showed it (0xffff and 0xff cannot go
+  // negative), so it would have surfaced only when the 68000 decoder landed —
+  // as a shadow stack that silently never pops. Pinned here with a
+  // call-decoding 68000 arch supplied through attach()'s cpus override.
+  class Toy68kCall extends Toy68k {
+    step() {
+      const op = this._fw();
+      if (op === 0x4eb9) {                    // JSR abs.l
+        const hi = this._fw(), lo = this._fw();
+        const ret = this.pc >>> 0;
+        this.a[7] = (this.a[7] - 4) >>> 0;
+        this.bus.write16(this.a[7], (ret >>> 16) & 0xffff);
+        this.bus.write16((this.a[7] + 2) >>> 0, ret & 0xffff);
+        this.pc = (((hi << 16) | lo) >>> 0) & 0xffffff;
+      } else if (op === 0x4e75) {             // RTS
+        const h = this.bus.read16(this.a[7]), l = this.bus.read16((this.a[7] + 2) >>> 0);
+        this.a[7] = (this.a[7] + 4) >>> 0;
+        this.pc = (((h << 16) | l) >>> 0) & 0xffffff;
+      } else if (op === 0x00ff) this.halted = true;
+      this.cycles += 4;
+      return 4;
+    }
+  }
+  const w16 = (read) => (a) => ((read(a) << 8) | read((a + 1) & 0xffffff)) & 0xffff;
+  const arch = {
+    ...M68K_ARCH,
+    callAt(read, pc) {
+      const w = w16(read);
+      if (w(pc) !== 0x4eb9) return null;
+      return { target: (((w(pc + 2) << 16) | w(pc + 4)) >>> 0) & 0xffffff, retTo: (pc + 6) >>> 0 };
+    },
+  };
+  //  000400 JSR 000500 / 000406 HALT        000500 NOP / RTS
+  const m = mdLikeMachine([0x4eb9, 0x0000, 0x0500, 0x00ff]);
+  [0x0000, 0x4e75].forEach((w, i) => {
+    m.mem[0x500 + i * 2] = (w >> 8) & 0xff;
+    m.mem[0x500 + i * 2 + 1] = w & 0xff;
+  });
+  const cpu = new Toy68kCall(m.cpu.bus);
+  cpu.pc = 0x400;
+  cpu.a[7] = 0xfff000;
+  m.cpu = cpu;
+  m.stepFrame = function () { for (let i = 0; i < 4 && !cpu.halted; i++) cpu.step(); this.frame++; return this; };
+
+  const ice = new IceCore();
+  ice.attach(m, {
+    cpus: [{
+      name: 'main', cpu, arch,
+      read: (a) => m.mem[a & 0xffffff],
+      write: (a, v) => { m.mem[a & 0xffffff] = v & 0xff; },
+    }],
+  });
+  ice.setBreak('main', 0x0500);
+  m.stepFrame();
+  assert.ok(ice.paused, 'broke inside the subroutine');
+  const bt = ice.backtrace('main');
+  assert.deepEqual(bt.map((f) => f.entry), [0x0500], 'the call was pushed');
+  assert.equal(bt[0].retTo, 0x0406);
+  assert.ok(ice.stepOut('main').done, '…and RTS pops it — this is what the signed mask broke');
+  assert.equal(ice.backtrace('main').length, 0);
+  assert.equal(cpu.pc, 0x0406);
+  ice.detach();
+});
+
+test('icecore: a streaming memory log counts everything and retains only keep', () => {
+  // The bug: onHit used to sit behind the retention cap, so a caller that wanted
+  // every hit streamed had to set the cap to infinity — and then `hits` grew
+  // without bound. tools/ice.mjs read/write streams exactly like this.
+  const m = z80Machine(`
+        ORG 100h
+        LD HL,0C000h
+        LD B,8
+loop:   LD (HL),B
+        INC HL
+        DJNZ loop
+        HALT
+`);
+  const ice = new IceCore();
+  ice.attach(m);
+  const seen = [];
+  const L = ice.recordMem('main', { lo: 0xc000, hi: 0xc0ff, w: true, keep: 2, onHit: (h) => seen.push(h.addr) });
+  m.stepFrame();
+  assert.equal(L.total, 8, 'every write counted');
+  assert.equal(seen.length, 8, 'every write streamed');
+  assert.equal(L.hits.length, 2, 'only two retained');
+  assert.equal(L.capped, true, 'and it says it stopped retaining');
+  ice.detach();
+});
+
+test('icecore: bucketize never silently drops a PC past the last edge', () => {
+  const h = new Map([[0x10, 3], [0x9000, 5]]);
+  const { buckets, total } = bucketize(h, [[0x100, 'low']]);
+  assert.equal(total, 8);
+  assert.equal(buckets.get('low'), 3);
+  assert.equal(buckets.get('above'), 5, 'the rest is named, not lost');
+});
