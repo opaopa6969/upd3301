@@ -32,3 +32,33 @@ CI で構造的に塞ぐ。
 - ROM が要るテストは**自分で skip する**（`tools/type-test.mjs` は `roms/N80_2.ROM`
   が無ければ skip、`test-snapshot.mjs` 等も同様）。
   検証済み: **ROM無し 296 pass / 17 skip / 0 fail、ROMあり 313 pass / 0 fail**
+
+## 2026-08-10 追記: CI が実際に契約を守るようになった
+
+導入時点では、**この CI を回しても決定論契約は検証されなかった**。
+検証していたはずの `test-snapshot.mjs` は全ケースが
+
+```js
+if (!rom) return t.skip('no ROM (bring your own)')
+```
+
+で始まり、リポジトリは ROM を同梱しないので、**CI 上では必ず skip されていた**。
+2日間の破れを見逃した原因はこれで、**「テストがある」と「テストが走る」は別**という
+話だった。
+
+`test-determinism.mjs`（`76bc7be`）を追加して解消した。`z80asm.js` で数命令を
+合成して機械を走らせるので、**ROM もディスクも要らない**。CI でも新規 clone でも
+必ず走る7件:
+
+- 同じプログラムを2回走らせて同一
+- snapshot → 前進 → restore → 前進 が同一タイムラインに着地
+- **別インスタンスへの restore**（その場 restore は書き戻し忘れを見逃す）
+- **サブCPUクロックが snapshot を生き延びる**（今回の回帰そのもの）
+- snapshot が ROM を含まない / plain data である
+- ディスクを挿しても決定論が壊れない
+
+**契約テストは skip できてはいけない。** skip できるものは skip される。
+
+なお ROM を要求するテスト（`test-fdd.mjs` の基板統合、`tools/type-test.mjs`）は
+引き続き skip する。それらは「実タイトルが動くか」の検証であって契約の検証ではないので、
+skip されても契約は守られる。この切り分けが今回の教訓。
