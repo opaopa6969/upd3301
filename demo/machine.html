@@ -66,6 +66,8 @@
   </span>
   <label style="color:#778;font-size:12px" title="PCエンジンのHuCard(.pce)を読み込む。読み込むと機種がPCエンジンに切り替わる">🕹 PCエンジン(.pce): <input type="file" id="fpce" accept=".pce,.PCE" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="メガドライブのカートリッジ(.md/.bin/.gen/.smd)を読み込む。読み込むと機種がメガドライブに切り替わる">🕹 メガドライブ: <input type="file" id="fmd" accept=".md,.MD,.bin,.BIN,.gen,.GEN,.smd,.SMD,.68k" style="font-size:11px"></label>
+  <label style="color:#778;font-size:12px" title="X68000のIPL ROM(IPLROM.DAT 128KB)とCGROM(CGROM.DAT 768KB)を選ぶ。両方まとめて選んでよい">🖥 X68000 ROM: <input type="file" id="fx68rom" multiple style="font-size:11px"></label>
+  <label style="color:#778;font-size:12px" title="X68000のフロッピー(.dim/.xdf/.img/.d88)を読み込む。IPL ROMがあれば機種がX68000に切り替わる">💾 X68000 FD: <input type="file" id="fx68fd" accept=".dim,.DIM,.xdf,.XDF,.img,.IMG,.2hd,.d88,.D88,.88d" multiple style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <span id="grp-tape" style="display:inline-flex;gap:4px;align-items:center">
     <label style="color:#778;font-size:12px" title="カセットテープ(.t88/.cas/.cmt)を読み込む。N88モードで CLOAD するとテープから読める">📼 テープ: <input type="file" id="ftape" accept=".t88,.cas,.cmt,.T88,.CAS,.CMT" style="font-size:11px"></label>
@@ -108,7 +110,8 @@
   <button id="mn88">N88-BASIC</button>
   <button id="mnes" title="ファミコン(NES)。.nes を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">ファミコン</button>
   <button id="mpce" title="PCエンジン。.pce を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">PCエンジン</button>
-  <button id="mmd" title="メガドライブ。.md/.bin/.gen/.smd を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">メガドライブ</button></span>
+  <button id="mmd" title="メガドライブ。.md/.bin/.gen/.smd を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">メガドライブ</button>
+  <button id="mx68" title="X68000。IPL ROMとフロッピーを読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">X68000</button></span>
   <label style="color:#778;font-size:12px" title="サウンドボードII (OPNA/YM2608) を有効にする">SB2 <input type="checkbox" id="sb2" style="vertical-align:middle"></label>
   <label style="color:#778;font-size:12px" title="エミュレーション速度。倍速・早送り（実CPUが追いつく範囲まで）">速度 <select id="speed" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
     <option value="0.25">×0.25</option><option value="0.5">×0.5</option>
@@ -155,6 +158,8 @@ import { tryCreateMapper } from '../nesmapper.js';
 import { PceMachine, BUTTON as PCE_BUTTON } from '../machinepce.js';
 import { tryParsePce, summarizePce } from '../pcerom.js';
 import { MegaDriveMachine, BUTTON as MD_BUTTON } from '../machinemd.js';
+import { X68000Machine, KEY as X68_KEY, JOY as X68_JOY } from '../machinex68.js';
+import { tryParseX68Disk, summarizeX68Disk } from '../x68fdd.js';
 import { tryParseMdRom, summarizeMdRom } from '../mdrom.js';
 import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
@@ -478,6 +483,35 @@ $('fmd').onchange = async (e) => {
   switchMode('md');
   if (mdCart.warnings.length) guts.textContent = `${f.name}: ${mdCart.warnings.join(' / ')}`;
 };
+// ---- X68000: the ROMs and the floppies ------------------------------------
+// The X68000 is the first machine here that cannot run from the cartridge
+// alone: it needs its IPL ROM, and the picture needs its CGROM. Both are
+// identified by size rather than by name, because the files in the wild are
+// called IPLROM.DAT, iplrom.dat, BOOT.ROM and half a dozen other things.
+$('fx68rom').onchange = async (e) => {
+  for (const f of e.target.files) {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    if (bytes.length === 0x20000) { x68Ipl = bytes; x68IplName = f.name; }
+    else if (bytes.length >= 0xc0000) x68Cgrom = bytes.subarray(0, 0xc0000);
+    else if (bytes.length === 0x4000) x68Sram = bytes;
+  }
+  guts.textContent = `X68000: IPL=${x68Ipl ? x68IplName : '未'} CGROM=${x68Cgrom ? 'あり' : '未'}`;
+  if (x68Ipl) switchMode('x68');
+};
+$('fx68fd').onchange = async (e) => {
+  const files = [...e.target.files].slice(0, 2);
+  x68Disks = [null, null];
+  x68DiskName = '';
+  for (let i = 0; i < files.length; i++) {
+    const bytes = new Uint8Array(await files[i].arrayBuffer());
+    const parsed = tryParseX68Disk(bytes, { name: files[i].name });
+    if (!parsed.ok) { guts.textContent = `${files[i].name}: ${parsed.error}`; continue; }
+    x68Disks[i] = parsed.disk;
+    if (!x68DiskName) x68DiskName = `${files[i].name} · ${summarizeX68Disk(parsed.disk).media}`;
+  }
+  if (x68Ipl) switchMode('x68');
+  else guts.textContent = 'X68000のIPL ROM(128KB)も選んでね';
+};
 $('ffont').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
@@ -568,7 +602,14 @@ $('breset').onclick = () => boot();
 // satisfies the contract (stepFrame / frame / snapshot / restore) drops in
 // with the time-travel machinery already working.
 const hasOwnRender = (m) => !!m && typeof m.render === 'function';
-const crtcOf = (m) => (m && (m.crtc || (m.sys && m.sys.crtc))) || null;
+// "Has a CRTC the status line can read", not "has a property called crtc".
+// The X68000 has a `crtc` too and it is a completely different part — asking
+// it for hsyncHz() throws. Probing for the method rather than the name is what
+// keeps this a capability check.
+const crtcOf = (m) => {
+  const c = (m && (m.crtc || (m.sys && m.sys.crtc))) || null;
+  return c && typeof c.hsyncHz === 'function' ? c : null;
+};
 // One render call for every machine. Machines that render themselves take the
 // options (and ignore the ones that mean nothing to them); the PC-8001 renders
 // through its text system. `extra` picks the indexed/analog path.
@@ -576,7 +617,7 @@ function renderMachine(extra = {}) {
   if (hasOwnRender(machine)) return machine.render({ cgrom, ...renderOpts(), ...extra });
   return machine.sys.render({ cgrom });
 }
-const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', pce: 'PCエンジン/PC Engine', md: 'メガドライブ/MD' };
+const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', pce: 'PCエンジン/PC Engine', md: 'メガドライブ/MD', x68: 'X68000' };
 // Raw-frame PNG: the machine's OWN render() (full 512-colour palette), with NO
 // phosphor / tube / interlace / line-double and no CSS scaling — the emulation's
 // ground truth at 640×200. Lets a corrupted scene be diagnosed as emulation vs
@@ -637,15 +678,17 @@ $('bpng').onclick = () => {
 // defaults (the user can still override before reset).
 function switchMode(mode) {
   bootMode = mode;
-  const is88 = mode === 'n88', isNes = mode === 'nes', isPce = mode === 'pce', isMd = mode === 'md';
+  const is88 = mode === 'n88', isNes = mode === 'nes', isPce = mode === 'pce', isMd = mode === 'md', isX68 = mode === 'x68';
   $('mn88').classList.toggle('on', is88);
   $('mn80').classList.toggle('on', mode === 'n80');
   $('mnes').classList.toggle('on', isNes);
   $('mpce').classList.toggle('on', isPce);
   $('mmd').classList.toggle('on', isMd);
-  // No console has DIP switches; leave the fields where they are so switching
-  // away and back does not lose the user's PC-88 setup.
-  if (!isNes && !isPce && !isMd) {
+  $('mx68').classList.toggle('on', isX68);
+  // Only the PC-88 family reads DIP switches; for everything else leave the
+  // fields where they are so switching away and back does not lose the user's
+  // PC-88 setup.
+  if (!isNes && !isPce && !isMd && !isX68) {
     $('dip1').value = is88 ? 'DB' : 'FF';
     $('dip2').value = is88 ? '79' : 'FF';
   }
@@ -653,6 +696,8 @@ function switchMode(mode) {
     $('dipnote').textContent = 'PCエンジンのHuCard(.pce)を選ぶと起動する';
   } else if (isMd && !mdCart) {
     $('dipnote').textContent = 'メガドライブのROM(.md/.bin/.gen/.smd)を選ぶと起動する';
+  } else if (isX68 && !x68Ipl) {
+    $('dipnote').textContent = 'X68000のIPL ROM(128KB)とCGROM(768KB)を選ぶと起動する';
   } else if (isNes && !nesCart) {
     $('dipnote').textContent = fdsBios
       ? 'ファミコンのROM(.nes)かディスク(.fds)を選ぶと起動する'
@@ -671,6 +716,7 @@ $('mn88').onclick = () => switchMode('n88');
 $('mnes').onclick = () => switchMode('nes');
 $('mpce').onclick = () => switchMode('pce');
 $('mmd').onclick = () => switchMode('md');
+$('mx68').onclick = () => switchMode('x68');
 for (const id of ['dip1', 'dip2']) $(id).onchange = () => boot();
 
 // Disk pool + drive assignment. A .d88 file can hold SEVERAL disk images, and a
@@ -1580,7 +1626,33 @@ const renderOpts = () => ({ textOpaque: txtOpaque, clipActive, hideText: !showTe
 // the snapshot INTERVAL auto-coarsens above ~1.7 min so the count stays ≤ ~1000
 // (≈150 MB): short buffers keep fine 0.1 s granularity, a 10-min buffer steps at
 // ~0.6 s. Both are configurable; REWIND_EVERY/REWIND_MAX are derived, not fixed.
-const REWIND_TARGET = 1000; // max snapshots kept (memory cap)
+// The cap used to be a fixed 1000 snapshots, which assumed every machine's
+// state was about the same size. It is not: a Famicom snapshot is 3 KB, a Mega
+// Drive one 142 KB, and an X68000's is 2 MB because a megabyte of RAM and a
+// megabyte of video memory both have to travel. A thousand of those is two
+// gigabytes. So the cap is a MEMORY budget now, and the count is derived from
+// the size of the first snapshot this machine actually produced.
+const REWIND_BUDGET_BYTES = 192 * 1024 * 1024;
+let REWIND_TARGET = 1000;
+// Rough but honest: typed arrays cost their bytes, numbers eight, and the rest
+// is noise next to those.
+function snapBytes(v, depth = 0) {
+  if (v == null || depth > 6) return 0;
+  if (ArrayBuffer.isView(v)) return v.byteLength;
+  if (Array.isArray(v)) { let n = 0; for (const x of v) n += typeof x === 'number' ? 8 : snapBytes(x, depth + 1); return n; }
+  if (typeof v === 'number') return 8;
+  if (typeof v === 'string') return v.length * 2;
+  if (typeof v === 'object') { let n = 0; for (const k in v) n += snapBytes(v[k], depth + 1); return n; }
+  return 1;
+}
+function sizeRewindFor(snap) {
+  const bytes = Math.max(1024, snapBytes(snap));
+  const target = Math.max(30, Math.min(1000, Math.round(REWIND_BUDGET_BYTES / bytes)));
+  if (target === REWIND_TARGET) return;
+  REWIND_TARGET = target;
+  applyRewindBudget();
+  while (history.length > REWIND_MAX) history.shift();
+}
 let rewindSecs = Math.max(5, Math.min(600, parseInt(localStorage.getItem('upd3301-rewindsecs') || '45', 10) || 45));
 let REWIND_EVERY = 6, REWIND_MAX = 450;
 function applyRewindBudget() {
@@ -1773,6 +1845,14 @@ let consolePad = 0;
 // it is immutable, so the machine keeps it by reference and no snapshot ever
 // copies it. A 4 MB cartridge in the rewind ring would be the end of rewind.
 let mdCart = null, mdInfo = null, mdName = '';
+// The X68000's ROMs and disks are held by reference for the same reason as the
+// cartridges above: they are immutable, so no snapshot ever copies them. The
+// IPL is 128 KB and a floppy 1.2 MB — either in the rewind ring would be the
+// end of rewind.
+let x68Ipl = null, x68Cgrom = null, x68Sram = null, x68IplName = '';
+let x68Disks = [null, null], x68DiskName = '';
+let x68Joy = 0;   // live joystick mask (see X68_JOY) — a PORT, not a pad, so it
+                  // does not go through PAD_BITS/consolePad
 const dipOf = (id, dflt) => {
   const v = parseInt($(id).value.trim(), 16);
   return Number.isFinite(v) ? (v & 0xff) : dflt;
@@ -1854,6 +1934,16 @@ function boot() {
     // the same contract as every other machine in this host.
     machine = new MegaDriveMachine({ cart: mdCart });
     consolePad = 0;
+    canvas.focus();
+    return;
+  }
+  if (bootMode === 'x68') {
+    if (!x68Ipl) { guts.textContent = 'X68000のIPL ROM(IPLROM.DAT 128KB)を選んでね'; return; }
+    // 1 MB is the stock machine and what keeps a snapshot near 1.6 MB; the
+    // rewind ring is the reason, and docs/x68000-design.md has the numbers.
+    machine = new X68000Machine({ ipl: x68Ipl, cgrom: x68Cgrom, sram: x68Sram });
+    x68Disks.forEach((d, i) => { if (d) machine.insertDisk(i, d); });
+    x68Joy = 0;
     canvas.focus();
     return;
   }
@@ -2015,6 +2105,7 @@ canvas.addEventListener('click', () => { if (machine && typeof machine.renderAud
       // is the same trap, one console later.
       it('fpce', '🕹 PCエンジン(.pce)', lab('fpce')),
       it('fmd', '🕹 メガドライブ(.md)', lab('fmd')),
+      it('fx68rom', '🖥 X68000 ROM', lab('fx68rom')), it('fx68fd', '💾 X68000 FD', lab('fx68fd')),
       it('grp-fds', '💽 ディスクシステム(.fds)', $('grp-fds')),
       it('romstore', '保存済ROM', $('romstore')),
     ].filter(Boolean) },
@@ -2219,6 +2310,23 @@ function applyPad() {
   }
   if (machine.keys) for (let i = 0; i < 16; i++) machine.keys[i] = kbMatrix[i] & padM[i];
   if (machine.joy) machine.joy[0] = kbdJoy & padJoy; // 8001 has no joystick port
+  // X68000: not a console — a keyboard machine with a two-button stick on a
+  // PORT (machine.joy, active HIGH in its own bit order), so it cannot ride the
+  // PAD_BITS/machine.pads path below. Same six-line translation of the 8801
+  // joystick bits every other family uses, keyed off its own table.
+  if (JOY_BITS[bootMode] && machine.joy) {
+    const bits = JOY_BITS[bootMode];
+    const j = ~padJoy & 0x3f;
+    let b = x68Joy;
+    if (j & 0x01) b |= 1 << bits.UP;
+    if (j & 0x02) b |= 1 << bits.DOWN;
+    if (j & 0x04) b |= 1 << bits.LEFT;
+    if (j & 0x08) b |= 1 << bits.RIGHT;
+    if (j & 0x10) b |= 1 << bits.A;
+    if (j & 0x20) b |= 1 << bits.B;
+    machine.joy[0] = b;
+    return;
+  }
   // Consoles: no key matrix, just buttons. The gamepad's 8801 joystick bits
   // (active LOW) are translated rather than mapped a second time, so the pad
   // config panel keeps working for every family. Which bit is which is the
@@ -2277,6 +2385,33 @@ const PAD_KEYMAPS = {
   md: { ...PAD_KEYMAP, z: 'A', x: 'B', c: 'C', a: 'A', s: 'B', d: 'C', ' ': 'START', Shift: 'START' },
 };
 const padKeymapFor = (m) => PAD_KEYMAPS[m] || PAD_KEYMAP;
+// Joystick PORTS (machine.joy) as opposed to console pads (machine.pads).
+// Keyed by boot mode, same as PAD_BITS, so applyPad() asks a table instead of
+// growing another `bootMode === ...` arm.
+const JOY_BITS = { x68: X68_JOY };
+// Keyboard -> X68000. The machine has a real keyboard, so letters and digits
+// go through as key codes and the arrow keys double as the stick.
+const X68_KEYMAP = {
+  ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT',
+  Enter: 'RETURN', Backspace: 'BS', Tab: 'TAB', ' ': 'SPACE', Escape: 'ESC',
+  Shift: 'SHIFT', Control: 'CTRL',
+};
+const X68_JOYMAP = { z: 'A', x: 'B' };
+function x68KeySet(e, down) {
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const jn = X68_JOYMAP[key];
+  if (jn) { const bit = 1 << X68_JOY[jn]; x68Joy = down ? (x68Joy | bit) : (x68Joy & ~bit); return true; }
+  let name = X68_KEYMAP[key];
+  if (!name && /^[a-z]$/.test(key)) name = key.toUpperCase();
+  if (!name && /^[0-9]$/.test(key)) name = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE'][+key];
+  const code = name && X68_KEY[name];
+  if (!code) return false;
+  if (down) machine.keyDown(code); else machine.keyUp(code);
+  return true;
+}
+// Machines that own their whole keyboard — neither the 8801 matrix nor a pad.
+// A new one plugs in here instead of adding another arm to the key handlers.
+const OWN_KEYS = { x68: x68KeySet };
 function padKeySet(e, down) {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const name = padKeymapFor(bootMode)[key];
@@ -2304,8 +2439,9 @@ function matrixKey(e) {
 const isFormFocused = () => { const el = document.activeElement; return el && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName); };
 window.addEventListener('keydown', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
-  if (isConsole(bootMode)) {
-    if (!padKeySet(e, true)) return;
+  const ownKeys = OWN_KEYS[bootMode];
+  if (ownKeys || isConsole(bootMode)) {
+    if (!(ownKeys ? ownKeys(e, true) : padKeySet(e, true))) return;
     ensureAudio(); // a keypress is a user gesture → unblock autoplay
     if (frozen()) resumePlay();
     e.preventDefault();
@@ -2322,6 +2458,8 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
+  const ownKeysUp = OWN_KEYS[bootMode];
+  if (ownKeysUp) { if (ownKeysUp(e, false)) e.preventDefault(); return; }
   if (isConsole(bootMode)) { if (padKeySet(e, false)) e.preventDefault(); return; }
   const k = matrixKey(e);
   if (!e.shiftKey) kbSet([[8, 6]], false);
@@ -2609,7 +2747,10 @@ function loop(now) {
       machine.update(Math.min(dt * speedMul * transportSpeed, 0.5), onFrame); // transportSpeed>1 = shuttle fast-forward
       if (canSnap() && machine.frame - lastSnapFrame >= REWIND_EVERY) {
         lastSnapFrame = machine.frame;
-        history.push({ snap: machine.snapshot(), frame: machine.frame });
+        const snap = machine.snapshot();
+        // The first snapshot of a session sizes the ring for THIS machine.
+        if (history.length === 0) sizeRewindFor(snap);
+        history.push({ snap, frame: machine.frame });
         if (history.length > REWIND_MAX) history.shift();
       }
     }
@@ -2688,6 +2829,9 @@ function loop(now) {
     guts.textContent = `${MACHINE_LABEL[bootMode] || 'machine'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
       + (crtc ? `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz`
         : bootMode === 'pce' && pceInfo ? `  ${pceName} · ${pceInfo.board}`
+        // `machine.crtc &&` guards the window where the mode is x68 but boot()
+        // bailed out (no IPL yet) and `machine` is still the previous machine.
+        : bootMode === 'x68' && machine.crtc ? `  ${machine.crtc.width}x${machine.crtc.height} ${machine.crtc.highReso ? '31kHz' : '15kHz'}${x68DiskName ? '  ' + x68DiskName : ''}`
         : bootMode === 'md' && mdInfo ? `  ${mdName} · ${mdInfo.title || '(no title)'} · ${mdInfo.regions}`
         : (nesInfo ? `  ${nesName} · ${nesInfo.board}` : ''))
       + (machine.effectiveCpuPct !== undefined ? `  CPU ${machine.effectiveCpuPct}%` : '')
