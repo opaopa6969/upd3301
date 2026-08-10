@@ -65,6 +65,7 @@
     <select id="fdsside" title="ディスクの面を入れ替える（ゲームが『ディスクカードを裏返してください』と言ったとき）" style="display:none;background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px"></select>
   </span>
   <label style="color:#778;font-size:12px" title="PCエンジンのHuCard(.pce)を読み込む。読み込むと機種がPCエンジンに切り替わる">🕹 PCエンジン(.pce): <input type="file" id="fpce" accept=".pce,.PCE" style="font-size:11px"></label>
+  <label style="color:#778;font-size:12px" title="メガドライブのカートリッジ(.md/.bin/.gen/.smd)を読み込む。読み込むと機種がメガドライブに切り替わる">🕹 メガドライブ: <input type="file" id="fmd" accept=".md,.MD,.bin,.BIN,.gen,.GEN,.smd,.SMD,.68k" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <span id="grp-tape" style="display:inline-flex;gap:4px;align-items:center">
     <label style="color:#778;font-size:12px" title="カセットテープ(.t88/.cas/.cmt)を読み込む。N88モードで CLOAD するとテープから読める">📼 テープ: <input type="file" id="ftape" accept=".t88,.cas,.cmt,.T88,.CAS,.CMT" style="font-size:11px"></label>
@@ -106,7 +107,8 @@
   <span id="grp-bootmode"><button id="mn80" class="on">N-BASIC (N80)</button>
   <button id="mn88">N88-BASIC</button>
   <button id="mnes" title="ファミコン(NES)。.nes を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">ファミコン</button>
-  <button id="mpce" title="PCエンジン。.pce を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">PCエンジン</button></span>
+  <button id="mpce" title="PCエンジン。.pce を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">PCエンジン</button>
+  <button id="mmd" title="メガドライブ。.md/.bin/.gen/.smd を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">メガドライブ</button></span>
   <label style="color:#778;font-size:12px" title="サウンドボードII (OPNA/YM2608) を有効にする">SB2 <input type="checkbox" id="sb2" style="vertical-align:middle"></label>
   <label style="color:#778;font-size:12px" title="エミュレーション速度。倍速・早送り（実CPUが追いつく範囲まで）">速度 <select id="speed" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
     <option value="0.25">×0.25</option><option value="0.5">×0.5</option>
@@ -152,6 +154,8 @@ import { tryParseFds, makeFdsCart } from '../fds.js';
 import { tryCreateMapper } from '../nesmapper.js';
 import { PceMachine, BUTTON as PCE_BUTTON } from '../machinepce.js';
 import { tryParsePce, summarizePce } from '../pcerom.js';
+import { MegaDriveMachine, BUTTON as MD_BUTTON } from '../machinemd.js';
+import { tryParseMdRom, summarizeMdRom } from '../mdrom.js';
 import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 import { parseD88All, summarize } from '../d88.js';
@@ -457,6 +461,23 @@ function buildFdsSideUI() {
   sel.style.display = '';
   sel.onchange = () => { if (machine && machine.hasDisk) machine.setDiskSide(+sel.value); };
 }
+// ---- Mega Drive cartridge (.md / .bin / .gen / .smd) -----------------------
+// Same shape as the Famicom picker: the parse answers with data, not an
+// exception, because a file picker meets junk. A Mega Drive dump also arrives
+// in three different byte orders (see mdrom.js) and the ones that were
+// un-mangled say so on screen rather than silently.
+$('fmd').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  const parsed = tryParseMdRom(bytes, { name: f.name });
+  if (!parsed.ok) { guts.textContent = `${f.name}: ${parsed.error}`; return; }
+  mdCart = parsed.cart;
+  mdInfo = summarizeMdRom(mdCart);
+  mdName = f.name;
+  switchMode('md');
+  if (mdCart.warnings.length) guts.textContent = `${f.name}: ${mdCart.warnings.join(' / ')}`;
+};
 $('ffont').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
@@ -555,7 +576,7 @@ function renderMachine(extra = {}) {
   if (hasOwnRender(machine)) return machine.render({ cgrom, ...renderOpts(), ...extra });
   return machine.sys.render({ cgrom });
 }
-const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', pce: 'PCエンジン/PC Engine' };
+const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', pce: 'PCエンジン/PC Engine', md: 'メガドライブ/MD' };
 // Raw-frame PNG: the machine's OWN render() (full 512-colour palette), with NO
 // phosphor / tube / interlace / line-double and no CSS scaling — the emulation's
 // ground truth at 640×200. Lets a corrupted scene be diagnosed as emulation vs
@@ -616,19 +637,22 @@ $('bpng').onclick = () => {
 // defaults (the user can still override before reset).
 function switchMode(mode) {
   bootMode = mode;
-  const is88 = mode === 'n88', isNes = mode === 'nes', isPce = mode === 'pce';
+  const is88 = mode === 'n88', isNes = mode === 'nes', isPce = mode === 'pce', isMd = mode === 'md';
   $('mn88').classList.toggle('on', is88);
   $('mn80').classList.toggle('on', mode === 'n80');
   $('mnes').classList.toggle('on', isNes);
   $('mpce').classList.toggle('on', isPce);
-  // Neither console has DIP switches; leave the fields where they are so
-  // switching away and back does not lose the user's PC-88 setup.
-  if (!isNes && !isPce) {
+  $('mmd').classList.toggle('on', isMd);
+  // No console has DIP switches; leave the fields where they are so switching
+  // away and back does not lose the user's PC-88 setup.
+  if (!isNes && !isPce && !isMd) {
     $('dip1').value = is88 ? 'DB' : 'FF';
     $('dip2').value = is88 ? '79' : 'FF';
   }
   if (isPce && !pceCart) {
     $('dipnote').textContent = 'PCエンジンのHuCard(.pce)を選ぶと起動する';
+  } else if (isMd && !mdCart) {
+    $('dipnote').textContent = 'メガドライブのROM(.md/.bin/.gen/.smd)を選ぶと起動する';
   } else if (isNes && !nesCart) {
     $('dipnote').textContent = fdsBios
       ? 'ファミコンのROM(.nes)かディスク(.fds)を選ぶと起動する'
@@ -646,6 +670,7 @@ $('mn80').onclick = () => switchMode('n80');
 $('mn88').onclick = () => switchMode('n88');
 $('mnes').onclick = () => switchMode('nes');
 $('mpce').onclick = () => switchMode('pce');
+$('mmd').onclick = () => switchMode('md');
 for (const id of ['dip1', 'dip2']) $(id).onchange = () => boot();
 
 // Disk pool + drive assignment. A .d88 file can hold SEVERAL disk images, and a
@@ -1744,6 +1769,10 @@ let pceCart = null, pceInfo = null, pceName = '';
 // Live console button mask, in whichever console's own bit order is running
 // (see PAD_BITS), ORed with the gamepad.
 let consolePad = 0;
+// The parsed Mega Drive cartridge, held for the same reason as the Famicom's:
+// it is immutable, so the machine keeps it by reference and no snapshot ever
+// copies it. A 4 MB cartridge in the rewind ring would be the end of rewind.
+let mdCart = null, mdInfo = null, mdName = '';
 const dipOf = (id, dflt) => {
   const v = parseInt($(id).value.trim(), 16);
   return Number.isFinite(v) ? (v & 0xff) : dflt;
@@ -1818,6 +1847,16 @@ function boot() {
     canvas.focus();
     return;
   }
+  if (bootMode === 'md') {
+    if (!mdCart) { guts.textContent = 'メガドライブのROM(.md/.bin/.gen/.smd)を選んでね'; return; }
+    // The cartridge header decides the region, and with it 60 Hz or 50 Hz —
+    // nothing here to configure. Fast forward, rewind and jog-shuttle run on
+    // the same contract as every other machine in this host.
+    machine = new MegaDriveMachine({ cart: mdCart });
+    consolePad = 0;
+    canvas.focus();
+    return;
+  }
   if (bootMode === 'n88') {
     if (!has88Set()) {
       guts.textContent = t('PC-8801 BIOS一式(n88.rom + n88_0..3.rom + disk.rom)を選んでね');
@@ -1888,9 +1927,9 @@ let audioSamplesPushed = 0;        // play-cursor tracking for the push pump
 let pumpBuf = new Float32Array(AUDIO_MAXCHUNK);
 function renderAudioInto(buf, n) {
   // Capability, not machine identity: anything that offers renderAudio() gets
-  // played (the 8801's OPN, the Famicom's APU). Testing for `machine.opn` here
-  // silently muted the Famicom, which is exactly the kind of instanceof-in-
-  // disguise the rest of this host was cleaned of.
+  // played (the 8801's OPN, the Famicom's APU, the Mega Drive's YM2612+PSG).
+  // Testing for `machine.opn` here silently muted the Famicom, which is exactly
+  // the kind of instanceof-in-disguise the rest of this host was cleaned of.
   if (!machine || typeof machine.renderAudio !== 'function' || rewinding || paused || scrubIndex !== null || shuttleX !== 0) { buf.fill(0, 0, n); return buf; } // silent while scrubbing / shuttling / paused
   machine.renderAudio(buf, n);
   return buf;
@@ -1954,7 +1993,10 @@ function ensureAudio() {
     startScriptProcessor();
   }
 }
-canvas.addEventListener('click', () => { if (bootMode !== 'n80') ensureAudio(); });
+// Capability again, not a mode list: a click unblocks autoplay for any machine
+// that can actually make a sound. `bootMode !== 'n80'` was the same test written
+// as machine identity, and would have needed a new name per console.
+canvas.addEventListener('click', () => { if (machine && typeof machine.renderAudio === 'function') ensureAudio(); });
 
 // ---- fold the piecemeal control rows into a grouped menu bar + pinnable dock ---
 {
@@ -1972,6 +2014,7 @@ canvas.addEventListener('click', () => { if (bootMode !== 'n80') ensureAudio(); 
       // invisible. The Famicom stage lost 📼テープ that way and then .nes; this
       // is the same trap, one console later.
       it('fpce', '🕹 PCエンジン(.pce)', lab('fpce')),
+      it('fmd', '🕹 メガドライブ(.md)', lab('fmd')),
       it('grp-fds', '💽 ディスクシステム(.fds)', $('grp-fds')),
       it('romstore', '保存済ROM', $('romstore')),
     ].filter(Boolean) },
@@ -2176,10 +2219,12 @@ function applyPad() {
   }
   if (machine.keys) for (let i = 0; i < 16; i++) machine.keys[i] = kbMatrix[i] & padM[i];
   if (machine.joy) machine.joy[0] = kbdJoy & padJoy; // 8001 has no joystick port
-  // Famicom: no key matrix, eight buttons. The gamepad's 8801 joystick bits
+  // Consoles: no key matrix, just buttons. The gamepad's 8801 joystick bits
   // (active LOW) are translated rather than mapped a second time, so the pad
-  // config panel keeps working for both families.
-  if (machine.pads) {
+  // config panel keeps working for every family. Which bit is which is the
+  // console's business (PAD_BITS), not this loop's — the Mega Drive arrived
+  // with its own copy of this block and it is the same six lines.
+  if (machine.pads && PAD_BITS[bootMode]) {
     const bits = PAD_BITS[bootMode];
     const j = ~padJoy & 0x3f;
     let b = consolePad;
@@ -2208,8 +2253,16 @@ const PAD_BITS = {
     // player expects A. RUN is the start button and SELECT is SELECT.
     A: PCE_BUTTON.II, B: PCE_BUTTON.I, START: PCE_BUTTON.RUN, SELECT: PCE_BUTTON.SELECT,
   },
+  md: {
+    UP: MD_BUTTON.UP, DOWN: MD_BUTTON.DOWN, LEFT: MD_BUTTON.LEFT, RIGHT: MD_BUTTON.RIGHT,
+    // A three-button pad, printed A B C left to right, and no SELECT at all —
+    // an absent name simply never matches in padKeySet().
+    A: MD_BUTTON.A, B: MD_BUTTON.B, C: MD_BUTTON.C, START: MD_BUTTON.START,
+  },
 };
-const isConsole = (m) => m === 'nes' || m === 'pce';
+// "Is this a console?" is now a question about the table, not a list of names:
+// adding a PAD_BITS entry is all a new console needs to get keyboard + gamepad.
+const isConsole = (m) => PAD_BITS[m] !== undefined;
 // Keyboard -> pad. Z/X are the de-facto B/A on a QWERTY keyboard; Enter is
 // START (RUN on a PC Engine) and Shift or Space is SELECT.
 const PAD_KEYMAP = {
@@ -2217,9 +2270,16 @@ const PAD_KEYMAP = {
   z: 'B', x: 'A', a: 'B', s: 'A',
   Enter: 'START', ' ': 'SELECT', Shift: 'SELECT',
 };
+// Per-console overrides of that default, for the pads that disagree with the
+// Famicom's B/A order. The Mega Drive prints A B C left to right, so z/x/c
+// follow the pad's own printing, and it has no SELECT (Space is START).
+const PAD_KEYMAPS = {
+  md: { ...PAD_KEYMAP, z: 'A', x: 'B', c: 'C', a: 'A', s: 'B', d: 'C', ' ': 'START', Shift: 'START' },
+};
+const padKeymapFor = (m) => PAD_KEYMAPS[m] || PAD_KEYMAP;
 function padKeySet(e, down) {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  const name = PAD_KEYMAP[key];
+  const name = padKeymapFor(bootMode)[key];
   if (!name) return false;
   const bits = PAD_BITS[bootMode];
   if (!bits || bits[name] === undefined) return false;
@@ -2246,6 +2306,7 @@ window.addEventListener('keydown', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
   if (isConsole(bootMode)) {
     if (!padKeySet(e, true)) return;
+    ensureAudio(); // a keypress is a user gesture → unblock autoplay
     if (frozen()) resumePlay();
     e.preventDefault();
     return;
@@ -2627,6 +2688,7 @@ function loop(now) {
     guts.textContent = `${MACHINE_LABEL[bootMode] || 'machine'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
       + (crtc ? `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz`
         : bootMode === 'pce' && pceInfo ? `  ${pceName} · ${pceInfo.board}`
+        : bootMode === 'md' && mdInfo ? `  ${mdName} · ${mdInfo.title || '(no title)'} · ${mdInfo.regions}`
         : (nesInfo ? `  ${nesName} · ${nesInfo.board}` : ''))
       + (machine.effectiveCpuPct !== undefined ? `  CPU ${machine.effectiveCpuPct}%` : '')
       + (perfHud ? `\n${perfHud}` : '');
