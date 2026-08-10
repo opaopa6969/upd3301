@@ -12,6 +12,20 @@
 // and the specification disagree the test fails, and that is the point:
 // see docs/review/2026-08-10-fdc-adversarial-review.md and issue #40.
 //
+// ATTEMPT 2 (2026-08-10): a "TC window" was tried and reverted. Measuring the
+// real board showed the ordering `… R R DONE R TC(result)` — the chip finishes
+// by itself on the last byte and TC arrives too late to matter. So a phase was
+// added that drops EXM at EOT (the signal the sub ROM waits for) and holds the
+// ending open until TC. It satisfied the EOC test, and the four titles spot-
+// checked kept matching M88 — but the full 353-title sweep fell from 327 exact
+// to 321, with five new failures (Aggres, Rayieza ×2, Zarth, ウイングマン) losing
+// their graphics entirely. Narrowing the window to "TC only, never EOC" did not
+// help either: the mere existence of the extra phase, and the MSR it exposes,
+// is enough to break them. Reverted.
+//
+// The lesson worth keeping: **a matrix passing and four titles matching is not
+// evidence.** Both attempts at this looked correct until the sweep ran.
+//
 // STATUS (2026-08-10): five of these fail against the current implementation,
 // and that is deliberate — they are the specification, not a description of
 // what we do. An attempt to satisfy them wholesale broke real titles: raising
