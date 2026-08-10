@@ -59,6 +59,12 @@
   <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
   <label style="color:#778;font-size:12px" title="ファミコン(NES)のカートリッジ(.nes)を読み込む。読み込むと機種がファミコンに切り替わる">🎮 ファミコン(.nes): <input type="file" id="fnes" accept=".nes,.NES" style="font-size:11px"></label>
+  <span id="grp-gb" style="display:inline-flex;gap:4px;align-items:center">
+    <label style="color:#778;font-size:12px" title="ゲームボーイ／ゲームボーイカラーのカートリッジ(.gb/.gbc)を読み込む。ブートROMは要らない（カートリッジだけで完結する機種）">🕹 ゲームボーイ(.gb/.gbc): <input type="file" id="fgb" accept=".gb,.gbc,.GB,.GBC" style="font-size:11px"></label>
+    <select id="gbmodel" title="どの本体として動かすか。自動＝カートリッジのCGBフラグに従う（カラー対応ROMはGBC、白黒ROMはDMG）" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
+      <option value="auto" selected>自動</option><option value="dmg">GB (DMG)</option><option value="cgb">GBC</option>
+    </select>
+  </span>
   <span id="grp-fds" style="display:inline-flex;gap:4px;align-items:center">
     <label style="color:#778;font-size:12px" title="ファミコンディスクシステムのディスク(.fds)を読み込む。先にディスクシステムBIOS(disksys.rom, 8KB)が要る">💽 ディスクシステム(.fds): <input type="file" id="ffds" accept=".fds,.FDS" style="font-size:11px"></label>
     <label style="color:#778;font-size:12px" title="ディスクシステムBIOS disksys.rom（8192バイト）。一度選ぶとこのブラウザに保存される">BIOS: <input type="file" id="ffdsbios" accept=".rom,.ROM,.bin" style="font-size:11px"></label>
@@ -114,6 +120,7 @@
   <button id="mnes" title="ファミコン(NES)。.nes を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">ファミコン</button>
   <button id="mpce" title="PCエンジン。.pce を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">PCエンジン</button>
   <button id="mmd" title="メガドライブ。.md/.bin/.gen/.smd を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">メガドライブ</button>
+  <button id="mgb" title="ゲームボーイ／ゲームボーイカラー。.gb/.gbc を読み込むと選べる。スナップショットが小さい機種なので巻き戻しが一番よく効く">ゲームボーイ</button>
   <button id="mx68" title="X68000。IPL ROMとフロッピーを読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">X68000</button>
   <button id="mseta" title="Setaアーケード基板(サンダー＆ライトニング等)。MAMEのROMセット(.zip)を読み込むと選べる。スナップショットが50KBと小さいので巻き戻しが一番よく効く">アーケード/Seta</button>
   <button id="mpc98" title="PC-9801。V30世代のBIOS/ITFとフロッピーを読み込むと選べる。80386搭載RS系のITFは未対応">PC-9801</button></span>
@@ -157,6 +164,8 @@ import { mountMenuBar } from './menubar.js';
 import { Pc8001Machine } from '../machine.js';
 import { Pc8801Machine } from '../machine88.js';
 import { NesMachine, BUTTON as NES_BUTTON } from '../machinenes.js';
+import { GbMachine, BUTTON as GB_BUTTON } from '../machinegb.js';
+import { tryParseGbRom, tryCreateMbc, summarizeGbRom } from '../gbmbc.js';
 import { tryParseINes, summarizeINes } from '../ines.js';
 import { tryParseFds, makeFdsCart } from '../fds.js';
 import { tryCreateMapper } from '../nesmapper.js';
@@ -428,6 +437,28 @@ $('fpce').onchange = async (e) => {
   switchMode('pce');
   if (pceCart.warnings.length) guts.textContent = `${f.name}: ${pceCart.warnings.join(' / ')}`;
 };
+// ---- Game Boy / Game Boy Color (.gb / .gbc) --------------------------------
+// No BIOS picker and no second file: the Game Boy's 256-byte boot ROM only
+// scrolls the logo and then unmaps itself, so a cartridge is the whole machine.
+// That is why this is the one console here that runs with nothing but the file
+// the user just dropped in — and why its test ROMs can live in the repository.
+// Same policy as the Famicom picker: a bad file is an answer on screen, not an
+// exception (tryParseGbRom / tryCreateMbc), and survivable damage is a warning.
+$('fgb').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  const parsed = tryParseGbRom(bytes);
+  if (!parsed.ok) { guts.textContent = `${f.name}: ${parsed.error}`; return; }
+  const board = tryCreateMbc(parsed.cart);
+  if (!board.ok) { guts.textContent = `${f.name}: ${board.error}`; return; }
+  gbCart = parsed.cart;
+  gbName = f.name;
+  switchMode('gb');
+  guts.textContent = summarizeGbRom(gbCart)
+    + (gbCart.warnings.length ? ` — ${gbCart.warnings.join(' / ')}` : '');
+};
+$('gbmodel').onchange = () => { if (bootMode === 'gb') boot(); };
 
 // ---- Famicom Disk System (.fds + disksys.rom) ------------------------------
 // Two files, not one: the game is on the disk and the program that boots it is
@@ -678,7 +709,7 @@ function renderMachine(extra = {}) {
   if (hasOwnRender(machine)) return machine.render({ cgrom, ...renderOpts(), ...extra });
   return machine.sys.render({ cgrom });
 }
-const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', pce: 'PCエンジン/PC Engine', md: 'メガドライブ/MD', x68: 'X68000', seta: 'アーケード/Seta', pc98: 'PC-9801' };
+const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES', pce: 'PCエンジン/PC Engine', md: 'メガドライブ/MD', gb: 'ゲームボーイ/GB', x68: 'X68000', seta: 'アーケード/Seta', pc98: 'PC-9801' };
 // Where the program counter lives is the CPU's business: a Z80/6502/68000 calls
 // it `pc`, an 8086 calls it `ip`. Ask for whichever exists instead of assuming.
 const cpuPcText = (m) => {
@@ -747,23 +778,26 @@ $('bpng').onclick = () => {
 function switchMode(mode) {
   bootMode = mode;
   const is88 = mode === 'n88', isNes = mode === 'nes', isPce = mode === 'pce', isMd = mode === 'md',
-    isX68 = mode === 'x68', isSeta = mode === 'seta', isPc98 = mode === 'pc98';
+    isGb = mode === 'gb', isX68 = mode === 'x68', isSeta = mode === 'seta', isPc98 = mode === 'pc98';
   $('mn88').classList.toggle('on', is88);
   $('mn80').classList.toggle('on', mode === 'n80');
   $('mnes').classList.toggle('on', isNes);
   $('mpce').classList.toggle('on', isPce);
   $('mmd').classList.toggle('on', isMd);
+  $('mgb').classList.toggle('on', isGb);
   $('mx68').classList.toggle('on', isX68);
   $('mseta').classList.toggle('on', isSeta);
   $('mpc98').classList.toggle('on', isPc98);
   // Only the PC-88 family reads THESE DIP fields (ports 30h/31h); for everything
   // else leave them where they are so switching away and back does not lose the
   // user's PC-88 setup.
-  if (!isNes && !isPce && !isMd && !isX68 && !isSeta && !isPc98) {
+  if (mode === 'n80' || is88) {
     $('dip1').value = is88 ? 'DB' : 'FF';
     $('dip2').value = is88 ? '79' : 'FF';
   }
-  if (isPce && !pceCart) {
+  if (isGb && !gbCart) {
+    $('dipnote').textContent = 'ゲームボーイのROM(.gb/.gbc)を選ぶと起動する（ブートROMは要らない）';
+  } else if (isPce && !pceCart) {
     $('dipnote').textContent = 'PCエンジンのHuCard(.pce)を選ぶと起動する';
   } else if (isMd && !mdCart) {
     $('dipnote').textContent = 'メガドライブのROM(.md/.bin/.gen/.smd)を選ぶと起動する';
@@ -791,6 +825,7 @@ $('mn88').onclick = () => switchMode('n88');
 $('mnes').onclick = () => switchMode('nes');
 $('mpce').onclick = () => switchMode('pce');
 $('mmd').onclick = () => switchMode('md');
+$('mgb').onclick = () => switchMode('gb');
 $('mx68').onclick = () => switchMode('x68');
 $('mseta').onclick = () => switchMode('seta');
 $('mpc98').onclick = () => switchMode('pc98');
@@ -1901,6 +1936,11 @@ let bootMode = 'n80';
 // immutable, so the machine holds it by reference and no snapshot ever copies
 // it (that is what keeps a NES snapshot in the low kilobytes).
 let nesCart = null, nesInfo = null, nesName = '';
+// The Game Boy cartridge, parsed once and held by reference for the same
+// reason: it is immutable, so nothing copies it into a snapshot and a DMG
+// state stays at ~24KB — the smallest here, which is what makes the rewind
+// ring on this machine so deep.
+let gbCart = null, gbName = '';
 // The Disk System half. `nesDisk` is the parsed .fds image (immutable — the
 // drive keeps its own writable copy), `fdsBios` the 8KB disksys.rom. Neither is
 // in this repository; the BIOS is remembered in IndexedDB between visits.
@@ -1988,6 +2028,18 @@ for (const id of ['dip1', 'dip2']) { const el = $(id); const prev = el.oninput; 
 buildDipUI();
 function boot() {
   resetRewind(); // a fresh machine invalidates the old snapshot ring
+  if (bootMode === 'gb') {
+    if (!gbCart) { guts.textContent = 'ゲームボーイのROM(.gb/.gbc)を選んでね'; return; }
+    // `auto` means "believe the cartridge": a Color ROM gets a Color, a
+    // black-and-white one gets a DMG. Forcing the other way is what the
+    // selector is for — a Color-aware ROM also runs on a DMG, and that is a
+    // thing worth being able to see.
+    machine = new GbMachine({ cart: gbCart, model: $('gbmodel').value || 'auto' });
+    consolePad = 0;
+    ensureAudio();
+    canvas.focus();
+    return;
+  }
   if (bootMode === 'nes') {
     if (!nesCart) { guts.textContent = 'ファミコンのROM(.nes)かディスク(.fds＋disksys.rom)を選んでね'; return; }
     // Nothing to configure: the cartridge IS the configuration (board, banking,
@@ -2185,9 +2237,10 @@ function ensureAudio() {
     startScriptProcessor();
   }
 }
-// Capability again, not a mode list: a click unblocks autoplay for any machine
-// that can actually make a sound. `bootMode !== 'n80'` was the same test written
-// as machine identity, and would have needed a new name per console.
+// A click is a user gesture, which is what a browser wants before it will let
+// audio start. Capability, not a mode list: any machine that can actually make
+// a sound gets it — the Game Boy has sound from the first frame and needs this
+// as much as the 8801 does, and neither had to be named here.
 canvas.addEventListener('click', () => { if (machine && typeof machine.renderAudio === 'function') ensureAudio(); });
 
 // ---- fold the piecemeal control rows into a grouped menu bar + pinnable dock ---
@@ -2210,6 +2263,7 @@ canvas.addEventListener('click', () => { if (machine && typeof machine.renderAud
       it('fx68rom', '🖥 X68000 ROM', lab('fx68rom')), it('fx68fd', '💾 X68000 FD', lab('fx68fd')),
       it('fseta', '🕹 Seta基板(.zip)', lab('fseta')),
       it('fpc98rom', '🖥 PC-98 ROM', lab('fpc98rom')), it('fpc98fd', '💾 PC-98 FD', lab('fpc98fd')),
+      it('grp-gb', '🕹 ゲームボーイ(.gb/.gbc)', $('grp-gb')),
       it('grp-fds', '💽 ディスクシステム(.fds)', $('grp-fds')),
       it('romstore', '保存済ROM', $('romstore')),
     ].filter(Boolean) },
@@ -2432,7 +2486,11 @@ function applyPad() {
   // config panel keeps working for every family. Which bit is which is the
   // console's business (PAD_BITS), not this loop's — the Mega Drive arrived
   // with its own copy of this block and it is the same six lines.
-  if (machine.pads && PAD_BITS[bootMode]) {
+  // How the buttons are DELIVERED is a capability too: most consoles expose a
+  // writable `pads` array, but the Game Boy wants to be TOLD (setPad), because
+  // a line going low requests the joypad interrupt and wakes a STOPped CPU.
+  const takesPad = machine.pads || typeof machine.setPad === 'function';
+  if (takesPad && PAD_BITS[bootMode]) {
     const bits = PAD_BITS[bootMode];
     const j = ~padJoy & 0x3f;
     let b = consolePad;
@@ -2442,7 +2500,8 @@ function applyPad() {
     if (j & 0x08) b |= 1 << bits.RIGHT;
     if (j & 0x10) b |= 1 << bits.A;
     if (j & 0x20) b |= 1 << bits.B;
-    machine.pads[0] = b;
+    if (typeof machine.setPad === 'function') machine.setPad(b);
+    else machine.pads[0] = b;
   }
 }
 // Both consoles hand the host a `pads` array of button masks, but the bit
@@ -2466,6 +2525,13 @@ const PAD_BITS = {
     // A three-button pad, printed A B C left to right, and no SELECT at all —
     // an absent name simply never matches in padKeySet().
     A: MD_BUTTON.A, B: MD_BUTTON.B, C: MD_BUTTON.C, START: MD_BUTTON.START,
+  },
+  gb: {
+    UP: GB_BUTTON.UP, DOWN: GB_BUTTON.DOWN, LEFT: GB_BUTTON.LEFT, RIGHT: GB_BUTTON.RIGHT,
+    // The same eight controls as a Famicom, so the default PAD_KEYMAP applies
+    // unchanged and a player who learned one keyboard keeps it. Only the bit
+    // numbering differs, and BUTTON says what it is.
+    A: GB_BUTTON.A, B: GB_BUTTON.B, START: GB_BUTTON.START, SELECT: GB_BUTTON.SELECT,
   },
 };
 // "Is this a console?" is now a question about the table, not a list of names:

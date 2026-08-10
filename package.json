@@ -46,6 +46,11 @@
     "./pc98video": "./pc98video.js",
     "./pc98fdd": "./pc98fdd.js",
     "./machinepc98": "./machinepc98.js",
+    "./sm83": "./sm83.js",
+    "./gbppu": "./gbppu.js",
+    "./gbapu": "./gbapu.js",
+    "./gbmbc": "./gbmbc.js",
+    "./machinegb": "./machinegb.js",
     "./z80dis": "./z80dis.js",
     "./machine": "./machine.js",
     "./machine88": "./machine88.js",
@@ -68,7 +73,10 @@
     "analysis/"
   ],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "test:gb": "node --test test-gb.mjs",
+    "gb:verify": "node gbtools/verify.mjs",
+    "gb:fetch-blargg": "node gbtools/fetch-blargg.mjs"
   },
   "keywords": [
     "upd3301",
