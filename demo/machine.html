@@ -58,6 +58,12 @@
 <div class="row" id="row-sys1">
   <span class="lbl">機種:</span><select id="mach" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:5px"></select>
   <label style="color:#778;font-size:12px">またはROMを選ぶ: <input type="file" id="from" style="font-size:11px"></label>
+  <label style="color:#778;font-size:12px" title="ファミコン(NES)のカートリッジ(.nes)を読み込む。読み込むと機種がファミコンに切り替わる">🎮 ファミコン(.nes): <input type="file" id="fnes" accept=".nes,.NES" style="font-size:11px"></label>
+  <span id="grp-fds" style="display:inline-flex;gap:4px;align-items:center">
+    <label style="color:#778;font-size:12px" title="ファミコンディスクシステムのディスク(.fds)を読み込む。先にディスクシステムBIOS(disksys.rom, 8KB)が要る">💽 ディスクシステム(.fds): <input type="file" id="ffds" accept=".fds,.FDS" style="font-size:11px"></label>
+    <label style="color:#778;font-size:12px" title="ディスクシステムBIOS disksys.rom（8192バイト）。一度選ぶとこのブラウザに保存される">BIOS: <input type="file" id="ffdsbios" accept=".rom,.ROM,.bin" style="font-size:11px"></label>
+    <select id="fdsside" title="ディスクの面を入れ替える（ゲームが『ディスクカードを裏返してください』と言ったとき）" style="display:none;background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px"></select>
+  </span>
   <label style="color:#778;font-size:12px">ディスク(.d88): <input type="file" id="fdisk" accept=".d88,.D88,.88d" style="font-size:11px"></label>
   <span id="grp-tape" style="display:inline-flex;gap:4px;align-items:center">
     <label style="color:#778;font-size:12px" title="カセットテープ(.t88/.cas/.cmt)を読み込む。N88モードで CLOAD するとテープから読める">📼 テープ: <input type="file" id="ftape" accept=".t88,.cas,.cmt,.T88,.CAS,.CMT" style="font-size:11px"></label>
@@ -97,7 +103,8 @@
 <div class="row" style="font-size:12px" id="romstore"></div>
 <div class="row" id="row-sys2"><span class="lbl">起動モード:</span>
   <span id="grp-bootmode"><button id="mn80" class="on">N-BASIC (N80)</button>
-  <button id="mn88">N88-BASIC</button></span>
+  <button id="mn88">N88-BASIC</button>
+  <button id="mnes" title="ファミコン(NES)。.nes を読み込むと選べる。早送り・巻き戻し・ジョグシャトルは他の機種と同じように効く">ファミコン</button></span>
   <label style="color:#778;font-size:12px" title="サウンドボードII (OPNA/YM2608) を有効にする">SB2 <input type="checkbox" id="sb2" style="vertical-align:middle"></label>
   <label style="color:#778;font-size:12px" title="エミュレーション速度。倍速・早送り（実CPUが追いつく範囲まで）">速度 <select id="speed" style="background:#223;color:#cde;border:1px solid #446;border-radius:4px;padding:4px;font-size:11px">
     <option value="0.25">×0.25</option><option value="0.5">×0.5</option>
@@ -137,6 +144,10 @@ mountNav('machine.html');
 import { mountMenuBar } from './menubar.js';
 import { Pc8001Machine } from '../machine.js';
 import { Pc8801Machine } from '../machine88.js';
+import { NesMachine, BUTTON as NES_BUTTON } from '../machinenes.js';
+import { tryParseINes, summarizeINes } from '../ines.js';
+import { tryParseFds, makeFdsCart } from '../fds.js';
+import { tryCreateMapper } from '../nesmapper.js';
 import { mountCrtPanel } from './crt-panel.js';
 import { buildFont, addPlaceholderUpperHalf, applyFontRom } from './font.js';
 import { parseD88All, summarize } from '../d88.js';
@@ -359,6 +370,72 @@ $('from').onchange = async (e) => {
   await putRom('rom', f.name, romBytes); refreshStore(); // remember for next visit
   boot();
 };
+// ---- Famicom cartridge (.nes) ---------------------------------------------
+// A file picker meets junk as a matter of course, so both the header parse and
+// the board lookup answer with data rather than an exception (tryParseINes /
+// tryCreateMapper) and the reason lands on screen. Survivable damage — a dirty
+// ripper header, a truncated download — is a warning, not a refusal.
+$('fnes').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  const parsed = tryParseINes(bytes);
+  if (!parsed.ok) { guts.textContent = `${f.name}: ${parsed.error}`; return; }
+  const board = tryCreateMapper(parsed.cart);
+  if (!board.ok) { guts.textContent = `${f.name}: ${board.error}`; return; }
+  nesCart = parsed.cart;
+  nesInfo = summarizeINes(nesCart);
+  nesName = f.name;
+  nesDisk = null;
+  switchMode('nes');
+  if (nesCart.warnings.length) guts.textContent = `${f.name}: ${nesCart.warnings.join(' / ')}`;
+};
+// ---- Famicom Disk System (.fds + disksys.rom) ------------------------------
+// Two files, not one: the game is on the disk and the program that boots it is
+// in the drive's BIOS, which Nintendo never put on the disks. The BIOS is
+// remembered in this browser (role 'fdsbios') so it only has to be picked once;
+// the disk is not, because disks are what the user swaps.
+$('ffdsbios').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const b = new Uint8Array(await f.arrayBuffer());
+  if (b.length !== 8192) { guts.textContent = `${f.name}: ディスクシステムBIOSは8192バイト（これは${b.length}バイト）`; return; }
+  fdsBios = b;
+  try { await putRom('fdsbios', f.name, b); refreshStore(); } catch {}
+  guts.textContent = `ディスクシステムBIOS: ${f.name} を記憶した`;
+  if (nesDisk) switchMode('nes');
+};
+$('ffds').onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const bytes = new Uint8Array(await f.arrayBuffer());
+  const parsed = tryParseFds(bytes);
+  if (!parsed.ok) { guts.textContent = `${f.name}: ${parsed.error}`; return; }
+  if (!fdsBios) { guts.textContent = `${f.name}: 先にディスクシステムBIOS(disksys.rom, 8192バイト)を選んでね`; return; }
+  nesDisk = parsed.image;
+  nesCart = makeFdsCart(nesDisk, fdsBios);
+  nesInfo = { board: `FDS ${nesDisk.gameName} (${nesDisk.sideCount}面)` };
+  nesName = f.name;
+  buildFdsSideUI();
+  switchMode('nes');
+  if (nesDisk.warnings.length) guts.textContent = `${f.name}: ${nesDisk.warnings.join(' / ')}`;
+};
+// The side selector is the "turn the disk over" the game asks for. Changing it
+// ejects and re-inserts so the BIOS sees the disk leave, which is how it knows
+// a new side arrived — a silent swap would look like nothing happened.
+function buildFdsSideUI() {
+  const sel = $('fdsside');
+  sel.innerHTML = '';
+  if (!nesDisk || nesDisk.sideCount < 2) { sel.style.display = 'none'; return; }
+  for (let i = 0; i < nesDisk.sideCount; i++) {
+    const o = document.createElement('option');
+    o.value = String(i);
+    o.textContent = `💽 ディスク${((i >> 1) + 1)} ${i & 1 ? 'B面' : 'A面'}`;
+    sel.appendChild(o);
+  }
+  sel.style.display = '';
+  sel.onchange = () => { if (machine && machine.hasDisk) machine.setDiskSide(+sel.value); };
+}
 $('ffont').onchange = async (e) => {
   const f = e.target.files[0];
   if (!f) return;
@@ -441,23 +518,40 @@ $('sb2').onchange = (e) => {
   if (bootMode === 'n88' && has88Set()) boot(); // rebuild with/without OPNA
 };
 $('breset').onclick = () => boot();
+// ---- machine capabilities (instead of "which class is this?") --------------
+// The host used to branch on `machine instanceof Pc8801Machine` in a dozen
+// places, which meant every new machine had to be taught to the host one
+// `instanceof` at a time. Ask what a machine CAN do instead — has it a
+// render() of its own? a CRTC to report? a key matrix? — and a machine that
+// satisfies the contract (stepFrame / frame / snapshot / restore) drops in
+// with the time-travel machinery already working.
+const hasOwnRender = (m) => !!m && typeof m.render === 'function';
+const crtcOf = (m) => (m && (m.crtc || (m.sys && m.sys.crtc))) || null;
+// One render call for every machine. Machines that render themselves take the
+// options (and ignore the ones that mean nothing to them); the PC-8001 renders
+// through its text system. `extra` picks the indexed/analog path.
+function renderMachine(extra = {}) {
+  if (hasOwnRender(machine)) return machine.render({ cgrom, ...renderOpts(), ...extra });
+  return machine.sys.render({ cgrom });
+}
+const MACHINE_LABEL = { n88: 'PC-8801/N88', n80: 'PC-8001/N80', nes: 'ファミコン/NES' };
 // Raw-frame PNG: the machine's OWN render() (full 512-colour palette), with NO
 // phosphor / tube / interlace / line-double and no CSS scaling — the emulation's
 // ground truth at 640×200. Lets a corrupted scene be diagnosed as emulation vs
 // CRT-sim vs display. Also prints the CRTC geometry to the console.
 $('bpng').onclick = () => {
   if (!machine) return;
-  const is88 = machine instanceof Pc8801Machine;
   let f;
-  try { f = is88 ? machine.render({ cgrom, ...renderOpts() }) : machine.sys.render({ cgrom }); } catch (e) { return; }
+  try { f = renderMachine(); } catch (e) { return; }
   if (!f || !f.rgb) return;
   const { width: W, height: H, rgb } = f;
   const c = document.createElement('canvas'); c.width = W; c.height = H;
   const cx = c.getContext('2d'); const im = cx.createImageData(W, H);
   for (let i = 0; i < W * H; i++) { im.data[i * 4] = rgb[i * 3]; im.data[i * 4 + 1] = rgb[i * 3 + 1]; im.data[i * 4 + 2] = rgb[i * 3 + 2]; im.data[i * 4 + 3] = 255; }
   cx.putImageData(im, 0, 0);
-  const crtc = is88 ? machine.crtc : machine.sys.crtc;
-  console.log(`[raw PNG] ${W}x${H}  crtc=${crtc.cols}x${crtc.rows} linesPerChar=${crtc.linesPerChar} gvramOn=${machine.gvramOn} line400=${machine.line400} width80=${machine.width80} mono=${machine.mono} pc=${machine.cpu.pc.toString(16)}`);
+  const crtc = crtcOf(machine);
+  const is88 = machine instanceof Pc8801Machine;
+  console.log(`[raw PNG] ${W}x${H}  ${crtc ? `crtc=${crtc.cols}x${crtc.rows} linesPerChar=${crtc.linesPerChar} ` : ''}pc=${machine.cpu.pc.toString(16)}`);
   if (is88) { // palette diagnostic (R,G,B per index 0-7, each 0-7) + analog/mono flags
     const pal = []; for (let n = 0; n < 8; n++) pal.push(`${n}:${machine.palette[n * 3]}${machine.palette[n * 3 + 1]}${machine.palette[n * 3 + 2]}`);
     const line = `crtc ${crtc.cols}x${crtc.rows}×${crtc.linesPerChar}=${crtc.rows * crtc.linesPerChar}ln  pal ${(machine._port32 & 0x20) ? 'analog' : 'digital'}  ${pal.join(' ')}`;
@@ -501,12 +595,21 @@ $('bpng').onclick = () => {
 // defaults (the user can still override before reset).
 function switchMode(mode) {
   bootMode = mode;
-  const is88 = mode === 'n88';
+  const is88 = mode === 'n88', isNes = mode === 'nes';
   $('mn88').classList.toggle('on', is88);
-  $('mn80').classList.toggle('on', !is88);
-  $('dip1').value = is88 ? 'DB' : 'FF';
-  $('dip2').value = is88 ? '79' : 'FF';
-  if (is88 && !has88Set()) {
+  $('mn80').classList.toggle('on', mode === 'n80');
+  $('mnes').classList.toggle('on', isNes);
+  // The Famicom has no DIP switches; leave the fields where they are so
+  // switching away and back does not lose the user's PC-88 setup.
+  if (!isNes) {
+    $('dip1').value = is88 ? 'DB' : 'FF';
+    $('dip2').value = is88 ? '79' : 'FF';
+  }
+  if (isNes && !nesCart) {
+    $('dipnote').textContent = fdsBios
+      ? 'ファミコンのROM(.nes)かディスク(.fds)を選ぶと起動する'
+      : 'ファミコンのROM(.nes)、またはディスクシステムBIOS(disksys.rom)＋ディスク(.fds)を選ぶと起動する';
+  } else if (is88 && !has88Set()) {
     $('dipnote').textContent = t('PC-8801 BIOS一式(n88.rom+n88_0..3.rom+disk.rom)を選ぶとN88で起動する');
   } else {
     $('dipnote').textContent = '';
@@ -517,6 +620,7 @@ function switchMode(mode) {
 }
 $('mn80').onclick = () => switchMode('n80');
 $('mn88').onclick = () => switchMode('n88');
+$('mnes').onclick = () => switchMode('nes');
 for (const id of ['dip1', 'dip2']) $(id).onchange = () => boot();
 
 // Disk pool + drive assignment. A .d88 file can hold SEVERAL disk images, and a
@@ -549,7 +653,9 @@ function refreshDriveSelectors() {
 }
 // apply the current drive assignment to a live machine (or just record it)
 function mountDrives(m) {
-  if (!m || !(m instanceof Pc8801Machine)) { if (m) m.disks = diskPool.map((e) => e.disk); return; }
+  // Ask for the capability, not the class: a machine with no floppy drives
+  // (the PC-8001, the Famicom) just remembers the pool for the UI.
+  if (!m || typeof m.insertDisk !== 'function') { if (m && !m.pads) m.disks = diskPool.map((e) => e.disk); return; }
   for (const u of [0, 1]) {
     const idx = driveAssign[u];
     if (idx >= 0 && diskPool[idx]) m.insertDisk(u, diskPool[idx].disk);
@@ -1592,6 +1698,21 @@ $('brec').onclick = () => {
 };
 
 let bootMode = 'n80';
+// The parsed Famicom cartridge stays alive across resets and rewinds: it is
+// immutable, so the machine holds it by reference and no snapshot ever copies
+// it (that is what keeps a NES snapshot in the low kilobytes).
+let nesCart = null, nesInfo = null, nesName = '';
+// The Disk System half. `nesDisk` is the parsed .fds image (immutable — the
+// drive keeps its own writable copy), `fdsBios` the 8KB disksys.rom. Neither is
+// in this repository; the BIOS is remembered in IndexedDB between visits.
+let nesDisk = null, fdsBios = null;
+// Picked once, kept for good. Unlike a disk, the BIOS is not something anyone
+// wants to choose twice, and this runs whether or not the PC-88 side of the
+// store had anything in it.
+(async () => {
+  try { const r = await getRom('fdsbios'); if (r && r.bytes && r.bytes.length === 8192) fdsBios = r.bytes; } catch {}
+})();
+let nesPad = 0; // live Famicom button mask (see NES_KEYMAP), ORed with the gamepad
 const dipOf = (id, dflt) => {
   const v = parseInt($(id).value.trim(), 16);
   return Number.isFinite(v) ? (v & 0xff) : dflt;
@@ -1642,6 +1763,20 @@ for (const id of ['dip1', 'dip2']) { const el = $(id); const prev = el.oninput; 
 buildDipUI();
 function boot() {
   resetRewind(); // a fresh machine invalidates the old snapshot ring
+  if (bootMode === 'nes') {
+    if (!nesCart) { guts.textContent = 'ファミコンのROM(.nes)かディスク(.fds＋disksys.rom)を選んでね'; return; }
+    // Nothing to configure: the cartridge IS the configuration (board, banking,
+    // nametable wiring, CHR). Everything the host does from here — fast
+    // forward, rewind, jog-shuttle — runs on the same contract as the PC-88s.
+    machine = new NesMachine({ cart: nesCart });
+    // A rebuilt machine gets a fresh drive, so the side the user had selected
+    // has to be put back — otherwise switching modes silently turns the disk
+    // back over to side A.
+    if (machine.hasDisk && $('fdsside').value) machine.insertDiskSide(+$('fdsside').value);
+    nesPad = 0;
+    canvas.focus();
+    return;
+  }
   if (bootMode === 'n88') {
     if (!has88Set()) {
       guts.textContent = t('PC-8801 BIOS一式(n88.rom + n88_0..3.rom + disk.rom)を選んでね');
@@ -1711,7 +1846,11 @@ let audioSetupStarted = false;
 let audioSamplesPushed = 0;        // play-cursor tracking for the push pump
 let pumpBuf = new Float32Array(AUDIO_MAXCHUNK);
 function renderAudioInto(buf, n) {
-  if (!machine || !machine.opn || rewinding || paused || scrubIndex !== null || shuttleX !== 0) { buf.fill(0, 0, n); return buf; } // silent while scrubbing / shuttling / paused
+  // Capability, not machine identity: anything that offers renderAudio() gets
+  // played (the 8801's OPN, the Famicom's APU). Testing for `machine.opn` here
+  // silently muted the Famicom, which is exactly the kind of instanceof-in-
+  // disguise the rest of this host was cleaned of.
+  if (!machine || typeof machine.renderAudio !== 'function' || rewinding || paused || scrubIndex !== null || shuttleX !== 0) { buf.fill(0, 0, n); return buf; } // silent while scrubbing / shuttling / paused
   machine.renderAudio(buf, n);
   return buf;
 }
@@ -1784,6 +1923,11 @@ canvas.addEventListener('click', () => { if (bootMode === 'n88') ensureAudio(); 
     { label: '📁 ファイル', items: [
       it('from', 'ROM', lab('from')), it('fdisk', 'ディスク', lab('fdisk')),
       it('ffont', 'FONT', lab('ffont')), it('from88', 'BIOS一式', lab('from88')),
+      // The Famicom pickers live in row-sys1, which this menu bar hides. Without
+      // an entry here they are invisible — the same way 📼テープ was orphaned
+      // when the bar took over the rows.
+      it('fnes', '🎮 ファミコン(.nes)', lab('fnes')),
+      it('grp-fds', '💽 ディスクシステム(.fds)', $('grp-fds')),
       it('romstore', '保存済ROM', $('romstore')),
     ].filter(Boolean) },
     { label: '🖥 システム', items: [
@@ -1987,6 +2131,35 @@ function applyPad() {
   }
   if (machine.keys) for (let i = 0; i < 16; i++) machine.keys[i] = kbMatrix[i] & padM[i];
   if (machine.joy) machine.joy[0] = kbdJoy & padJoy; // 8001 has no joystick port
+  // Famicom: no key matrix, eight buttons. The gamepad's 8801 joystick bits
+  // (active LOW) are translated rather than mapped a second time, so the pad
+  // config panel keeps working for both families.
+  if (machine.pads) {
+    const j = ~padJoy & 0x3f;
+    let b = nesPad;
+    if (j & 0x01) b |= 1 << NES_BUTTON.UP;
+    if (j & 0x02) b |= 1 << NES_BUTTON.DOWN;
+    if (j & 0x04) b |= 1 << NES_BUTTON.LEFT;
+    if (j & 0x08) b |= 1 << NES_BUTTON.RIGHT;
+    if (j & 0x10) b |= 1 << NES_BUTTON.A;
+    if (j & 0x20) b |= 1 << NES_BUTTON.B;
+    machine.pads[0] = b;
+  }
+}
+// Keyboard -> Famicom pad. Z/X are the de-facto B/A on a QWERTY keyboard;
+// Enter is START and Shift (or Space) is SELECT.
+const NES_KEYMAP = {
+  ArrowUp: 'UP', ArrowDown: 'DOWN', ArrowLeft: 'LEFT', ArrowRight: 'RIGHT',
+  z: 'B', x: 'A', a: 'B', s: 'A',
+  Enter: 'START', ' ': 'SELECT', Shift: 'SELECT',
+};
+function nesKeySet(e, down) {
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const name = NES_KEYMAP[key];
+  if (!name) return false;
+  const bit = 1 << NES_BUTTON[name];
+  nesPad = down ? (nesPad | bit) : (nesPad & ~bit);
+  return true;
 }
 function matrixKey(e) {
   const map = activeKeymap();
@@ -2005,6 +2178,12 @@ function matrixKey(e) {
 const isFormFocused = () => { const el = document.activeElement; return el && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(el.tagName); };
 window.addEventListener('keydown', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (bootMode === 'nes') {
+    if (!nesKeySet(e, true)) return;
+    if (frozen()) resumePlay();
+    e.preventDefault();
+    return;
+  }
   const k = matrixKey(e);
   if (!k && !e.shiftKey) return; // nothing we handle → let the browser have it
   if (bootMode === 'n88') ensureAudio(); // a keypress is a user gesture → unblock autoplay
@@ -2016,6 +2195,7 @@ window.addEventListener('keydown', (e) => {
 });
 window.addEventListener('keyup', (e) => {
   if (!machine || isFormFocused() || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (bootMode === 'nes') { if (nesKeySet(e, false)) e.preventDefault(); return; }
   const k = matrixKey(e);
   if (!e.shiftKey) kbSet([[8, 6]], false);
   const jb = joyBitFor(e);
@@ -2298,7 +2478,7 @@ function loop(now) {
       // huge multiplier (or a long hitch) can't lock the main thread catching up.
       // per-frame audio hook (8801 + worklet) keeps music tempo tight when the
       // render is slow; falls back to the post-loop pumpAudio otherwise.
-      const onFrame = (machine instanceof Pc8801Machine && audioMode === 'worklet') ? emitFrameAudio : null;
+      const onFrame = (typeof machine.renderAudio === 'function' && audioMode === 'worklet') ? emitFrameAudio : null;
       machine.update(Math.min(dt * speedMul * transportSpeed, 0.5), onFrame); // transportSpeed>1 = shuttle fast-forward
       if (canSnap() && machine.frame - lastSnapFrame >= REWIND_EVERY) {
         lastSnapFrame = machine.frame;
@@ -2309,12 +2489,13 @@ function loop(now) {
     pumpAudio(); // drift/lag correction + silence while paused (per-frame emit does the fine feed)
     const tEmu = performance.now(); // emulation (update) done; render starts now
     perfAccountEmu(machine.frame - frameBefore, tEmu - t0);
-    // Both machines emit a GRB-indexed frame (0..7 per dot) that the shared
+    // Every machine emits a GRB-indexed frame (0..7 per dot) that the shared
     // phosphor pipeline below consumes verbatim. The 8001 exposes it via its
     // text system (machine.sys), the 8801 via render({indexed:true}) which
-    // composites its graphics planes under the text into the same index space.
-    const is88 = machine instanceof Pc8801Machine;
-    const crtc = is88 ? machine.crtc : machine.sys.crtc;
+    // composites its graphics planes under the text into the same index space,
+    // the Famicom by reducing its 64-colour palette to the same index while
+    // handing the real RGB over as `drive` (see the analog note below).
+    const crtc = crtcOf(machine); // null on machines with no CRTC to report
     // CLEAN path: draw the machine's own render() (full 512-colour palette),
     // line-doubled with no dimming, and skip the whole CRT sim (phosphor / tube
     // / interlace / scanline). No comb, true colours, and cheap — so the frame
@@ -2322,7 +2503,7 @@ function loop(now) {
     // steady. Falls back to the CRT path if this machine has no rgb render.
     let cleanF = null;
     if (cleanDisplay) {
-      try { const f = is88 ? machine.render({ cgrom, ...renderOpts() }) : machine.sys.render({ cgrom }); if (f && f.rgb && f.width) cleanF = f; } catch { cleanF = null; }
+      try { const f = renderMachine(); if (f && f.rgb && f.width) cleanF = f; } catch { cleanF = null; }
     }
     if (cleanF) {
       const W = cleanF.width, H = cleanF.height, rgb = cleanF.rgb;
@@ -2343,7 +2524,7 @@ function loop(now) {
       // renders the full analogue palette (smooth shades), matching the clean
       // path's colour depth instead of collapsing to 8 primaries. The 8001 path
       // has no drive → phosphor.step falls back to the 1-bit index automatically.
-      const frame = is88 ? machine.render({ cgrom, indexed: true, analog: true, ...renderOpts() }) : machine.sys.render({ cgrom });
+      const frame = renderMachine({ indexed: true, analog: true });
       if (!frame.width || !frame.height) { requestAnimationFrame(loop); return; }
       const W = frame.width, H = frame.height;
       const phosphor = panel.phosphor(W, H); // phosphor stays at source res (cheap)
@@ -2377,8 +2558,9 @@ function loop(now) {
     const nowP = performance.now();
     workMs = workMs * 0.9 + (nowP - t0) * 0.1;
     perfAccountRender(nowP - tEmu, nowP);
-    guts.textContent = `${is88 ? 'PC-8801/N88' : 'PC-8001/N80'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
-      + `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz${is88 ? `  CPU ${machine.effectiveCpuPct}%` : ''}`
+    guts.textContent = `${MACHINE_LABEL[bootMode] || 'machine'}${cleanF ? ' [clean]' : ''}${speedMul !== 1 ? ` ⏩×${speedMul}` : ''}  ${workMs.toFixed(1)}ms/frame  frame=${machine.frame}  pc=${machine.cpu.pc.toString(16).padStart(4, '0')}h`
+      + (crtc ? `  ${crtc.cols}x${crtc.rows}  hsync=${crtc.hsyncHz()}Hz` : (nesInfo ? `  ${nesName} · ${nesInfo.board}` : ''))
+      + (machine.effectiveCpuPct !== undefined ? `  CPU ${machine.effectiveCpuPct}%` : '')
       + (perfHud ? `\n${perfHud}` : '');
     updatePlayerBar();
   }
