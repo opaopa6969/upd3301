@@ -40,6 +40,10 @@ export class Pc8801Machine {
     kanji = null, kanji2 = null, rtcDate = null,
   } = {}) {
     if (!main || main.length < 0x8000) throw new Error('need a 32KB N88 main ROM');
+    // Every machine in the suite carries its schema version on the instance as
+    // well as on the snapshot, so a caller holding a machine can tell what shape
+    // its snapshots will be without taking one (test-contract.mjs).
+    this.schemaVersion = SCHEMA_VERSION;
     this.romMain = main;
     this.romExt = ext; // 4 x 8KB banks (6000-7FFF)
     this.romN80 = n80;
@@ -803,6 +807,7 @@ export class Pc8801Machine {
   // not rewound (copying whole D88s per snapshot would cost megabytes).
   snapshot() {
     const s = {
+      schemaVersion: SCHEMA_VERSION,
       cpu: this.cpu.getState(),
       ram: this.ram.slice(),
       tvram: this.tvram.slice(),
@@ -852,7 +857,11 @@ export class Pc8801Machine {
       result: [...f.result], resultPos: f.resultPos,
       execPos: f.execPos, execWrite: f.execWrite, int: f.int,
       seekEnd: f.seekEnd.map((p) => ({ ...p })), us: f.us, hd: f.hd,
-      drives: f.drives.map((d) => ({ cyl: d.cyl, _idx: d._idx, disk: d.disk })),
+      // `_idx` is the rotational position READ ID walks; upd765.js only creates
+      // it on the first sector read, so an untouched drive would put
+      // `_idx: undefined` in the snapshot — harmless in memory, dropped by any
+      // serializer, and not plain data. Default it here (test-contract.mjs).
+      drives: f.drives.map((d) => ({ cyl: d.cyl, _idx: d._idx ?? -1, disk: d.disk })),
       execBuf: f.execBuf,
       _multi: f._multi,
     };

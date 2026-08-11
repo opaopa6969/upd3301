@@ -560,15 +560,6 @@ const REGISTRY = [
       subClock: [m._subMark, m._subDebt],
     }),
     todos: {
-      'plain-data':
-        'machine88.js is off-limits in the change that added this file. _snapFdc() ' +
-        'copies drive._idx, which upd765.js only creates on the first sector read, ' +
-        'so an untouched drive puts `_idx: undefined` in the snapshot. Harmless in ' +
-        'memory, dropped by any serializer, still not plain data.',
-      'schema':
-        'machine88.js is off-limits in the change that added this file. It exports ' +
-        'SCHEMA_VERSION but neither the instance nor the snapshot carries ' +
-        '`schemaVersion` — one line in the constructor and one in snapshot().',
     },
   },
   {
