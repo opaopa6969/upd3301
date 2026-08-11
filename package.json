@@ -73,7 +73,10 @@
     "./romxref": "./romxref.js",
     "./analysisdb": "./analysisdb.js",
     "./ym2203": "./ym2203.js",
-    "./snapjson": "./snapjson.js"
+    "./snapjson": "./snapjson.js",
+    "./icecore": "./icecore.js",
+    "./icearch": "./icearch.js",
+    "./rngfind": "./rngfind.js"
   },
   "files": [
     "*.js",
