@@ -87,6 +87,7 @@
   ],
   "scripts": {
     "test": "node --test",
+    "smoke": "node tools/smoke.mjs",
     "test:gb": "node --test test-gb.mjs",
     "gb:verify": "node gbtools/verify.mjs",
     "gb:fetch-blargg": "node gbtools/fetch-blargg.mjs"

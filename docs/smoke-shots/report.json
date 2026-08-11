@@ -1,0 +1,1106 @@
+{
+  "ranAt": "2026-08-11T11:54:23.457Z",
+  "browser": "Chrome/148.0.7778.97",
+  "exe": "/home/opa/.cache/puppeteer/chrome/linux-148.0.7778.97/chrome-linux64/chrome",
+  "fakeRoms": {
+    "n80": "yes",
+    "n88": "yes",
+    "nes": "yes",
+    "pce": "yes",
+    "md": "yes",
+    "gb": "yes",
+    "x68": "yes",
+    "seta": "yes",
+    "pc98": "yes"
+  },
+  "counts": {
+    "total": 125,
+    "pass": 125,
+    "fail": 0,
+    "skip": 0
+  },
+  "results": [
+    {
+      "machine": "page",
+      "check": "loads with a canvas + menu bar",
+      "status": "pass",
+      "note": "canvas=true menus=6 fileInputs=16"
+    },
+    {
+      "machine": "page",
+      "check": "no startup errors/warnings",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "tour",
+      "check": "auto-starts on first visit",
+      "status": "pass",
+      "note": "1280x1400 \"✕PC-8001/8801、まるごとこのページは論理スタックの完成形。Z80がROMを実行し、μPD8257が毎フレーム\""
+    },
+    {
+      "machine": "tour",
+      "check": "ESC dismisses it",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "tour",
+      "check": "nothing overlays the menu bar afterwards",
+      "status": "pass",
+      "note": "elementFromPoint → BUTTON.mbar-btn"
+    },
+    {
+      "machine": "menu",
+      "check": "file menu opens on a real mouse click",
+      "status": "pass",
+      "note": "open panels=1"
+    },
+    {
+      "machine": "menu",
+      "check": "picker #from (PC-8001) visible in the open menu",
+      "status": "pass",
+      "note": "visible=true inMenu=true inOpenPanel=true 209x21"
+    },
+    {
+      "machine": "menu",
+      "check": "picker #from88 (PC-8801) visible in the open menu",
+      "status": "pass",
+      "note": "visible=true inMenu=true inOpenPanel=true 209x21"
+    },
+    {
+      "machine": "menu",
+      "check": "picker #fnes (Famicom) visible in the open menu",
+      "status": "pass",
+      "note": "visible=true inMenu=true inOpenPanel=true 209x21"
+    },
+    {
+      "machine": "menu",
+      "check": "picker #fpce (PC Engine) visible in the open menu",
+      "status": "pass",
+      "note": "visible=true inMenu=true inOpenPanel=true 209x21"
+    },
+    {
+      "machine": "menu",
+      "check": "picker #fmd (Mega Drive) visible in the open menu",
+      "status": "pass",
+      "note": "visible=true inMenu=true inOpenPanel=true 209x21"
+    },
+    {
+      "machine": "menu",
+      "check": "picker #fgb (Game Boy) visible in the open menu",
+      "status": "pass",
+      "note": "visible=true inMenu=true inOpenPanel=true 209x21"
+    },
+    {
+      "machine": "menu",
+      "check": "picker #fx68rom (X68000) visible in the open menu",
+      "status": "pass",
+      "note": "visible=true inMenu=true inOpenPanel=true 209x21"
+    },
+    {
+      "machine": "menu",
+      "check": "picker #fseta (Arcade (Seta)) visible in the open menu",
+      "status": "pass",
+      "note": "visible=true inMenu=true inOpenPanel=true 209x21"
+    },
+    {
+      "machine": "menu",
+      "check": "picker #fpc98rom (PC-9801) visible in the open menu",
+      "status": "pass",
+      "note": "visible=true inMenu=true inOpenPanel=true 209x21"
+    },
+    {
+      "machine": "menu",
+      "check": "clicking #from opens a file chooser",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "menu",
+      "check": "clicking #from88 opens a file chooser",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "menu",
+      "check": "clicking #fnes opens a file chooser",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "menu",
+      "check": "clicking #fpce opens a file chooser",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "menu",
+      "check": "clicking #fmd opens a file chooser",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "menu",
+      "check": "clicking #fgb opens a file chooser",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "menu",
+      "check": "clicking #fx68rom opens a file chooser",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "menu",
+      "check": "clicking #fseta opens a file chooser",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "menu",
+      "check": "clicking #fpc98rom opens a file chooser",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-8001",
+      "check": "switch mode",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-8001",
+      "check": "boot-mode button lights up",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-8001",
+      "check": "status line explains the missing ROM",
+      "status": "pass",
+      "note": "ROMを選ぶと起動する（ROMは実機からの吸い出しを。配布物には含まれない）"
+    },
+    {
+      "machine": "PC-8001",
+      "check": "status line survives ~30 frames",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-8001",
+      "check": "keys do not throw with no machine",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-8801",
+      "check": "switch mode",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-8801",
+      "check": "boot-mode button lights up",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-8801",
+      "check": "status line explains the missing ROM",
+      "status": "pass",
+      "note": "PC-8801 BIOS一式(n88.rom + n88_0..3.rom + disk.rom)を選んでね"
+    },
+    {
+      "machine": "PC-8801",
+      "check": "status line survives ~30 frames",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-8801",
+      "check": "keys do not throw with no machine",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Famicom",
+      "check": "switch mode",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Famicom",
+      "check": "boot-mode button lights up",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Famicom",
+      "check": "status line explains the missing ROM",
+      "status": "pass",
+      "note": "ファミコンのROM(.nes)かディスク(.fds＋disksys.rom)を選んでね"
+    },
+    {
+      "machine": "Famicom",
+      "check": "status line survives ~30 frames",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Famicom",
+      "check": "keys do not throw with no machine",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC Engine",
+      "check": "switch mode",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC Engine",
+      "check": "boot-mode button lights up",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC Engine",
+      "check": "status line explains the missing ROM",
+      "status": "pass",
+      "note": "PCエンジンのHuCard(.pce)を選んでね"
+    },
+    {
+      "machine": "PC Engine",
+      "check": "status line survives ~30 frames",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC Engine",
+      "check": "keys do not throw with no machine",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Mega Drive",
+      "check": "switch mode",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Mega Drive",
+      "check": "boot-mode button lights up",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Mega Drive",
+      "check": "status line explains the missing ROM",
+      "status": "pass",
+      "note": "メガドライブのROM(.md/.bin/.gen/.smd)を選んでね"
+    },
+    {
+      "machine": "Mega Drive",
+      "check": "status line survives ~30 frames",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Mega Drive",
+      "check": "keys do not throw with no machine",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Game Boy",
+      "check": "switch mode",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Game Boy",
+      "check": "boot-mode button lights up",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Game Boy",
+      "check": "status line explains the missing ROM",
+      "status": "pass",
+      "note": "ゲームボーイのROM(.gb/.gbc)を選んでね"
+    },
+    {
+      "machine": "Game Boy",
+      "check": "status line survives ~30 frames",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Game Boy",
+      "check": "keys do not throw with no machine",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "X68000",
+      "check": "switch mode",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "X68000",
+      "check": "boot-mode button lights up",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "X68000",
+      "check": "status line explains the missing ROM",
+      "status": "pass",
+      "note": "X68000のIPL ROM(IPLROM.DAT 128KB)を選んでね"
+    },
+    {
+      "machine": "X68000",
+      "check": "status line survives ~30 frames",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "X68000",
+      "check": "keys do not throw with no machine",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Arcade (Seta)",
+      "check": "switch mode",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Arcade (Seta)",
+      "check": "boot-mode button lights up",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Arcade (Seta)",
+      "check": "status line explains the missing ROM",
+      "status": "pass",
+      "note": "SetaアーケードのROMセット(.zip)を選んでね"
+    },
+    {
+      "machine": "Arcade (Seta)",
+      "check": "status line survives ~30 frames",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Arcade (Seta)",
+      "check": "keys do not throw with no machine",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-9801",
+      "check": "switch mode",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-9801",
+      "check": "boot-mode button lights up",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-9801",
+      "check": "status line explains the missing ROM",
+      "status": "pass",
+      "note": "PC-9801のBIOS ROM(96KB)を選んでね"
+    },
+    {
+      "machine": "PC-9801",
+      "check": "status line survives ~30 frames",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-9801",
+      "check": "keys do not throw with no machine",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-8001",
+      "check": "loads a ROM through its own picker",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-8001",
+      "check": "machine runs (frames advance)",
+      "status": "pass",
+      "note": "frame 140 → 183"
+    },
+    {
+      "machine": "PC-8001",
+      "check": "the RIGHT machine is live",
+      "status": "pass",
+      "note": "looking for \"hsync=\" in: PC-8001/N80 21.4ms/frame frame=183 pc=0054h 80x25 hsync=15360Hz ⏱ emu 0.4ms + 描画 20.6ms／tick 描画 40fps・emu 59.9"
+    },
+    {
+      "machine": "PC-8001",
+      "check": "input path reached without throwing",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-8801",
+      "check": "loads a ROM through its own picker",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-8801",
+      "check": "machine runs (frames advance)",
+      "status": "pass",
+      "note": "frame 97 → 140"
+    },
+    {
+      "machine": "PC-8801",
+      "check": "the RIGHT machine is live",
+      "status": "pass",
+      "note": "looking for \"hsync=\" in: PC-8801/N88 [clean] 2.4ms/frame frame=140 pc=0001h 0x0 hsync=0Hz CPU 92% ⏱ emu 0.8ms + 描画 1.3ms／tick 描画 60fps・"
+    },
+    {
+      "machine": "PC-8801",
+      "check": "input path reached without throwing",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Famicom",
+      "check": "loads a ROM through its own picker",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Famicom",
+      "check": "machine runs (frames advance)",
+      "status": "pass",
+      "note": "frame 141 → 183"
+    },
+    {
+      "machine": "Famicom",
+      "check": "the RIGHT machine is live",
+      "status": "pass",
+      "note": "looking for \"fake.nes\" in: ファミコン/NES [clean] 2.4ms/frame frame=183 pc=c005h fake.nes · NROM ⏱ emu 1.5ms + 描画 0.6ms／tick 描画 60fps・emu 60.0"
+    },
+    {
+      "machine": "Famicom",
+      "check": "input path reached without throwing",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC Engine",
+      "check": "loads a ROM through its own picker",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC Engine",
+      "check": "machine runs (frames advance)",
+      "status": "pass",
+      "note": "frame 141 → 183"
+    },
+    {
+      "machine": "PC Engine",
+      "check": "the RIGHT machine is live",
+      "status": "pass",
+      "note": "looking for \"fake.pce\" in: PCエンジン/PC Engine [clean] 1.7ms/frame frame=183 pc=e02dh fake.pce · HuCard 32KB ⏱ emu 0.9ms + 描画 0.7ms／tick 描画 "
+    },
+    {
+      "machine": "PC Engine",
+      "check": "input path reached without throwing",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Mega Drive",
+      "check": "loads a ROM through its own picker",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Mega Drive",
+      "check": "machine runs (frames advance)",
+      "status": "pass",
+      "note": "frame 141 → 183"
+    },
+    {
+      "machine": "Mega Drive",
+      "check": "the RIGHT machine is live",
+      "status": "pass",
+      "note": "looking for \"fake.md\" in: メガドライブ/MD [clean] 1.6ms/frame frame=183 pc=0200h fake.md · FAKEROM · japan/usa/europe ⏱ emu 1.0ms + 描画 0.6ms／t"
+    },
+    {
+      "machine": "Mega Drive",
+      "check": "input path reached without throwing",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Game Boy",
+      "check": "loads a ROM through its own picker",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Game Boy",
+      "check": "machine runs (frames advance)",
+      "status": "pass",
+      "note": "frame 140 → 183"
+    },
+    {
+      "machine": "Game Boy",
+      "check": "the RIGHT machine is live",
+      "status": "pass",
+      "note": "looking for \"frame=\" in: ゲームボーイ/GB [clean] 1.5ms/frame frame=183 pc=021dh fake.nes · NROM ⏱ emu 1.3ms + 描画 0.3ms／tick 描画 60fps・emu 60.0"
+    },
+    {
+      "machine": "Game Boy",
+      "check": "input path reached without throwing",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "X68000",
+      "check": "loads a ROM through its own picker",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "X68000",
+      "check": "machine runs (frames advance)",
+      "status": "pass",
+      "note": "frame 129 → 169"
+    },
+    {
+      "machine": "X68000",
+      "check": "the RIGHT machine is live",
+      "status": "pass",
+      "note": "looking for \"kHz\" in: X68000 [clean] 4.5ms/frame frame=169 pc=ff001ch 640x512 31kHz ⏱ emu 1.6ms + 描画 3.0ms／tick 描画 60fps・emu 55.2fps"
+    },
+    {
+      "machine": "X68000",
+      "check": "input path reached without throwing",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Arcade (Seta)",
+      "check": "loads a ROM through its own picker",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "Arcade (Seta)",
+      "check": "machine runs (frames advance)",
+      "status": "pass",
+      "note": "frame 140 → 182"
+    },
+    {
+      "machine": "Arcade (Seta)",
+      "check": "the RIGHT machine is live",
+      "status": "pass",
+      "note": "looking for \"frame=\" in: アーケード/Seta [clean] 2.5ms/frame frame=182 pc=0400h thunderl · Thunder & Lightning (1990 Seta) ROT270 ⏱ emu 0.8m"
+    },
+    {
+      "machine": "Arcade (Seta)",
+      "check": "input path reached without throwing",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-9801",
+      "check": "loads a ROM through its own picker",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "PC-9801",
+      "check": "machine runs (frames advance)",
+      "status": "pass",
+      "note": "frame 132 → 171"
+    },
+    {
+      "machine": "PC-9801",
+      "check": "the RIGHT machine is live",
+      "status": "pass",
+      "note": "looking for \"640x400\" in: PC-9801 [clean] 2.1ms/frame frame=171 pc=0018h 640x400 ⏱ emu 0.5ms + 描画 1.7ms／tick 描画 60fps・emu 56.0fps(目標60) "
+    },
+    {
+      "machine": "PC-9801",
+      "check": "input path reached without throwing",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "render",
+      "check": "a 0x0 frame still updates the status line",
+      "status": "pass",
+      "note": "PC-8001/N80 0.3ms/frame frame=127 pc=0001h 0x0 hsync=0Hz ⏱ emu 0.4ms + 描画 0.0ms／tick 描画 60fps・emu 60"
+    },
+    {
+      "machine": "Game Boy",
+      "check": "draws a real picture (dmg-acid2)",
+      "status": "pass",
+      "note": "160x288 distinct colours=4 lit=38582/46080"
+    },
+    {
+      "machine": "Game Boy",
+      "check": "pad input on a running machine",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "rewind",
+      "check": "pause / resume button",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "rewind",
+      "check": "shuttle drag left (rewind) then right (fast-forward)",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "rewind",
+      "check": "track jog (click, then drag backwards)",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "rewind",
+      "check": "◀◀ rewind button (press and hold)",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "rewind",
+      "check": "speed selector (fast-forward ×8)",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "controls",
+      "check": "クリーン表示 / CRT toggle",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "controls",
+      "check": "pad config panel",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "controls",
+      "check": "soft keyboard",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "controls",
+      "check": "PNG(raw) export",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "controls",
+      "check": "reset",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "controls",
+      "check": "soft keyboard renders keys",
+      "status": "pass",
+      "note": "92 keys, 640x280"
+    },
+    {
+      "machine": "controls",
+      "check": "soft keyboard key press",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "menu",
+      "check": "menu \"システム\" opens",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "menu",
+      "check": "menu \"ディスク/テープ\" opens",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "menu",
+      "check": "menu \"表示\" opens",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "menu",
+      "check": "menu \"設定\" opens",
+      "status": "pass",
+      "note": ""
+    },
+    {
+      "machine": "menu",
+      "check": "menu \"ツール\" opens",
+      "status": "pass",
+      "note": ""
+    }
+  ],
+  "console": [
+    {
+      "level": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found) @http://127.0.0.1:45913/roms/manifest.json",
+      "where": "log"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found) @http://127.0.0.1:45913/favicon.ico",
+      "where": "log"
+    },
+    {
+      "level": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found) @http://127.0.0.1:45913/api/store/ping",
+      "where": "log"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.3ms draw=22.1ms raf=43.1fps emuFps=64.64/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.4ms draw=20.6ms raf=40.3fps emuFps=59.89/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.4ms draw=20.7ms raf=41.2fps emuFps=59.83/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.3ms draw=20.7ms raf=41.8fps emuFps=59.78/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.3ms draw=20.5ms raf=44.6fps emuFps=60.50/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.3ms draw=20.3ms raf=42.0fps emuFps=59.95/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[audio] AudioWorklet push path (latency≈64ms)",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.8ms draw=1.6ms raf=54.4fps emuFps=57.37/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.8ms draw=1.3ms raf=60.0fps emuFps=60.98/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.8ms draw=1.4ms raf=60.0fps emuFps=60.02/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.9ms draw=1.3ms raf=59.9fps emuFps=59.94/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.6ms draw=0.7ms raf=60.1fps emuFps=60.06/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.7ms draw=0.6ms raf=60.0fps emuFps=60.00/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.5ms draw=0.6ms raf=60.0fps emuFps=60.00/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.6ms draw=0.6ms raf=60.0fps emuFps=60.00/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.9ms draw=0.6ms raf=60.0fps emuFps=60.05/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.8ms draw=0.6ms raf=60.0fps emuFps=60.00/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.9ms draw=0.7ms raf=59.9fps emuFps=59.94/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.9ms draw=0.6ms raf=60.1fps emuFps=60.06/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.2ms draw=0.7ms raf=60.0fps emuFps=59.97/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.8ms draw=0.6ms raf=60.1fps emuFps=59.08/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.0ms draw=0.6ms raf=59.9fps emuFps=60.92/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.1ms draw=0.6ms raf=59.9fps emuFps=59.90/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.0ms draw=0.7ms raf=60.1fps emuFps=59.08/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.6ms draw=0.4ms raf=59.9fps emuFps=59.95/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.2ms draw=0.3ms raf=60.1fps emuFps=59.10/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.3ms draw=0.3ms raf=60.0fps emuFps=59.99/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.3ms draw=0.3ms raf=60.0fps emuFps=60.02/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.1ms draw=0.5ms raf=60.1fps emuFps=59.07/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.8ms draw=3.1ms raf=59.8fps emuFps=55.79/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.7ms draw=3.3ms raf=59.9fps emuFps=55.92/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.6ms draw=3.0ms raf=60.2fps emuFps=55.23/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.6ms draw=2.9ms raf=59.9fps emuFps=55.90/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.9ms draw=3.2ms raf=60.0fps emuFps=55.08/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.8ms draw=1.4ms raf=60.2fps emuFps=60.20/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.7ms draw=1.4ms raf=60.0fps emuFps=59.03/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.8ms draw=1.5ms raf=60.0fps emuFps=59.96/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.8ms draw=1.6ms raf=59.9fps emuFps=60.90/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.6ms draw=1.9ms raf=60.2fps emuFps=58.20/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.5ms draw=1.7ms raf=60.0fps emuFps=56.97/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.5ms draw=1.7ms raf=60.0fps emuFps=55.99/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.5ms draw=1.7ms raf=60.0fps emuFps=57.00/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.5ms draw=1.8ms raf=60.0fps emuFps=56.03/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.4ms draw=1.2ms raf=55.2fps emuFps=58.19/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.4ms draw=0.0ms raf=60.0fps emuFps=60.00/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.0ms draw=0.2ms raf=60.0fps emuFps=58.95/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.0ms draw=0.3ms raf=60.0fps emuFps=60.03/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.9ms draw=0.3ms raf=59.9fps emuFps=59.95/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.0ms draw=0.3ms raf=60.0fps emuFps=59.04/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.4ms draw=0.3ms raf=60.1fps emuFps=51.20/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.6ms draw=0.4ms raf=59.9fps emuFps=-39.96/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=2.7ms draw=0.3ms raf=60.0fps emuFps=123.94/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.2ms draw=0.4ms raf=60.1fps emuFps=32.50/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.2ms draw=0.3ms raf=60.0fps emuFps=0.00/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.2ms draw=0.6ms raf=60.0fps emuFps=0.00/480 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.1ms draw=0.4ms raf=60.0fps emuFps=0.00/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.1ms draw=4.8ms raf=59.7fps emuFps=0.00/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[raw PNG] 160x144  pc=4833",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=0.1ms draw=5.0ms raf=59.9fps emuFps=0.00/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.4ms draw=4.8ms raf=59.9fps emuFps=30.95/60 BEHIND",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.6ms draw=4.5ms raf=60.0fps emuFps=59.99/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.5ms draw=5.4ms raf=59.9fps emuFps=58.91/60 ok",
+      "where": "console"
+    },
+    {
+      "level": "log",
+      "text": "[perf] emu=1.2ms draw=4.3ms raf=60.3fps emuFps=60.32/60 ok",
+      "where": "console"
+    }
+  ]
+}

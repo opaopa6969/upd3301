@@ -3014,35 +3014,44 @@ function loop(now) {
       // path's colour depth instead of collapsing to 8 primaries. The 8001 path
       // has no drive → phosphor.step falls back to the 1-bit index automatically.
       const frame = renderMachine({ indexed: true, analog: true });
-      if (!frame.width || !frame.height) { requestAnimationFrame(loop); return; }
-      const W = frame.width, H = frame.height;
-      const phosphor = panel.phosphor(W, H); // phosphor stays at source res (cheap)
-      const src = panel.applyDeflection(frame.pixels, W, H, machine.frame);
-      phosphor.step(src, FR, { fieldParity: panel.interlaced ? machine.frame & 1 : null, drive: frame.drive });
-      const opts = panel.plotOpts();
-      if (panel.tubeMode !== 'none') {
-        // supersample the mask/tube to the integer display scale → finer pitch,
-        // 1:1 with the screen (no moiré). ss=1 for fit / ×1. Heavier, but audio
-        // is on its own thread now, so a lower frame rate won't break the sound.
-        const ss = crtSS(true);
-        fitToRaw(W * ss, H * 2 * ss, W, H * 2);
-        panel.tube(W, H, ss).apply(phosphor.composite(), img.data, opts);
-      } else {
-        fitTo(W, H);
-        const d = img.data;
-        rgbaBuf = phosphor.toRGBA(rgbaBuf, opts);
-        const l2 = panel.line2;
-        for (let y = 0; y < H; y++) {
-          for (let x = 0; x < W; x++) {
-            const s = (y * W + x) * 4;
-            let o = (y * 2 * W + x) * 4;
-            d[o] = rgbaBuf[s]; d[o + 1] = rgbaBuf[s + 1]; d[o + 2] = rgbaBuf[s + 2]; d[o + 3] = 255;
-            o += W * 4;
-            d[o] = rgbaBuf[s] * l2; d[o + 1] = rgbaBuf[s + 1] * l2; d[o + 2] = rgbaBuf[s + 2] * l2; d[o + 3] = 255;
+      // A machine whose CRTC has not been programmed yet renders 0x0 — normal
+      // for the first frames after reset, and forever for a ROM that never
+      // programs it. Skipping the DRAW is right. Skipping the whole TICK (an
+      // early `return` used to live here) also skipped the status line and the
+      // player bar below, so such a machine looked exactly like a ROM that had
+      // failed to load: the status line kept the PREVIOUS machine's message and
+      // the frame counter sat at 0 while the CPU was in fact running. Draw
+      // nothing, but still report.
+      if (frame.width && frame.height) {
+        const W = frame.width, H = frame.height;
+        const phosphor = panel.phosphor(W, H); // phosphor stays at source res (cheap)
+        const src = panel.applyDeflection(frame.pixels, W, H, machine.frame);
+        phosphor.step(src, FR, { fieldParity: panel.interlaced ? machine.frame & 1 : null, drive: frame.drive });
+        const opts = panel.plotOpts();
+        if (panel.tubeMode !== 'none') {
+          // supersample the mask/tube to the integer display scale → finer pitch,
+          // 1:1 with the screen (no moiré). ss=1 for fit / ×1. Heavier, but audio
+          // is on its own thread now, so a lower frame rate won't break the sound.
+          const ss = crtSS(true);
+          fitToRaw(W * ss, H * 2 * ss, W, H * 2);
+          panel.tube(W, H, ss).apply(phosphor.composite(), img.data, opts);
+        } else {
+          fitTo(W, H);
+          const d = img.data;
+          rgbaBuf = phosphor.toRGBA(rgbaBuf, opts);
+          const l2 = panel.line2;
+          for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+              const s = (y * W + x) * 4;
+              let o = (y * 2 * W + x) * 4;
+              d[o] = rgbaBuf[s]; d[o + 1] = rgbaBuf[s + 1]; d[o + 2] = rgbaBuf[s + 2]; d[o + 3] = 255;
+              o += W * 4;
+              d[o] = rgbaBuf[s] * l2; d[o + 1] = rgbaBuf[s + 1] * l2; d[o + 2] = rgbaBuf[s + 2] * l2; d[o + 3] = 255;
+            }
           }
         }
+        ctx.putImageData(img, 0, 0);
       }
-      ctx.putImageData(img, 0, 0);
     }
     const nowP = performance.now();
     workMs = workMs * 0.9 + (nowP - t0) * 0.1;
