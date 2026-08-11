@@ -19,6 +19,11 @@ demo/*.mp3
 # per-user ROM/disk library written by serve.py /api/store (user dumps; never in git)
 userdata/
 
+# scratch ROM images the browser smoke test hands to the page's file inputs
+# (tools/smoke.mjs deletes them on a clean exit; this covers an interrupted run).
+# The screenshots and report.json next to it ARE committed — they are the evidence.
+docs/smoke-shots/.tmp/
+
 # SingleStepTests 68000 vectors, fetched by m68ktools/fetch-tests.sh (~138 MB).
 # Reference data, regenerated upstream — never committed.
 m68k-tests/
