@@ -72,7 +72,8 @@
     "./romlabels": "./romlabels.js",
     "./romxref": "./romxref.js",
     "./analysisdb": "./analysisdb.js",
-    "./ym2203": "./ym2203.js"
+    "./ym2203": "./ym2203.js",
+    "./snapjson": "./snapjson.js"
   },
   "files": [
     "*.js",

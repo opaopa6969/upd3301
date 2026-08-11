@@ -40,6 +40,7 @@ import { readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assemble } from './z80asm.js';
+import { stringify as snapStringify, parse as snapParse } from './snapjson.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -738,19 +739,6 @@ const RUN = 16;    // frames of replay on each side of a restore
 // Checks no machine passes yet, with the reason. A per-machine `todos` entry
 // overrides this, and anything not named here is expected to pass everywhere.
 const SHARED_TODOS = {
-  json:
-    'Snapshots are built out of typed arrays, and JSON.parse(JSON.stringify(a)) ' +
-    'turns a Uint8Array into {"0":…,"1":…} — from which TypedArray.set() copies ' +
-    'ZERO elements, without throwing. A raw JSON round-trip therefore empties ' +
-    'every buffer in the snapshot in total silence. Nothing in the repository ' +
-    'does this today (the rewind ring and the ICE keep snapshots in memory, ' +
-    'analysisdb.js has its own format), so it is latent rather than live — but ' +
-    'test-determinism.mjs used to "force plain data" with exactly this line and ' +
-    'the case passed anyway, which is how the hole was found. Closing it means ' +
-    'either Array.from() on every buffer (about eight bytes per byte in the ' +
-    'ring, which is what the ring is budgeted against) or a tagged encoder both ' +
-    'sides agree on. Neither is a per-machine change, so it is recorded, not ' +
-    'papered over. The enforced contract is `the snapshot is plain data`.',
 };
 
 for (const entry of REGISTRY) {
@@ -889,14 +877,44 @@ for (const entry of REGISTRY) {
     });
 
     // -- 5b. the JSON hole ---------------------------------------------------
-    await check(t, 'json', 'the snapshot survives a raw JSON round-trip', () => {
-      // See SHARED_TODOS.json for why this is a todo and not a bug report.
+    await check(t, 'json', 'the snapshot survives a JSON round-trip via snapjson', () => {
+      // Raw JSON destroys a snapshot in silence: it turns every typed array into
+      // {"0":…,"1":…}, and TypedArray.set() copies ZERO elements from that
+      // without throwing, so the machine restores from blank buffers and
+      // reports success. snapjson.js tags the buffers instead. This check is
+      // what says the encoder actually works on a real machine, not just on a
+      // hand-made object (test-snapjson.mjs covers the encoder itself).
       const m = boot();
       for (let f = 0; f < WARM; f++) entry.step(m);
       const s = m.snapshot();
       const dst = boot();
-      dst.restore(JSON.parse(JSON.stringify(s)));
+      dst.restore(snapParse(snapStringify(s)));
       assert.equal(fingerprint(dst), fingerprint(m));
+    });
+
+    await check(t, 'json-raw', 'raw JSON loses the buffers, whether or not it shows', () => {
+      // The damage is asserted at the buffer, not at the fingerprint. A machine
+      // whose picture is a pure function of a few registers can be emptied and
+      // still converge back to the same fingerprint within the warm-up — PC-8001
+      // does exactly that — so judging by the fingerprint would call raw JSON
+      // safe on some machines and unsafe on others. What is always true is that
+      // the buffers arrive empty.
+      const m = boot();
+      for (let f = 0; f < WARM; f++) entry.step(m);
+      const s = m.snapshot();
+      const decayed = JSON.parse(JSON.stringify(s));
+      let checked = 0;
+      const walk = (a, b) => {
+        if (a == null || typeof a !== 'object') return;
+        if (ArrayBuffer.isView(a) && a.length > 0) {
+          checked++;
+          assert.ok(!ArrayBuffer.isView(b), 'raw JSON decays typed arrays to plain objects');
+          return;
+        }
+        for (const k of Object.keys(a)) walk(a[k], b?.[k]);
+      };
+      walk(s, decayed);
+      assert.ok(checked > 0, 'this machine should hold at least one buffer in its snapshot');
     });
 
     // -- 6. the picture belongs to the snapshot ------------------------------
