@@ -18,7 +18,14 @@
 //      matches M88 exactly, spends 100% of its frames below 0x1000. What
 //      separates alive from dead is how many distinct PCs are touched and
 //      whether the machine still talks to devices.
-//   4. Comparing two fill counts cannot say *which* side is broken. Four titles
+//   4. A final fill count cannot tell "never drew" from "drew, then wiped".
+//      Six of the ten remaining divergence leads turn out to have drawn a
+//      picture and then lost it — volguard reaches 40,273 bytes of GVRAM at
+//      frame 1140 and ends on 1,467. Read as a single number at frame 1500 they
+//      look like a machine that cannot draw, which points the investigation at
+//      the drawing path; what actually needs explaining is the moment the
+//      picture went away. Those are different bugs.
+//   5. Comparing two fill counts cannot say *which* side is broken. Four titles
 //      sat on the divergence list for days reading as "we diverge from M88",
 //      when in fact M88 was parked on the N88-BASIC opening screen and had
 //      never loaded the disk at all — we were the side running the game.
@@ -39,6 +46,13 @@ const RUNAWAY_PCS = 500;
 // by booting with no disk at all for 1500 frames: a machine showing exactly this
 // much text and no graphics never got as far as the game.
 const BASIC_SCREEN_TVNZ = 2678;
+// A peak has to be worth losing before "it went away" means anything; below
+// this a screen was never really drawn. Measured against the leads: the six
+// real cases peak between 2,549 and 40,273.
+const PEAK_FLOOR = 800;
+// And most of it has to be gone. A screen that dims or scrolls partly off is
+// not the same event as one that is erased.
+const PEAK_LOSS_RATIO = 4;
 
 /**
  * Which plane actually carries this title's picture, and how well the two sides
@@ -101,6 +115,39 @@ export function classifyLoop({ distinctPCs, ioCount, halted = false }) {
  * Is a fingerprint safe to judge on? A single frame is not — say so rather than
  * letting a caller compare two mid-load machines and call it a match.
  */
+/**
+ * Did this side draw something and then lose it? `samples` is a series taken
+ * over the run (not just the end), each `{ tvnz, gvnz }`.
+ *
+ * "Never drew" and "drew then wiped" want opposite investigations: the first
+ * asks why the drawing path produced nothing, the second asks what erased a
+ * picture that had already been produced. Reported as one final number they are
+ * indistinguishable, which is how six leads sat on the list mis-described.
+ *
+ * The floor keeps ordinary screen transitions out: a title screen clearing
+ * before gameplay is not a fault, so a peak has to be substantial and the loss
+ * has to be most of it.
+ */
+export function findPeakLoss(samples) {
+  if (!Array.isArray(samples) || samples.length < 3) return null;
+  const last = samples[samples.length - 1];
+  for (const plane of ['gvnz', 'tvnz']) {
+    let peak = -1, peakAt = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const v = samples[i][plane] ?? 0;
+      if (v > peak) { peak = v; peakAt = i; }
+    }
+    const fin = last[plane] ?? 0;
+    // A peak at the very end is a machine still filling in, not one that lost
+    // anything — there is no "after" to have lost it in.
+    if (peakAt >= samples.length - 1) continue;
+    if (peak > PEAK_FLOOR && fin < peak / PEAK_LOSS_RATIO) {
+      return { plane, peak, peakAt, final: fin };
+    }
+  }
+  return null;
+}
+
 export function isConverged(samples) {
   if (!Array.isArray(samples) || samples.length < 2) return false;
   const key = (s) => `${s.e6cd}/${s.tvnz}/${s.gvnz ?? ''}`;

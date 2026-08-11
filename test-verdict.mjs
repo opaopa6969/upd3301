@@ -7,7 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyScreen, classifyLoop, isConverged, isBasicScreen } from './tools/verdict.js';
+import { classifyScreen, classifyLoop, isConverged, isBasicScreen, findPeakLoss } from './tools/verdict.js';
 
 test('a title that turned the text plane off is judged on GVRAM, not tvram', () => {
   // Ys1 at 1500f, after the MT fix regressed it: our screen was genuinely
@@ -140,4 +140,42 @@ test('both sides on the BASIC screen is not a boot failure verdict', () => {
     { e6cd: 0x00, tvnz: 2678, gvnz: 0 },
   );
   assert.equal(v.kind, 'exact');
+});
+
+test('a picture that was drawn and then lost is reported as such', () => {
+  // volguard, measured 2026-08-11 over 1500 frames: GVRAM climbs to 40,273 at
+  // frame 1140 and ends on 1,467. Sampled once at the end it reads as a machine
+  // that cannot draw — which is the wrong investigation entirely.
+  const s = [
+    { tvnz: 100, gvnz: 0 }, { tvnz: 3000, gvnz: 20000 },
+    { tvnz: 3809, gvnz: 40273 }, { tvnz: 3809, gvnz: 1467 },
+  ];
+  const r = findPeakLoss(s);
+  assert.equal(r?.plane, 'gvnz');
+  assert.equal(r.peak, 40273);
+  assert.equal(r.final, 1467);
+});
+
+test('a machine still filling in at the last sample has lost nothing', () => {
+  // Seena ends on 29,319 against a peak of 33,113 — it is animating, not wiping.
+  // Without this the check would flag every title whose screen breathes.
+  assert.equal(findPeakLoss([
+    { tvnz: 3300, gvnz: 10000 }, { tvnz: 3314, gvnz: 29319 }, { tvnz: 3314, gvnz: 33113 },
+  ]), null, 'a peak at the very end is not a loss');
+  assert.equal(findPeakLoss([
+    { tvnz: 3300, gvnz: 33113 }, { tvnz: 3314, gvnz: 30000 }, { tvnz: 3314, gvnz: 29319 },
+  ]), null, 'and losing a tenth of it is not a wipe');
+});
+
+test('an ordinary screen clear is below the floor', () => {
+  // A few hundred bytes of text vanishing between screens happens constantly and
+  // is not a fault; only a picture worth losing counts.
+  assert.equal(findPeakLoss([
+    { tvnz: 700, gvnz: 0 }, { tvnz: 700, gvnz: 0 }, { tvnz: 20, gvnz: 0 },
+  ]), null);
+});
+
+test('too few samples is not a verdict', () => {
+  // Same discipline as isConverged: two points cannot describe a trajectory.
+  assert.equal(findPeakLoss([{ tvnz: 5000, gvnz: 40000 }, { tvnz: 0, gvnz: 0 }]), null);
 });
