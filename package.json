@@ -76,7 +76,8 @@
     "./snapjson": "./snapjson.js",
     "./icecore": "./icecore.js",
     "./icearch": "./icearch.js",
-    "./rngfind": "./rngfind.js"
+    "./rngfind": "./rngfind.js",
+    "./reachdiff": "./reachdiff.js"
   },
   "files": [
     "*.js",
