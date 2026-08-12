@@ -33,14 +33,24 @@ export const SCHEMA_VERSION = 1;
 // still separating 1009 from 30a9.
 const REGION_GAP = 64;
 
-/** Group a sorted address list into contiguous regions. */
+/**
+ * Group a sorted address list into contiguous regions.
+ *
+ * Each region keeps the addresses it was built from. That matters: a region is
+ * named by its bounds, but the span between them also contains addresses that
+ * are *not* in the input — code both sides ran. Anything that asks "when did
+ * this region start" has to ask only about the members, or it answers with a
+ * shared address that happens to lie inside. (It did: FIREHAWK's exclusive
+ * region 040c-04a3 reported "first at f0", and that f0 belonged to 043d, which
+ * M88 executes too.)
+ */
 export function regions(addrs, gap = REGION_GAP) {
   const sorted = [...new Set(addrs)].sort((a, b) => a - b);
   const out = [];
   for (const a of sorted) {
     const last = out[out.length - 1];
-    if (last && a - last.hi <= gap) { last.hi = a; last.count++; }
-    else out.push({ lo: a, hi: a, count: 1 });
+    if (last && a - last.hi <= gap) { last.hi = a; last.count++; last.addrs.push(a); }
+    else out.push({ lo: a, hi: a, count: 1, addrs: [a] });
   }
   return out;
 }
@@ -61,12 +71,17 @@ export function reachDiff(ours, ref, firstFrame = null) {
 
   const withFrame = (rs) => rs.map((r) => {
     if (!firstFrame) return r;
-    let f = Infinity;
-    for (let a = r.lo; a <= r.hi; a++) {
+    // Report *which* address arrived first, not just when. A region is named by
+    // its bounds, and the obvious next move is to disassemble `lo` — but the
+    // address that got there first is usually somewhere inside. Reporting only
+    // the frame sent an investigation to 040c (reached at f352) when what
+    // happened at f0 was at 043d.
+    let f = Infinity, at = -1;
+    for (const a of r.addrs) {
       const v = firstFrame.get?.(a) ?? firstFrame[a];
-      if (v != null && v < f) f = v;
+      if (v != null && v < f) { f = v; at = a; }
     }
-    return f === Infinity ? r : { ...r, firstFrame: f };
+    return f === Infinity ? r : { ...r, firstFrame: f, firstAddr: at };
   });
 
   return {
@@ -89,7 +104,7 @@ export function reachDiff(ours, ref, firstFrame = null) {
 export function format(d, { limit = 12 } = {}) {
   const hx = (v) => v.toString(16).padStart(4, '0');
   const line = (r) => `  ${hx(r.lo)}-${hx(r.hi)}  ${String(r.count).padStart(5)} addrs`
-    + (r.firstFrame != null ? `  first at f${r.firstFrame}` : '');
+    + (r.firstFrame != null ? `  first ${hx(r.firstAddr)} at f${r.firstFrame}` : '');
   const out = [`shared addresses: ${d.shared}`];
   out.push(`\n--- only WE run this (${d.onlyOurs.length} regions) ---`);
   for (const r of d.onlyOurs.slice(0, limit)) out.push(line(r));
@@ -98,7 +113,7 @@ export function format(d, { limit = 12 } = {}) {
   for (const r of d.onlyRef.slice(0, limit)) out.push(line(r));
   if (d.onlyRef.length > limit) out.push(`  … ${d.onlyRef.length - limit} more`);
   const fe = d.firstExclusive;
-  if (fe) out.push(`\nearliest divergence: we enter ${hx(fe.lo)}-${hx(fe.hi)} at f${fe.firstFrame}, `
-    + `which the reference never executes`);
+  if (fe) out.push(`\nearliest divergence: we execute ${hx(fe.firstAddr)} at f${fe.firstFrame} `
+    + `(region ${hx(fe.lo)}-${hx(fe.hi)}), which the reference never does`);
   return out.join('\n');
 }
