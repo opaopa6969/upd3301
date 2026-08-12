@@ -396,7 +396,12 @@ export class Pc8801Machine {
       // b2 = CMT carrier-detect: high while the tape is parked on a MARK
       let cmt = 0;
       if (this.tape) { this.tape.pump(this._tapeNow()); cmt = this.tape.carrier() ? 0x04 : 0; }
-      return (vrtc ? 0x20 : 0x00) | 0x02 | this._rtcIn40() | cmt; // b5=VRTC, b4=RTC out, b2=CMT carrier
+      // b1 is fv15k — the 15kHz monitor strap — and it is NOT always set. M88
+      // builds this port as `0xc0 + (fv15k ? 2 : 0) + …` (m88ref .../pc88/base.cpp),
+      // so on a 24kHz machine b1 reads 0 and b7/b6 read 1. We had b1 wired high
+      // unconditionally and b7/b6 low. Measured: volguard's earliest divergence
+      // from M88 is at frame 1, and it is exactly `IN A,(40h) / AND 02h / JR Z`.
+      return 0xc0 | (vrtc ? 0x20 : 0x00) | this._rtcIn40() | cmt; // b7,b6=1, b5=VRTC, b4=RTC, b2=CMT
 
     }
     if (port === 0x50) return this.crtc.readParam();
