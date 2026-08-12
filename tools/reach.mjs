@@ -39,8 +39,18 @@ parseD88All(new Uint8Array(readFileSync(resolve(disk)))).forEach((img, u) => { i
 // Record the set of addresses we execute, and when each was first reached.
 const ours = new Set();
 const firstFrame = new Map();
+// Also record which addresses ran immediately after an EI. M88's trace hook
+// does not record those, so without this every one of them reads as a
+// divergence — see reachdiff.js.
+const afterEI = new Set();
+let prevWasEI = false;
 const c = m.cpu, step = c.step.bind(c);
-c.step = () => { if (!ours.has(c.pc)) { ours.add(c.pc); firstFrame.set(c.pc, m.frame); } return step(); };
+c.step = () => {
+  if (!ours.has(c.pc)) { ours.add(c.pc); firstFrame.set(c.pc, m.frame); }
+  if (prevWasEI) afterEI.add(c.pc);
+  prevWasEI = m.readMem(c.pc) === 0xfb; // EI
+  return step();
+};
 for (let f = 0; f < FRAMES; f++) m.stepFrame();
 console.log(`# ${disk.split('/').pop()} — ${FRAMES} frames, we executed ${ours.size} distinct addresses`);
 
@@ -80,4 +90,4 @@ if (!ref.size) {
   process.exit(1);
 }
 console.log(`# the reference executed ${ref.size} distinct addresses\n`);
-console.log(format(reachDiff(ours, ref, firstFrame)));
+console.log(format(reachDiff(ours, ref, firstFrame, afterEI)));

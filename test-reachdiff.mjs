@@ -96,3 +96,25 @@ test('a shared address inside an exclusive span is not what started it', () => {
   assert.equal(d.onlyOurs[0].firstFrame, 300, 'f0 belongs to 043d, which both sides ran');
   assert.equal(d.onlyOurs[0].firstAddr, 0x0410);
 });
+
+test('addresses the reference runs but does not trace are not divergences', () => {
+  // M88's trace hook misses the instruction after every EI. Measured on
+  // FIREHAWK: 22 of 22 addresses we executed straight after an EI are absent
+  // from its trace, and one of them holds 0xFB — a one-byte opcode, so no
+  // instruction could span it and M88 must have executed it. Left in, they were
+  // the reported "earliest divergence" for two titles and sent the
+  // investigation to frame 2 instead of frame 336.
+  const ours = new Set([0x6f93, 0x3a85, 0x1748]);
+  const ref = new Set([0x1000]);
+  const first = new Map([[0x6f93, 2], [0x3a85, 19], [0x1748, 336]]);
+  const artifacts = new Set([0x6f93, 0x3a85]); // both follow an EI
+
+  const noisy = reachDiff(ours, ref, first);
+  assert.equal(noisy.firstExclusive.firstAddr, 0x6f93, 'without the filter, the artifact wins');
+
+  const clean = reachDiff(ours, ref, first, artifacts);
+  assert.equal(clean.suppressed, 2);
+  assert.equal(clean.onlyOurs.length, 1);
+  assert.equal(clean.firstExclusive.firstAddr, 0x1748, 'the real earliest divergence');
+  assert.match(format(clean), /\+2 hidden/);
+});

@@ -62,11 +62,23 @@ export function regions(addrs, gap = REGION_GAP) {
  * maps an address to the frame we first executed it, so the report can say
  * *when* we went the other way rather than only *where*.
  */
-export function reachDiff(ours, ref, firstFrame = null) {
+export function reachDiff(ours, ref, firstFrame = null, artifacts = null) {
   const A = ours instanceof Set ? ours : new Set(ours);
   const B = ref instanceof Set ? ref : new Set(ref);
-  const onlyOurs = [], onlyRef = [];
-  for (const a of A) if (!B.has(a)) onlyOurs.push(a);
+  // Addresses the reference *ran* but did not *record*. M88's trace hook misses
+  // the instruction after every EI: measured on FIREHAWK, 22 of 22 addresses we
+  // executed straight after an EI are absent from its trace, and the byte at
+  // one of them is 0xFB — a one-byte opcode, so there is no instruction that
+  // could span it. They are an instrumentation gap, not a divergence, and left
+  // in they dominate the report (they were the "earliest divergence" for two
+  // titles).
+  const skip = artifacts instanceof Set ? artifacts : new Set(artifacts ?? []);
+  const onlyOurs = [], onlyRef = [], suppressed = [];
+  for (const a of A) {
+    if (B.has(a)) continue;
+    if (skip.has(a)) { suppressed.push(a); continue; }
+    onlyOurs.push(a);
+  }
   for (const b of B) if (!A.has(b)) onlyRef.push(b);
 
   const withFrame = (rs) => rs.map((r) => {
@@ -86,7 +98,8 @@ export function reachDiff(ours, ref, firstFrame = null) {
 
   return {
     schemaVersion: SCHEMA_VERSION,
-    shared: A.size - onlyOurs.length,
+    shared: A.size - onlyOurs.length - suppressed.length,
+    suppressed: suppressed.length,
     onlyOurs: withFrame(regions(onlyOurs)),
     onlyRef: regions(onlyRef),
     // The earliest place we ran code the reference never does. When one side
@@ -105,7 +118,8 @@ export function format(d, { limit = 12 } = {}) {
   const hx = (v) => v.toString(16).padStart(4, '0');
   const line = (r) => `  ${hx(r.lo)}-${hx(r.hi)}  ${String(r.count).padStart(5)} addrs`
     + (r.firstFrame != null ? `  first ${hx(r.firstAddr)} at f${r.firstFrame}` : '');
-  const out = [`shared addresses: ${d.shared}`];
+  const out = [`shared addresses: ${d.shared}`
+    + (d.suppressed ? `  (+${d.suppressed} hidden: the reference runs these but does not trace them)` : '')];
   out.push(`\n--- only WE run this (${d.onlyOurs.length} regions) ---`);
   for (const r of d.onlyOurs.slice(0, limit)) out.push(line(r));
   if (d.onlyOurs.length > limit) out.push(`  … ${d.onlyOurs.length - limit} more`);
