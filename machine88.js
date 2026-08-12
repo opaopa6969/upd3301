@@ -36,7 +36,14 @@ const GVRAM_SIZE = 0x4000; // 16KB per plane, window at C000-FFFF
 export class Pc8801Machine {
   constructor({
     main, ext = null, n80 = null, sub = null, mode = 'n88',
-    frameHz = 60, clockHz = 3_993_600, dmaSteal = 0.3, sb2 = false,
+    // 55.71 Hz, not 60. The PC-8801's 24kHz (640x400) mode runs a ~55.8 Hz
+    // vertical rate, and that is what the machine boots into unless the fv15k
+    // strap selects 15kHz. M88 prints its own frame budget on startup —
+    // `framePeriod=1792 clock=40` — which is 1792 x 40 = 71,680 cycles per
+    // frame; we were giving the CPU 66,560. Measured on FIREHAWK over 400
+    // frames: M88 executes 7,991 main instructions per frame, we managed 7,223
+    // at 60 Hz and 7,792 at this period.
+    frameHz = 3_993_600 / 71_680, clockHz = 3_993_600, dmaSteal = 0.3, sb2 = false,
     kanji = null, kanji2 = null, rtcDate = null,
   } = {}) {
     if (!main || main.length < 0x8000) throw new Error('need a 32KB N88 main ROM');
