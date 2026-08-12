@@ -39,6 +39,7 @@ test('what each side ran alone, and where we first went our own way', () => {
   assert.equal(d.onlyRef.length, 2);
   assert.equal(d.firstExclusive.firstFrame, 20, 'the earliest exclusive region is the one to open');
   assert.equal(d.firstExclusive.lo, 0x3a85);
+  assert.equal(d.firstExclusive.firstAddr, 0x3a85, 'and it names the address, not just the bounds');
 });
 
 test('with no frame map it still says what differs, just not when', () => {
@@ -66,5 +67,32 @@ test('the summary names the earliest divergence, not just the biggest', () => {
   const first = new Map([[0x200, 5], [0x900, 400], [0x901, 400], [0x902, 400], [0x903, 400]]);
   const d = reachDiff(ours, new Set([0x100]), first);
   assert.equal(d.firstExclusive.lo, 0x200);
-  assert.match(format(d), /earliest divergence: we enter 0200/);
+  assert.match(format(d), /we execute 0200 at f5/);
+});
+
+test('the region names the address that arrived first, not its lower bound', () => {
+  // Measured on FIREHAWK: the region 040c-04a3 is reported as first seen at
+  // frame 0, but 040c itself is not reached until frame 352 — what happened at
+  // frame 0 was 043d. Disassembling the lower bound looked at the wrong code.
+  // The real region is dense (73 addresses across 040c-04a3); a sparse stand-in
+  // would split under REGION_GAP and stop testing what this is about.
+  const addrs = [], first = new Map();
+  for (let a = 0x040c; a <= 0x04a3; a += 4) { addrs.push(a); first.set(a, 352); }
+  first.set(0x0420, 10); // an exclusive address that arrived early
+  const d = reachDiff(new Set(addrs), new Set(), first);
+  assert.equal(d.onlyOurs.length, 1, 'one dense region');
+  assert.equal(d.onlyOurs[0].firstAddr, 0x0420, 'not the lower bound 040c');
+  assert.match(format(d), /we execute 0420 at f10/);
+});
+
+test('a shared address inside an exclusive span is not what started it', () => {
+  // FIREHAWK, measured: the exclusive region 040c-04a3 reported "first at f0",
+  // and that f0 belonged to 043d — which M88 executes too. Scanning lo..hi for
+  // the earliest frame picks up code both sides ran and points the whole
+  // investigation at the wrong instruction.
+  const first = new Map([[0x0410, 300], [0x043d, 0], [0x0430, 300]]);
+  const d = reachDiff(new Set([0x0410, 0x0430]), new Set([0x043d]), first);
+  assert.equal(d.onlyOurs.length, 1, '0410 and 0430 are one region, 043d sits inside it');
+  assert.equal(d.onlyOurs[0].firstFrame, 300, 'f0 belongs to 043d, which both sides ran');
+  assert.equal(d.onlyOurs[0].firstAddr, 0x0410);
 });
