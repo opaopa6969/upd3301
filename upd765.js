@@ -469,6 +469,35 @@ export class Upd765 {
     // bytes; when the host keeps reading past a sector boundary we auto-advance
     // to R+1 (genuine multi-sector read).
     if (m && !m.format && !this.execWrite) {
+      // A SECTOR THAT FAILED CRC ENDS THE COMMAND — IT DOES NOT ADVANCE.
+      //
+      // M88 keeps the sector's status in `result` across the transfer and looks
+      // at it before touching the ID:
+      //
+      //     case execreadphase:
+      //         if (result) { ShiftToResultPhase7(); return; }
+      //         if (!IDIncrement()) { SetTimer(timerphase, 20); return; }
+      //
+      // We used to walk straight on to R+1, and assigning the next sector to
+      // `m.sec` threw the failed one away — so `_endRw` only ever saw the LAST
+      // sector's status and reported a clean end (the adversarial review's
+      // finding 8, issue #40).
+      //
+      // That is a protection check, not a corner case. うる星やつらラブリーチェイサー
+      // stores one deliberately bad sector at C2/H1/**R0** (R=0 is itself a
+      // protection trick) and reads it to confirm the disk is genuine. M88
+      // answers ST[44 20 20] — abnormal, DE, DD — at C2 H1 R0. We answered
+      // ST[04 00] at C2 H1 R1, so the check never passed and the loader retried
+      // the same read 1,669 times in 1500 frames, sitting on the BASIC screen.
+      //
+      // `_endRw` already derives AT|DE|DD from `m.sec.status`, and leaving
+      // `m.rAddr` unset makes the result ID report the sector we died on, which
+      // is what Intel's Table 4 asks for and what M88 prints.
+      if (m.sec?.status) {
+        m.stHd = this.hd;
+        this._endRw(0, 0, 0);
+        return;
+      }
       const d = this.drives[this.us];
       // ST0 reports the head the transfer actually ran on, while the result ID
       // reports where the chip stopped — and under MT those disagree, because

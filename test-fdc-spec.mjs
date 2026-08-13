@@ -232,6 +232,63 @@ test('a missing sector raises ND rather than ending normally', () => {
   assert.equal(res[1] & 0x04, 0x04, 'ST1.ND should be set');
 });
 
+// A disk carrying one deliberately corrupt sector in the middle of a track —
+// the shape every PC-8801 protection uses. R=0 is part of the trick: sector
+// numbering starts at 1, so a record 0 only exists if someone formatted it by
+// hand. D88 status 0xB0 means "data field failed CRC".
+const protectedDisk = () => parseD88(buildD88({
+  name: 'PROT', media: 0x00,
+  tracks: [
+    [
+      { c: 0, h: 0, r: 0, n: 1, status: 0xb0, data: new Uint8Array(256).fill(0xaa) },
+      { c: 0, h: 0, r: 1, n: 1, data: new Uint8Array(256).fill(0x11) },
+      { c: 0, h: 0, r: 2, n: 1, data: new Uint8Array(256).fill(0x22) },
+    ],
+  ],
+}));
+
+test('a CRC-failed sector ends the command instead of advancing past it', () => {
+  // M88 holds the sector's status in `result` across the transfer and checks it
+  // before touching the ID:
+  //     case execreadphase:
+  //         if (result) { ShiftToResultPhase7(); return; }
+  //         if (!IDIncrement()) ...
+  // We used to advance to R+1, and assigning the next sector to `m.sec` threw
+  // the failed one away — so the command reported a clean end and the result ID
+  // pointed at the *next* sector. うる星やつらラブリーチェイサー reads exactly this
+  // (C2 H1 R0, status 0xB0) to verify the disk; getting a normal end made its
+  // loader retry the same read 1,669 times in 1500 frames.
+  const f = new Upd765();
+  f.insertDisk(0, protectedDisk());
+  const { res } = readData(f, { mt: 0, hd: 0, r: 0, n: 1, eot: 2 });
+  assert.equal(IC(res[0]), 1, 'ST0.IC should be 01 (abnormal)');
+  assert.equal(res[1] & 0x20, 0x20, 'ST1.DE — data error');
+  assert.equal(res[2] & 0x20, 0x20, 'ST2.DD — the error was in the data field');
+  // Intel's Table 4: the result ID is where the chip stopped, i.e. the bad
+  // sector itself — not R+1.
+  assert.equal(res[5], 0, 'result R must be the sector that failed');
+  assert.equal(res[3], 0, 'result C unchanged');
+});
+
+test('the bad sector still transfers its bytes before the command ends', () => {
+  // M88 only skips the transfer for errors *without* ST2_DD; a data-field CRC
+  // failure hands the (corrupt) bytes over and then reports. A loader that
+  // checksums what it read depends on getting them.
+  const f = new Upd765();
+  f.insertDisk(0, protectedDisk());
+  const { data } = readData(f, { mt: 0, hd: 0, r: 0, n: 1, eot: 2 });
+  assert.equal(data, 256, 'the 256 bytes of the bad sector are transferred');
+});
+
+test('a clean sector after a bad one is still reachable on its own', () => {
+  // The early exit must be about the sector that failed, not about the track.
+  const f = new Upd765();
+  f.insertDisk(0, protectedDisk());
+  const { res, data } = readData(f, { mt: 0, hd: 0, r: 1, n: 1, eot: 1 });
+  assert.equal(IC(res[0]), 0, 'reading R1 alone ends normally');
+  assert.equal(data, 256);
+});
+
 test.todo('MT=1: a missing record on side 1 still raises ND', () => {
   // Side 1 exists, but the sector the chip would cross to does not. Ending
   // "normally" here is what let a bad transfer look successful.
