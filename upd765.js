@@ -22,7 +22,8 @@ import { findSector } from './d88.js';
 
 export const SCHEMA_VERSION = 1;
 
-// MSR bits
+// MSR bits. M88 calls EXM "NDM" (non-DMA mode); it is the same bit 5, and both
+// names mean "an execution phase is running".
 const RQM = 0x80, DIO = 0x40, EXM = 0x20, CB = 0x10;
 
 // ST0 bits
@@ -43,6 +44,18 @@ export class Upd765 {
 
   reset() {
     this.phase = 'idle'; // idle | command | execute | result
+    // THE MSR IS A STATE VARIABLE, NOT A FUNCTION OF `phase`.
+    //
+    // It used to be derived (`switch (phase) { case 'execute': return RQM|EXM|CB|DIO; ...}`)
+    // and that cost three failed attempts at the FDC timers (issue #13): a
+    // derived MSR can only ever say "ready", so there is no way to express
+    // "the chip is busy for the next 5 ms, ignore me". M88 keeps `status` as a
+    // plain variable that each phase shift assigns and each transferred byte
+    // clears — `FDC::Status()` is literally `return seekstate | status;`.
+    this.status = RQM;
+    this.seekBusy = 0;  // MSR D0B..D3B — drives with a seek still in flight
+    this.acceptTc = false; // M88's `accepttc`: TC only bites during a transfer
+    this.data = 0xff; // the data-bus latch (M88 `data`)
     this.cmd = [];
     this.cmdLen = 0;
     this.result = [];
@@ -57,66 +70,122 @@ export class Upd765 {
     return this;
   }
 
+  // ---- phase shifts (M88's ShiftToXxxPhase) -----------------------------------
+  // Each one assigns the whole status word. Keeping the assignments here — and
+  // nowhere else — is what makes the MSR auditable: to know what the CPU sees,
+  // read these five functions, not a switch over `phase`.
+  _toIdle() { this.phase = 'idle'; this.status = RQM; this.acceptTc = false; }
+  _toCommand() { this.phase = 'command'; this.status = RQM | CB; this.acceptTc = false; }
+  _toExecRead(buf) {
+    this.phase = 'execute'; this.execWrite = false;
+    this.execBuf = buf; this.execPos = 0;
+    this.status = RQM | DIO | EXM | CB;
+    this.acceptTc = true;
+    this.int = true; // non-DMA: first byte ready
+  }
+  _toExecWrite(buf) {
+    this.phase = 'execute'; this.execWrite = true;
+    this.execBuf = buf; this.execPos = 0;
+    this.status = RQM | EXM | CB;
+    this.acceptTc = true;
+    this.int = true; // non-DMA: first byte wanted
+  }
+
+  // Rebuild `status` the way the old derived MSR would have. Only for restoring
+  // snapshots taken before the MSR became a variable: those carry `phase` but
+  // no `status`, and leaving `status` at its idle default made every restored
+  // mid-transfer read return 0xff (test-x68's round-trip caught it).
+  _statusFromPhase() {
+    switch (this.phase) {
+      case 'command': this.status = RQM | CB; this.acceptTc = false; break;
+      case 'execute': this.status = RQM | EXM | CB | (this.execWrite ? 0 : DIO); this.acceptTc = true; break;
+      case 'result': this.status = RQM | DIO | CB; this.acceptTc = false; break;
+      default: this.status = RQM; this.acceptTc = false; break;
+    }
+  }
+
   insertDisk(unit, disk) { this.drives[unit & 3].disk = disk; return this; }
   ejectDisk(unit) { this.drives[unit & 3].disk = null; return this; }
 
   get intLine() { return this.int || this.seekEnd.length > 0; }
 
   // ---- MSR ------------------------------------------------------------------
-  readStatus() {
-    switch (this.phase) {
-      case 'idle': return RQM;
-      case 'command': return RQM | CB;
-      case 'execute': return RQM | EXM | CB | (this.execWrite ? 0 : DIO);
-      case 'result': return RQM | DIO | CB;
-      default: return RQM;
-    }
-  }
+  // M88: `uint FDC::Status(uint) { return seekstate | status; }` — a variable
+  // read, nothing else. `phase` is deliberately NOT consulted here.
+  readStatus() { return this.seekBusy | this.status; }
 
   // ---- data register ----------------------------------------------------------
+  // Both accessors open with M88's guard. This is the mechanism the whole
+  // timer story rests on: while RQM is low the port is DEAD — a write changes
+  // nothing at all, a read yields nothing. The driver spins; when the timer
+  // raises RQM the spin ends. Attempt #3 at the read timer parked the wait in
+  // the command phase *without* this guard, so the driver's data bytes were
+  // appended to the command byte stream and 02A8h span 406,610 times.
   write(v) {
-    v &= 0xff;
-    if (this.phase === 'idle') {
-      this.cmd = [v];
-      this.cmdLen = CMD_LEN[v & 0x1f] ?? 1;
-      this.phase = this.cmd.length < this.cmdLen ? 'command' : 'command';
-      if (this.cmd.length === this.cmdLen) this._start();
-      return;
-    }
-    if (this.phase === 'command') {
-      this.cmd.push(v);
-      if (this.cmd.length === this.cmdLen) this._start();
-      return;
-    }
-    if (this.phase === 'execute' && this.execWrite) {
-      this.execBuf[this.execPos++] = v;
-      this.int = false;
-      if (this.execPos >= this.execBuf.length) this._execDone();
-      else this.int = true; // non-DMA: next byte requested
-      return;
+    // M88 FDC::SetData: `if ((status & (S_RQM | S_DIO)) == S_RQM)`.
+    // RQM low → busy; DIO high → the chip wants to be read, not written.
+    if ((this.status & (RQM | DIO)) !== RQM) return;
+    this.data = v & 0xff;
+    this.status &= ~RQM; // one RQM per byte; whoever consumes it raises it again
+    this.int = false;
+    switch (this.phase) {
+      case 'idle':
+        this.cmd = [this.data];
+        this.cmdLen = CMD_LEN[this.data & 0x1f] ?? 1;
+        if (this.cmd.length < this.cmdLen) this._toCommand();
+        else this._start();
+        return;
+      case 'command':
+        this.cmd.push(this.data);
+        if (this.cmd.length < this.cmdLen) this.status |= RQM; // more parameters wanted
+        else this._start(); // the command decides what the MSR says next
+        return;
+      case 'execute':
+        if (!this.execWrite) return;
+        this.execBuf[this.execPos++] = this.data;
+        if (this.execPos < this.execBuf.length) { this.status |= RQM; this.int = true; }
+        else { this.status &= ~EXM; this._execDone(); } // M88 drops NDM before the tail
+        return;
+      default:
+        return;
     }
   }
 
   read() {
-    if (this.phase === 'execute' && !this.execWrite) {
+    // M88 FDC::GetData: `if ((status & (S_RQM | S_DIO)) == (S_RQM | S_DIO))`.
+    //
+    // M88 returns the stale `data` latch when the guard fails; we return 0xff,
+    // which is what this method has always returned outside a readable phase.
+    // Keeping that identical was the point — the MSR rewrite had to be a pure
+    // refactor before any timer went on top of it. Nothing polls the data port
+    // while RQM is low anyway: the sub ROM's bulk loop at 0300h gates on EXM,
+    // and the handshakes at 029Ah/02A8h gate on RQM|DIO.
+    if ((this.status & (RQM | DIO)) !== (RQM | DIO)) return 0xff;
+    this.int = false;
+    this.status &= ~RQM;
+    if (this.phase === 'execute') {
       const v = this.execBuf[this.execPos++];
-      this.int = false;
-      if (this.execPos >= this.execBuf.length) this._execDone();
-      else this.int = true; // non-DMA: next byte ready
+      this.data = v;
+      if (this.execPos < this.execBuf.length) { this.status |= RQM; this.int = true; }
+      else { this.status &= ~EXM; this._execDone(); }
       return v;
     }
-    if (this.phase === 'result') {
-      this.int = false; // reading results drops INT
-      const v = this.result[this.resultPos++] ?? 0xff;
-      if (this.resultPos >= this.result.length) this.phase = 'idle';
-      return v;
-    }
-    return 0xff;
+    // result phase
+    const v = this.result[this.resultPos++] ?? 0xff;
+    this.data = v;
+    if (this.resultPos < this.result.length) this.status |= RQM;
+    else this._toIdle();
+    return v;
   }
 
   // TC pin (on the PC-8801 sub-board, wired so that IN from port F8h pulses it)
   tc() {
-    if (this.phase !== 'execute') return;
+    // M88 gates on `accepttc`, which is raised by the exec-phase shifts and
+    // cleared everywhere else. That is not the same as `phase === 'execute'`
+    // once timers exist: between two sectors of a multi-sector read M88 is
+    // parked on a timer with the transfer not running, yet TC is still armed.
+    if (!this.acceptTc) return;
+    this.acceptTc = false;
     this._endRw(0, 0, 0);
   }
 
@@ -129,7 +198,7 @@ export class Upd765 {
 
     switch (op) {
       case 0x03: // SPECIFY — timings + ND bit; nothing observable for us
-        this.phase = 'idle';
+        this._toIdle();
         return;
 
       case 0x04: { // SENSE DEVICE STATUS → ST3
@@ -151,7 +220,7 @@ export class Upd765 {
           us: this.us,
           st0: this.us < UNITS ? ST0_SE | this.us : ST0_AT | ST0_SE | 0x08 | this.us,
         });
-        this.phase = 'idle';
+        this._toIdle();
         return;
       }
 
@@ -162,7 +231,7 @@ export class Upd765 {
           us: this.us,
           st0: this.us < UNITS ? ST0_SE | this.us : ST0_AT | ST0_SE | 0x08 | this.us,
         });
-        this.phase = 'idle';
+        this._toIdle();
         return;
       }
 
@@ -200,12 +269,8 @@ export class Upd765 {
 
       case 0x0d: { // FORMAT A TRACK — accept & discard the id stream
         const bytes = this.cmd[3] * 4; // 4 id bytes per sector
-        this.execBuf = new Uint8Array(Math.max(4, bytes));
-        this.execPos = 0;
-        this.execWrite = true;
         this._multi = { format: true };
-        this.phase = 'execute';
-        this.int = true;
+        this._toExecWrite(new Uint8Array(Math.max(4, bytes)));
         return;
       }
 
@@ -231,11 +296,7 @@ export class Upd765 {
     // NOT end — it flips to head 1 of the same cylinder and carries on at R=1.
     // A 2D loader can pull a whole cylinder (both sides) in one command that way.
     this._multi = { c, h, r, n, eot, deleted: wantDeleted, sec, mt: (this.cmd[0] & 0x80) !== 0 };
-    this.execBuf = sec.data;
-    this.execPos = 0;
-    this.execWrite = false;
-    this.phase = 'execute';
-    this.int = true; // first byte ready
+    this._toExecRead(sec.data);
   }
 
   _startReadTrack() {
@@ -249,11 +310,7 @@ export class Upd765 {
     let o = 0;
     for (const s of trk.sectors) { buf.set(s.data, o); o += s.size; }
     this._multi = { c, h, r, n, eot: r, sec: trk.sectors[0] };
-    this.execBuf = buf;
-    this.execPos = 0;
-    this.execWrite = false;
-    this.phase = 'execute';
-    this.int = true;
+    this._toExecRead(buf);
   }
 
   _startWrite(deleted) {
@@ -265,11 +322,7 @@ export class Upd765 {
     if (!sec) return this._rwError(0x04, c, h, r, n);
     sec.deleted = deleted;
     this._multi = { c, h, r, n, eot: this.cmd[6], sec };
-    this.execBuf = sec.data;
-    this.execPos = 0;
-    this.execWrite = true;
-    this.phase = 'execute';
-    this.int = true;
+    this._toExecWrite(sec.data);
   }
 
   // Advance the record ID after a sector completes, exactly as the µPD765 does
@@ -320,9 +373,7 @@ export class Upd765 {
         const next = findSector(d.disk, d.cyl, this.hd, m.r, m.n);
         if (next) {
           m.sec = next;
-          this.execBuf = next.data;
-          this.execPos = 0;
-          this.int = true;
+          this._toExecRead(next.data); // re-raises RQM|EXM for the next sector
           return;
         }
       }
@@ -370,6 +421,8 @@ export class Upd765 {
     this.result = bytes;
     this.resultPos = 0;
     this.phase = 'result';
+    this.status = RQM | DIO | CB; // M88 ShiftToResultPhase
+    this.acceptTc = false;
     this.execBuf = null;
     this._multi = null;
     this.int = true; // INT until first result byte is read

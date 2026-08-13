@@ -401,7 +401,12 @@ export class X68Fdd {
     const m = f._multi;
     return {
       schemaVersion: SCHEMA_VERSION,
-      phase: f.phase, cmd: [...f.cmd], cmdLen: f.cmdLen,
+      phase: f.phase,
+      // The MSR is a state variable now (upd765.js), so it has to travel: a
+      // restore that only put `phase` back left RQM low and every subsequent
+      // read returned 0xff.
+      status: f.status, seekBusy: f.seekBusy, acceptTc: f.acceptTc, data: f.data,
+      cmd: [...f.cmd], cmdLen: f.cmdLen,
       result: [...f.result], resultPos: f.resultPos,
       execPos: f.execPos, execWrite: f.execWrite,
       // A buffer that is not a sector (READ DIAGNOSTIC's whole track, FORMAT's
@@ -439,6 +444,8 @@ export class X68Fdd {
     f.result = [...s.result]; f.resultPos = s.resultPos;
     f.execPos = s.execPos; f.execWrite = s.execWrite;
     f.int = s.int;
+    if (s.status === undefined) f._statusFromPhase(); // snapshot predates the MSR variable
+    else { f.status = s.status; f.seekBusy = s.seekBusy | 0; f.acceptTc = !!s.acceptTc; f.data = s.data ?? 0xff; }
     f.seekEnd = s.seekEnd.map((x) => ({ ...x }));
     f.us = s.us; f.hd = s.hd;
     for (let i = 0; i < f.drives.length; i++) {

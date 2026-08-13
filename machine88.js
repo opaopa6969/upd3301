@@ -866,6 +866,9 @@ export class Pc8801Machine {
     const f = this.sub.fdc;
     return {
       phase: f.phase, cmdLen: f.cmdLen, cmd: [...f.cmd],
+      // The MSR is an explicit variable (upd765.js), not a function of `phase`
+      // — so it is part of the state and has to be snapshotted with it.
+      status: f.status, seekBusy: f.seekBusy, acceptTc: f.acceptTc, data: f.data,
       result: [...f.result], resultPos: f.resultPos,
       execPos: f.execPos, execWrite: f.execWrite, int: f.int,
       seekEnd: f.seekEnd.map((p) => ({ ...p })), us: f.us, hd: f.hd,
@@ -920,6 +923,7 @@ export class Pc8801Machine {
       f.drives.forEach((d, i) => { d.cyl = fs.drives[i].cyl; d._idx = fs.drives[i]._idx; d.disk = fs.drives[i].disk; });
       f.execBuf = fs.execBuf;
       f._multi = fs._multi;
+      if (fs.status === undefined) f._statusFromPhase(); // snapshot predates the MSR variable
     }
     return this;
   }
