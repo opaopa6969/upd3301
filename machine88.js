@@ -82,6 +82,7 @@ export class Pc8801Machine {
       // drive them. `_syncSub` below is the clock.
       this.sub.fdc.seekTiming = true;
       this.sub.fdc.readTiming = true;
+      this.sub.fdc.eocTiming = true;
     }
 
     // power-on DRAM reads mostly-high on the real board, and the boot ROM

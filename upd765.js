@@ -31,6 +31,9 @@ const ST0_AT = 0x40; // abnormal termination
 const ST0_IC = 0x80; // invalid command
 const ST0_SE = 0x20; // seek end
 
+// ST1 bits
+const ST1_EN = 0x80; // end of cylinder
+
 const UNITS = 2; // the PC-8801 sub-board drives two units
 
 export class Upd765 {
@@ -40,6 +43,7 @@ export class Upd765 {
     // not the chip's state.
     this.seekTiming = false; // 400 x steps + 500 ticks per SEEK/RECALIBRATE
     this.readTiming = false; // 250 << min(7,n) ticks before each sector read
+    this.eocTiming = false;  // 20 ticks of TC window after EOT (see _execDone)
     this.drives = [
       { disk: null, cyl: 0 }, { disk: null, cyl: 0 },
       { disk: null, cyl: 0 }, { disk: null, cyl: 0 },
@@ -110,6 +114,11 @@ export class Upd765 {
       // already snapshotted (`cmd`, `_multi`).
       if (kind === 'readStart') this._beginRead((this.cmd[0] & 0x1f) === 0x0c);
       else if (kind === 'readNext') this._toExecRead(this._multi.sec.data);
+      // The TC window opened at EOT expired without a TC: End of Cylinder.
+      //     case timerphase:
+      //         result = ST0_AT | ST1_EN;
+      //         ShiftToResultPhase7();
+      else if (kind === 'eoc') this._endRw(ST0_AT, ST1_EN, 0);
     }
   }
 
@@ -469,7 +478,8 @@ export class Upd765 {
       // with MT starting on side 1 and checks ST0's HD bit; reporting the
       // post-flip head there makes it re-issue the same read forever.
       m.stHd = this.hd;
-      if (this._idIncrement(m)) {
+      const atEot = !this._idIncrement(m);
+      if (!atEot) {
         const next = findSector(d.disk, d.cyl, this.hd, m.r, m.n);
         if (next) {
           m.sec = next;
@@ -486,11 +496,33 @@ export class Upd765 {
         }
       }
       // Whether it continued or not, the ID now holds where the chip stopped —
-      // that is exactly what the result phase reports. Termination stays NORMAL
-      // (no abnormal/EN status): this post-command ID is what a disk loader reads
-      // back to chain to the next cluster (the N88-DISK-BASIC FAT walk). Getting
-      // it wrong under-reads the file — 軽井沢誘拐案内 stops mid-load.
+      // that is exactly what the result phase reports.
       m.rAddr = true;
+      // EOT WITH NO TC IS NOT AN ENDING YET — IT IS A 200 µs WINDOW.
+      //
+      // The spec's End of Cylinder (ST0.IC=01 + ST1.EN) is real, but M88 does not
+      // raise it the moment the last sector of the cylinder is served:
+      //
+      //     case execreadphase:
+      //         if (!IDIncrement()) { SetTimer(timerphase, 20); return; }
+      //     case tcphase:    DelTimer(); ShiftToResultPhase7();   // normal
+      //     case timerphase: result = ST0_AT | ST1_EN; ShiftToResultPhase7();
+      //
+      // 20 ticks = 200 µs of "the transfer is over, are you going to pulse TC?".
+      // GetData has already dropped RQM and S_NDM/EXM, so the window looks exactly
+      // like the gap between two sectors — and that is what the 0300-series driver
+      // (Aggres, Zarth, ライーザ, ウイングマン) watches: `IN A,(0FAh) / AND 20h / JR Z`
+      // treats EXM going low as "transfer finished" and pulses TC. So a real
+      // loader lands inside the window and the command ends NORMALLY.
+      //
+      // This is why the earlier attempt failed. It raised EOC the instant EOT was
+      // reached, with no window; 軽井沢誘拐案内 then read an abnormal termination
+      // where the sub-ROM expected the post-command ID for its FAT walk and
+      // stopped mid-load. The window is the part that was missing, not the status.
+      //
+      // Opt-in like the other timers: a board that never calls tick() (x68fdd.js)
+      // would leave the window open forever, so it keeps the old behaviour.
+      if (this.eocTiming && atEot) { this._arm(20, 'eoc'); return; }
     }
     this._endRw(0, 0, 0);
   }
