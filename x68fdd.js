@@ -406,6 +406,7 @@ export class X68Fdd {
       // restore that only put `phase` back left RQM low and every subsequent
       // read returned 0xff.
       status: f.status, seekBusy: f.seekBusy, acceptTc: f.acceptTc, data: f.data,
+      now: f.now, timerAt: f._timerAt, timerKind: f._timerKind,
       cmd: [...f.cmd], cmdLen: f.cmdLen,
       result: [...f.result], resultPos: f.resultPos,
       execPos: f.execPos, execWrite: f.execWrite,
@@ -446,6 +447,7 @@ export class X68Fdd {
     f.int = s.int;
     if (s.status === undefined) f._statusFromPhase(); // snapshot predates the MSR variable
     else { f.status = s.status; f.seekBusy = s.seekBusy | 0; f.acceptTc = !!s.acceptTc; f.data = s.data ?? 0xff; }
+    f.now = s.now ?? 0; f._timerAt = s.timerAt ?? -1; f._timerKind = s.timerKind ?? null;
     f.seekEnd = s.seekEnd.map((x) => ({ ...x }));
     f.us = s.us; f.hd = s.hd;
     for (let i = 0; i < f.drives.length; i++) {

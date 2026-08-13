@@ -184,6 +184,121 @@ test('MSR: TC only bites during a transfer (M88 `accepttc`)', () => {
 
 // ---- the status word survives a snapshot ---------------------------------------
 
+// ---- what the MSR is FOR: the mechanical timers ---------------------------------
+// These are off by default (the X68000 board shares this chip and has no clock),
+// so each test opts in the way machine88.js does.
+
+test('timers: a seek keeps the drive busy in the MSR and its interrupt pending', () => {
+  const f = new Upd765();
+  f.seekTiming = true;
+  f.insertDisk(0, makeDisk());
+  cmd(f, [0x0f, 0x00, 10]); // SEEK unit 0 → cylinder 10
+  assert.equal(f.readStatus(), RQM | 0x01, 'MSR D0B: drive 0 is stepping');
+  assert.equal(f.intLine, false, 'the head has not arrived, so no seek-end INT');
+
+  // 400 x steps + 500, and `steps` is 96-TPI half-tracks: 10 cylinders is 20.
+  f.tick(8499);
+  assert.equal(f.intLine, false, 'one tick short');
+  f.tick(1);
+  assert.equal(f.intLine, true);
+  assert.equal(f.readStatus(), RQM, 'and D0B clears when the head lands');
+
+  cmd(f, [0x08]); // SENSE INTERRUPT STATUS
+  assert.equal(f.read() & 0xc0, 0x00, 'normal termination');
+  assert.equal(f.read(), 10);
+});
+
+test('timers: SENSE INTERRUPT STATUS does not see a seek still in flight', () => {
+  const f = new Upd765();
+  f.seekTiming = true;
+  cmd(f, [0x0f, 0x00, 5]);
+  cmd(f, [0x08]);
+  assert.equal(f.read(), 0x80, 'ST0 = invalid command: nothing is pending yet');
+  f.read();
+  f.tick(4500); // 400 x 10 + 500
+  cmd(f, [0x08]);
+  assert.equal(f.read() & 0xc0, 0x00, 'now it is');
+});
+
+test('timers: a zero-distance seek still costs the chip 10 ticks', () => {
+  const f = new Upd765();
+  f.seekTiming = true;
+  cmd(f, [0x0f, 0x00, 0]); // already at cylinder 0
+  assert.equal(f.intLine, false);
+  f.tick(10);
+  assert.equal(f.intLine, true);
+});
+
+test('timers: READ DATA goes quiet for `250 << n` before the first byte', () => {
+  const f = new Upd765();
+  f.readTiming = true;
+  f.insertDisk(0, makeDisk());
+  cmd(f, READ_R1);
+  // This is the state that could not be expressed before the MSR became a
+  // variable: a command accepted, the chip busy, and NOTHING readable.
+  assert.equal(f.readStatus(), CB, 'CB alone — no RQM, no DIO, no EXM');
+  assert.equal(f.int, false, 'and no interrupt, so the sub ROM stays in HALT');
+  assert.equal(f.read(), 0xff);
+
+  // A write here is the exact shape of failure #3: the driver's data bytes
+  // reaching a chip parked in the command phase. The guard eats them.
+  f.write(0x12);
+  assert.equal(f.cmd.length, 9, 'the command did not grow');
+
+  f.tick(499);
+  assert.equal(f.readStatus(), CB, 'n=1 → 250 << 1 = 500 ticks = 5 ms');
+  f.tick(1);
+  assert.equal(f.readStatus(), RQM | DIO | EXM | CB);
+  assert.equal(f.int, true, 'and NOW the interrupt that wakes the driver');
+  assert.equal(f.read(), 0x11);
+});
+
+test('timers: the same wait happens again between sectors', () => {
+  const f = new Upd765();
+  f.readTiming = true;
+  f.insertDisk(0, makeDisk());
+  cmd(f, READ_R1);
+  f.tick(500);
+  for (let i = 0; i < 256; i++) f.read(); // all of sector 1
+
+  assert.equal(f.readStatus(), DIO | CB, 'transfer visibly stopped: EXM and RQM down');
+  assert.equal(f.int, false);
+  assert.equal(f.read(), 0xff, 'nothing to read across the gap');
+  f.tick(500);
+  assert.equal(f.readStatus(), RQM | DIO | EXM | CB);
+  assert.equal(f.read(), 0x22, 'sector 2, not a repeat and not garbage');
+});
+
+test('timers: TC during the inter-sector gap still ends the command', () => {
+  const f = new Upd765();
+  f.readTiming = true;
+  f.insertDisk(0, makeDisk());
+  cmd(f, READ_R1);
+  f.tick(500);
+  for (let i = 0; i < 256; i++) f.read();
+  // M88 leaves `accepttc` up across the gap — it is only the phase shifts to
+  // idle/command/result that clear it. This is why tc() cannot test `phase`.
+  assert.equal(f.acceptTc, true);
+  f.tc();
+  assert.equal(f.readStatus(), RQM | DIO | CB, 'result phase');
+  assert.equal(f.read() & 0xc0, 0, 'normal termination');
+  f.tick(10_000);
+  assert.equal(f.phase, 'result', 'and the cancelled timer does not fire late');
+});
+
+test('timers: with the flags off nothing waits — the X68000 board still works', () => {
+  const f = new Upd765(); // no seekTiming, no readTiming, no tick() anywhere
+  f.insertDisk(0, makeDisk());
+  cmd(f, [0x0f, 0x00, 40]);
+  assert.equal(f.intLine, true, 'seek completes at once');
+  assert.equal(f.readStatus(), RQM, 'and never reports a busy drive');
+  cmd(f, [0x08]); f.read(); f.read();
+  f.drives[0].cyl = 0;
+  cmd(f, READ_R1);
+  assert.equal(f.readStatus(), RQM | DIO | EXM | CB, 'and a read starts immediately');
+  assert.equal(f.read(), 0x11);
+});
+
 test('MSR: _statusFromPhase rebuilds pre-variable snapshots', () => {
   const f = new Upd765();
   f.insertDisk(0, makeDisk());
