@@ -467,10 +467,11 @@ export class Pc8801Machine {
       if (!this.pio) return 0xff;
       this._syncSub();  // the sub owns the other side of these latches — let it catch up first
       const v = this.pio.read(port - 0xfc);
-      // A main spinning on an unchanged answer is waiting for the sub. Count it
-      // so stepFrame can decide whether to lend the sub extra time — see the
-      // FDC-phase test there for why that lending must not apply during a data
-      // transfer.
+      // A main spinning on an unchanged answer is waiting for the sub. Nothing
+      // acts on this any more — stepFrame used to lend the sub extra time when
+      // it got large, which turned out to be a second copy of M88's motor-wait
+      // ROM patch (#57). Kept as an observation of the handshake, and because
+      // it is in the snapshot format.
       if (v === this._pioLast) this._pioPoll++;
       else { this._pioLast = v; this._pioPoll = 0; }
       return v;
@@ -631,9 +632,13 @@ export class Pc8801Machine {
     if (dt <= 0) return;
     // Advance the FDC's mechanical clock FIRST, and from `dt` — main-CPU
     // T-states, i.e. real time. Two earlier attempts drove it from the sub's
-    // T-states instead; the sub is over-fed by the boost in stepFrame, so the
-    // disk clock ran 40% fast AND every timer the sub was waiting on shrank by
-    // the same factor, which is self-defeating. Doing it before sub.run() also
+    // T-states instead, back when the sub was over-fed by the boost in
+    // stepFrame (removed in #57): the disk clock then ran 40% fast AND every
+    // timer the sub was waiting on shrank by the same factor, which is
+    // self-defeating. Real time is the right source either way, and now that
+    // the sub runs at 1.000x the two happen to agree — do not "simplify" this
+    // to the sub's own clock, it is only correct by accident today.
+    // Doing it before sub.run() also
     // means a timer that comes due in this slice has already raised INT when
     // the sub gets to its EI/HALT.
     this._fdcAcc += dt * 100_000;                  // T-states x 1e5
@@ -665,7 +670,6 @@ export class Pc8801Machine {
     const rowT = this.frameT / totalRows;
     while (this.tInFrame < this.frameT) {
       const target = Math.min(this.frameT, this.tInFrame + SLICE);
-      const before = this.tInFrame;
       while (this.tInFrame < target) {
         const cyc = this.cpu.step();
         this.tInFrame += cyc;
@@ -712,23 +716,30 @@ export class Pc8801Machine {
         this._serviceInterrupts();
       }
       if (this.sub) {
-        // Lend the sub extra bus time *only while it is not streaming data*.
+        // The sub runs at REAL TIME here — one slice of main T-states buys
+        // exactly one slice of sub T-states, no more (issue #57).
         //
-        // Two failures pull in opposite directions. During motor spin-up and
-        // seeks the sub sits in a long delay loop, and if it only ever gets its
-        // fair share the boot ROM's timeout expires first — wizrdry4 comes up
-        // blank. But during an FDC data transfer the sub is answering a tight
-        // handshake, and running it ahead of real time makes the main see the
-        // ready bit too early — harakiri then leaves the transfer wait several
-        // iterations before M88 does.
+        // There used to be a 15x boost whenever the main had polled the 8255
+        // more than 32 times and the FDC was not in `execute`, to stop the boot
+        // ROM's motor timeout expiring during spin-up (wizrdry4 came up blank).
+        // It was never a property of the hardware: it was an imitation of M88
+        // NOPping out the sub ROM's motor-wait loop (pc88/subsys.cpp). Once the
+        // real patch landed in pc80s31.js (#55) the same effect was being
+        // applied twice, and the second copy is not bounded the way a NOP'd
+        // loop is — with the FDC timers also from #55 the sub now sits in
+        // command phase with RQM low for long stretches, which is exactly the
+        // condition that armed the boost. Measured over 240 frames it fed the
+        // sub 4.0x (JIKO_PZL) to 12.7x (wizrdry4) its real-time budget; the
+        // 1.39x recorded before #55 had quietly become an order of magnitude.
+        // Deleting it is what makes the FDC's mechanical clock mean anything:
+        // the sub can no longer outrun the timers it is waiting on.
         //
-        // The FDC phase separates the two exactly: `execute` is the transfer,
-        // anything else is the sub waiting on mechanics. (`_syncSub` already
-        // guarantees the sub is never *starved* by a slice boundary; this only
-        // decides whether it may also run early.)
-        if (this._pioPoll > 32 && this.sub.fdc?.phase !== 'execute') {
-          this._subDebt += (this.tInFrame - before) * this.subRatio * 15;
-        }
+        // What it actually cost/bought over the 353-title sweep: Riglas and
+        // Silpheed had been frozen on their loader for 4000 frames and now run
+        // (Riglas ends within 0.1% of M88's fill), JIKOCHU went from an empty
+        // graphics plane to a picture. Boot speed did NOT regress — the first
+        // FDC READ still happens at frame 47 either way, because the motor wait
+        // is now removed by the ROM patch, which is the whole point.
         this._syncSub();
       }
     }
