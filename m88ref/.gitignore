@@ -1,1 +1,7 @@
-_m88m_build/
+# No trailing slash: in a git worktree the built reference driver is usually a
+# SYMLINK back to the main tree's build (the build output is not tracked, so a
+# fresh worktree has none). `_m88m_build/` matches only a real directory, so
+# the symlink showed up as untracked — and, worse, its absence is silent:
+# batch-compare.mjs reports "errors: 353/353" with our side "ok", which reads
+# like a sweep result rather than a missing instrument.
+_m88m_build

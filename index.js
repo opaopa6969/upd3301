@@ -42,6 +42,31 @@ export const MAX_COLS = 80;
 export const MAX_ROWS = 64;
 export const MAX_ATTRS_PER_ROW = 20;
 
+// EX-mode ceilings (see resetEx). The port encoding physically cannot ask for
+// more than 80x64 with 20 attribute pairs, so _applyResetParams truncates with
+// Math.min the way the silicon does. resetEx has no silicon to truncate
+// against, so it validates instead: a row's DMA burst is capped at 64 KiB (the
+// real μPD8257 terminal count is 14 bits, so 16 KiB is the whole frame budget
+// — this is already 4x fantasy) and rows at 1024 (16x the real chip's 64).
+// Together they bound every allocation _applyGeometry makes to 64 MiB.
+export const MAX_EX_ROWS = 1024;
+export const MAX_EX_ROW_BYTES = 1 << 16;
+
+// resetEx argument guard. Rejects rather than clamps, because clamping a
+// number the caller actually meant hands back a quietly different screen that
+// only shows up much later as a rendering bug. Rejects non-numbers too: a
+// string cols made `this.cols + this.attrBytesPerRow` concatenate instead of
+// add, so `resetEx({cols: '80', rows: '25'})` built an 800-byte row buffer for
+// a 2000-cell screen and blew up inside fetchRow with "offset is out of
+// bounds" — a stack trace three calls away from the mistake.
+function exUint(name, value, max) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > max) {
+    const shown = typeof value === 'string' ? JSON.stringify(value) : String(value);
+    throw new RangeError(`resetEx: ${name} must be an integer in 0..${max}, got ${shown}`);
+  }
+  return value;
+}
+
 // Expand one row of (position, value) attribute pairs into a per-column
 // attribute byte array, following the chip's observed behavior (MAME
 // default_attr_fetch): value k fills from its own position up to the next
@@ -225,7 +250,25 @@ export class Upd3301 {
   // attribute block is one byte per cell, in order. Pairs carry an 8-bit
   // position, so pair mode cannot address columns ≥ 256; per-cell mode is
   // how UEX widths (e.g. 320) stay coherent.
+  //
+  // Arguments are validated (MAX_EX_ROWS / MAX_EX_ROW_BYTES) before anything
+  // is assigned, so a bad call leaves the chip on its previous geometry
+  // instead of half-reconfigured. Without the guard, `cols: 1e6, rows: 1e6`
+  // was accepted: three 1 TB typed arrays get reserved (lazily, so the
+  // allocation itself looks instant and harmless) and the next stepFrame()
+  // walks a million rows of a million bytes, wedging the process.
   resetEx({ cols, rows, linesPerChar = 8, attrsPerRow = 0, attrPerCell = false, blinkPeriod = 32, cursorMode = 0 } = {}) {
+    cols = exUint('cols', cols, MAX_EX_ROW_BYTES);
+    rows = exUint('rows', rows, MAX_EX_ROWS);
+    linesPerChar = exUint('linesPerChar', linesPerChar, 256);
+    attrsPerRow = exUint('attrsPerRow', attrsPerRow, MAX_EX_ROW_BYTES >> 1);
+    blinkPeriod = exUint('blinkPeriod', blinkPeriod, 0xffff);
+    cursorMode = exUint('cursorMode', cursorMode, 3);
+    const rowBytes = cols + (attrPerCell ? cols : attrsPerRow * 2);
+    if (rowBytes > MAX_EX_ROW_BYTES) {
+      throw new RangeError(
+        `resetEx: row DMA burst ${rowBytes} bytes exceeds ${MAX_EX_ROW_BYTES} (cols=${cols}, attrsPerRow=${attrsPerRow}, attrPerCell=${attrPerCell})`);
+    }
     this.ve = false;
     this.status &= ~STATUS.VE;
     this.cols = cols;
@@ -312,17 +355,29 @@ export class Upd3301 {
     return { blink, block };
   }
 
+  // Both blink rates derive from this one number, so the 2:1 relationship
+  // below survives every value of blinkPeriod. The clamp used to live inside
+  // each formula — `max(1, blinkPeriod >> 1)` for the cursor, `max(1,
+  // blinkPeriod)` for attributes — which quietly collapsed the ratio to 1:1
+  // at blinkPeriod 0 and 1, and blinkPeriod 0 is where a chip sits before its
+  // first RESET (the constructor's value), so getScreen() on a fresh chip
+  // reported an attribute blink running at twice its documented rate.
+  // Even, because the cursor toggles on the half-period: an odd period would
+  // make the halves unequal. The port encoding only ever produces multiples
+  // of 16 ((B+1)×16), so this normalisation is invisible to the real chip.
+  blinkPeriodFrames() {
+    return Math.max(2, this.blinkPeriod | 0) & ~1;
+  }
+
   cursorBlinkOn() {
     const { blink } = this.cursorStyle();
     if (!blink) return true;
-    const half = Math.max(1, this.blinkPeriod >> 1);
-    return Math.floor(this.frame / half) % 2 === 0;
+    return Math.floor(this.frame / (this.blinkPeriodFrames() >> 1)) % 2 === 0;
   }
 
   // attribute blink runs at half the cursor blink rate
   attrBlinkOn() {
-    const period = Math.max(1, this.blinkPeriod);
-    return Math.floor(this.frame / period) % 2 === 0;
+    return Math.floor(this.frame / this.blinkPeriodFrames()) % 2 === 0;
   }
 
   // Horizontal deflection frequency implied by the programmed geometry —

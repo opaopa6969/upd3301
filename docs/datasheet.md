@@ -124,6 +124,12 @@ emulator the CGROM is an injected `Uint8Array(256×16)`.
 | 1 | E | end of frame (VRTC) — set when unmasked; cleared on read |
 | 0 | LP | light pen latched (not supported) |
 
+SET INTERRUPT MASK has a second, undocumented effect: unmasking the VRTC
+interrupt clears status bits as a side effect. The datasheet says nothing about
+it either way, and implementations disagree on whether VE survives — see
+"Unverified behaviour" in [design.md](./design.md#unverified-behaviour-known-unknowns).
+Do not read the table above as settling it.
+
 ## ATTRIBUTE DATA FORMAT (PC-8001 wiring)
 
 Each row's DMA block: `N character codes` + `A × (position, value)` pairs.
@@ -238,6 +244,12 @@ encodings: arbitrary columns × rows, attribute pairs up to per-cell density,
 DMA counts beyond 14 bits. Built for the terminal layer (`term.js`), which
 compiles ANSI escape sequences into attribute pairs. The original limits
 (80×25, 20 pairs/row, 14-bit counts) remain the default and the truth.
+
+"Arbitrary" is not "unchecked". `resetEx` rejects anything outside
+`MAX_EX_ROWS` (1024 rows) and `MAX_EX_ROW_BYTES` (64 KiB per row's DMA burst),
+and rejects non-integer / negative / non-number arguments outright rather than
+clamping them. Unlike the port path — where `Math.min` *is* the silicon
+truncating — there is no chip here to blame for a quietly different screen.
 
 ---
 
