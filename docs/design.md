@@ -82,10 +82,17 @@ text. Callers that don't composite ignore it.
 
 ## Unverified behaviour (known unknowns)
 
-Two behaviours in this model are **not** confirmed against real hardware. They
-are recorded here rather than "fixed", because changing either one moves the
-353-title PC-8801 comparison and neither has evidence strong enough to justify
-that. Do not treat the current code as authority on these.
+One behaviour in this model is **not** confirmed against real hardware. It is
+recorded here rather than "fixed". Do not treat the current code as authority on
+it.
+
+(A second entry — the μPD8257 clearing the byte-pair F/L on a Mode Set write —
+was settled in issue #61 by following the references. Measuring 353 titles
+showed that **not one of 4,135 Mode Set writes ever landed mid byte-pair**, so no
+title can tell the two behaviours apart: the sweep says nothing and the citation
+decides. Note that the RESET pin the references *do* attribute the clear to has
+**no counterpart in this model** — no board wires a reset line to the DMAC, so
+the flip-flop only ever toggles.)
 
 ### SET INTERRUPT MASK's effect on the status register (issue #22)
 
@@ -126,36 +133,66 @@ a real title (`pc8801:laptick`) depends on that.
 - Whether real μPD3301 silicon clears VE here. No datasheet text was found
   covering the side effect at all; MAME's comment cites a game's observed
   requirement, not a datasheet.
-- Whether adopting it helps or hurts our PC-8801 parity. **This has not been
-  measured.** The experiment is cheap and specific: apply `status = 0` (VE
-  dropped) plus `this.ve = false`, run `tools/batch-compare.mjs` over the 353
-  titles, and compare against the current baseline (exact 326 / following 334 /
-  blank 0). Adopt only if evidence *and* measurement both improve — the
-  parity-run lesson is that "the source is right" and "the change is right" are
-  different claims.
+- Whether real silicon clears VE. **`pc8801:laptick`, the title MAME says depends
+  on it, is not among our 353**, so its claim cannot be tested here.
+
+**Measured (2026-08-13) — and the recipe this section used to give was wrong.**
+
+This section used to prescribe: apply `status = 0` plus `this.ve = false`, run
+`tools/batch-compare.mjs` over 353 titles, compare exact-match counts. Doing that
+produced a sweep **identical to the baseline down to the line** — and the reason
+was not "no effect":
+
+- `batch-compare`'s fingerprint is `ram[0xE6CD]` plus tvram/gvram non-zero counts,
+  i.e. **memory contents only**. Whether the CRTC DMA-fetches them (the VE gate)
+  cannot appear there. **The instrument does not measure the quantity.**
+- Nor was the patch dead code. Across 353 titles only **4** ever reach a
+  `SET INTERRUPT MASK` unmask (K_flappy, Makadam, burningpoint, らぷてっく), and in
+  all four the VE-dropping branch **did fire**.
+
+Measuring the screen instead (`getScreen().cells`) answers it:
+
+| Title | Current | With MAME's behaviour |
+|---|---|---|
+| らぷてっく | 1600 non-blank cells | **21 (initial state), displayEnabled=false** |
+| Makadam | 0, displayEnabled=true | 21, **false** |
+| burningpoint | 132 | 132 (START DISPLAY restores it after the unmask) |
+| K_flappy | 21, already false | unchanged |
+
+So adopting MAME's behaviour **permanently kills らぷてっく's text plane**. MAME's
+basis is not a datasheet but one comment about a game's expectation, and that game
+is not available to us. **Not adopted** — neither evidence nor measurement is there.
+
+> The lesson, replayed: **when a detector stays silent, first check that it could
+> have fired.** Here the fingerprint only ever looked at memory. Judge this one on
+> screen cells.
 
 `test.mjs` pins the current behaviour ("SET INTERRUPT MASK unmask keeps VE"),
 so changing it is a deliberate act with a failing test attached, not a drift.
 
-### μPD8257: mode-register writes and the byte-pair flip-flop (issue #24)
+## μPD8257: a mode-register write leaves the byte-pair flip-flop alone (settled, issue #61)
 
-**What we do.** `writePort(8, …)` sets `modeReg` and clears the shared low/high
-flip-flop.
+`writePort(8, …)` sets `modeReg` and nothing else; the shared low/high flip-flop
+(F/L) is untouched.
 
-**What the references say.** MAME's `i8257_device::write` sets `m_transfer_mode`
-and nothing else; `m_msb` is cleared only in `device_reset()`. The Intel 8257
+**The references.** MAME's `i8257_device::write` sets `m_transfer_mode` and
+nothing else; `m_msb` is cleared only in `device_reset()`. The Intel 8257
 datasheet describes the F/L flip-flop as toggling on channel register accesses
 and being cleared by the RESET input, and does not list a Mode Set write as
 clearing it. (The datasheet PDF available to us is a scan, so this is from
 secondary transcriptions of it, not extracted text — treat it as strong but not
 first-hand.)
 
-**Why it is not fixed.** The difference is observable only when a mode write
-lands *between* the two halves of a byte pair. Nothing in this codebase does
-that — `initTextMode` programs 0x68 first, which is also N-BASIC's order — so
-the deviation is latent. Removing it is still a 353-title decision because a
-real title could program the DMAC in the other order. `test.mjs` pins the
-current behaviour with the deviation named in the test title.
+We used to clear it here (the deviation found in issue #24). The difference is
+observable only when a mode write lands *between* the two halves of a byte pair,
+so that was measured across 353 titles: **not one of 4,135 Mode Set writes landed
+mid-pair** — `initTextMode` programs 0x68 first, which is also N-BASIC's order,
+and no real title broke that pattern either. With no title able to tell the two
+apart, the sweep says nothing and the citation decides.
+
+**The RESET pin has no counterpart here.** No board wires a reset line to the
+DMAC, so this model's F/L only ever toggles — the one path the references give for
+clearing it does not exist.
 
 ## Non-goals
 

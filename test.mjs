@@ -385,31 +385,36 @@ test('PC-8001 DMAC port window: 0x60-0x68 only, 0x5f and 0x69 fall through', () 
   }
 });
 
-// KNOWN DEVIATION (issue #24), pinned deliberately rather than fixed: our
-// upd8257 clears the shared low/high flip-flop when the mode register (0x68)
-// is written. MAME's i8257 does not — it clears m_msb only in device_reset()
-// — and the Intel 8257 datasheet attributes the F/L flip-flop's clear to the
-// RESET input, listing only channel register accesses as toggling it. The
-// observable difference is below: a mode write between the two halves of a
-// byte pair desyncs the pair. It is latent in this codebase (initTextMode
-// programs 0x68 before the channel registers, which is also what N-BASIC
-// does), so changing it is a 353-title decision, not a test-file one.
-test('PC-8001 port 0x68: mode write clears the byte-pair flip-flop (deviates from MAME)', () => {
+// A Mode Set write does NOT touch the byte-pair flip-flop (issue #61). MAME's
+// i8257_device::write only assigns m_transfer_mode; m_msb is cleared in
+// device_reset() alone, and the Intel 8257 datasheet attributes the F/L clear
+// to the RESET input, listing only channel register accesses as toggling it.
+//
+// We used to clear it here, and pinned that deviation as a test while the
+// 353-title question was open. It is now measured: across 353 PC-8801 titles
+// (1500 frames each) there were 4,135 Mode Set writes and NOT ONE of them
+// arrived mid byte-pair, so no title can tell the two behaviours apart — the
+// sweep is silent on this, and the citation decides it.
+test('PC-8001 port 0x68: a mode write leaves the byte-pair flip-flop alone', () => {
   const sys = new Pc8001TextSystem();
   sys.out(0x64, 0x00); // ch2 address low byte — F/F 0 → 1, pair now half-done
   assert.equal(sys.dmac._flipflop, 1);
   sys.out(0x68, 0x84); // mode write lands in the middle of the pair
-  assert.equal(sys.dmac._flipflop, 0); // ours resets; MAME's i8257 leaves it at 1
-  sys.out(0x64, 0xf3); // meant as the HIGH byte of 0xf300
-  // ...but the reset F/F took it as a low byte, so the address is 0x00f3.
-  assert.equal(sys.dmac.channels[2].baseAddr, 0x00f3);
-  // Whereas the order N-BASIC actually uses (mode first) is unaffected:
+  assert.equal(sys.dmac._flipflop, 1); // untouched, as MAME/datasheet have it
+  assert.equal(sys.dmac.modeReg, 0x84); // ...but the mode register did take it
+  sys.out(0x64, 0xf3); // still the HIGH byte of the pair
+  assert.equal(sys.dmac.channels[2].baseAddr, 0xf300);
+  // The order N-BASIC actually uses (mode first) is unaffected either way:
   const ok = new Pc8001TextSystem();
   ok.out(0x68, 0x84);
   ok.out(0x64, 0x00);
   ok.out(0x64, 0xf3);
   assert.equal(ok.dmac.channels[2].baseAddr, 0xf300);
 });
+// The one thing the datasheet DOES clear the flip-flop on — the RESET pin — has
+// no model here: nothing wires a reset line to the DMAC, so the flip-flop only
+// ever toggles. Noted in docs/design.md rather than pinned by a test, because a
+// reset() that no board calls would be dead code.
 
 test('PC-8001 attribute pair decoding (color vs function spec)', () => {
   const c = decodeAttrPair(0xe8);

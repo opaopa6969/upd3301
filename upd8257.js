@@ -43,8 +43,14 @@ export class Upd8257 {
   writePort(port, value) {
     value &= 0xff;
     if (port === 8) {
+      // A Mode Set write does not touch the byte-pair flip-flop. MAME's
+      // i8257_device::write only assigns m_transfer_mode (m_msb is cleared in
+      // device_reset() alone), and the Intel 8257 datasheet gives the F/L clear
+      // to the RESET input, listing channel register accesses as the only thing
+      // that toggles it. We used to clear it here (issue #61); across 353
+      // PC-8801 titles not one of 4,135 Mode Set writes landed mid byte-pair,
+      // so no title could tell the difference and the citation decides it.
       this.modeReg = value;
-      this._flipflop = 0;
       return;
     }
     const ch = (port >> 1) & 3;
