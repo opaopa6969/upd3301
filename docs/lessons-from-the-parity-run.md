@@ -10,7 +10,7 @@ ICE headless, and build an analysis format.
 repeated.**
 
 The numbers first, to get them out of the way: exact matches 304→328/353, tracking
-335→333/353, tests 63→1027. **Note that tracking went down by two.** Every title that
+335→333/353, tests 63→1030. **Note that tracking went down by two.** Every title that
 dropped out was chased individually and found to be **M88 sitting frozen**, not us
 (e.g. M88 does not move a single bit in Silpheed from f500 to f3000).
 But **most of the time went into doubting the tools and the measurements**, not into
@@ -20,7 +20,7 @@ writing emulator code.
 
 ## 1. Believing a number without checking what the instrument measures
 
-**Five times.** All the same shape.
+**Seven times.** All the same shape.
 
 | What was done | What actually happened |
 |---|---|
@@ -29,9 +29,16 @@ writing emulator code.
 | Compared two sweeps: "six titles regressed" | A commit **changing the verdict rules** sat between them. Different rulers |
 | `reach` said "first reached at f0" → investigated that address | It had picked up a **shared** address inside the region. The real earliest was f336 |
 | Chased the top of the exclusive list as "the earliest divergence" | **M88's trace does not record the instruction after an EI** (measured: 22 of 22 missing) |
+| The 353-title sweep did not move a line → "this change has no effect" (#22, the VE bit) | **The fingerprint only looks at memory.** `ram[0xE6CD]` plus tvram/gvram non-zero counts cannot see whether the CRTC DMA-fetches them. Measured on screen cells instead: one title's text plane was dead |
+| Concluded "EOT is unreachable on this board" (#40, End of Cylinder) | **316 titles reach it, 3,934 times.** M88 raises EOC there too — and `refdrv` had been printing every result phase all along. Nobody looked |
 
 **The common error**: reading "the detector is silent" as "there is nothing wrong."
 **When grep returned 0, nobody checked whether that grep could return anything at all.**
+
+The last two were cheap lessons. Both were settled by a **20-line probe that counts how
+often the changed line runs** (the `SET INTERRUPT MASK` unmask is reached by 4 titles out
+of 353 — and fired in all four; EOT is reached 3,934 times across 316). **Separate "the
+change had no effect" from "the changed line never ran" first.**
 
 ### What was built in response
 
@@ -178,7 +185,7 @@ nine machines run is a better state than not knowing.
 ## Where things stand (2026-08-13)
 
 ```
-main: 1027 tests / 1002 pass / 0 fail / 19 skip / 6 todo
+main: 1030 tests / 1006 pass / 0 fail / 19 skip / 5 todo
 M88 parity: 328/353 exact, 333/353 tracking, 0 blank
 Machines: 9 (PC-8801/8001, Famicom/FDS, PC Engine, Mega Drive,
           Game Boy, X68000, Seta arcade, PC-9801)
