@@ -405,7 +405,30 @@ completes instantly, and READ DATA enters `execute` with no head load, settling 
 physical reason to also run the CPU 16x faster.** Calling `phase !== 'execute'` "waiting on
 mechanics" does not describe any real FDC state either; this is suspected to be a compatibility
 hack of the same family as M88's ROM patch. See
-[the adversarial review](./review/2026-08-10-fdc-adversarial-review.md). model memory wait states (it says so in a comment), while M88 runs
+[the adversarial review](./review/2026-08-10-fdc-adversarial-review.md).
+
+**Resolved (2026-08-13, issue #57): the boost is deleted.** The review was right, and the
+thing it was imitating has a name: M88 NOPs out the sub ROM's motor-wait loop
+(`pc88/subsys.cpp`). Once that real patch landed in `pc80s31.js` (#55) the same effect was
+applied twice — and the second copy is unbounded where a NOP'd loop is not. Wrapping
+`sub.run()` and summing T-states over 240 frames, the sub was getting **3.96× (JIKO_PZL) to
+12.66× (wizrdry4)** its real-time budget; the 1.39× measured before #55 had quietly grown an
+order of magnitude, because the FDC timers park the sub in command phase with RQM low, which
+is exactly the state that armed the boost. Without it the ratio is **1.000**.
+
+The predicted regression did not happen: the first FDC READ DATA still issues at **frame 47**
+with or without the boost, because the motor wait is now removed by the ROM patch. Over 353
+titles at 1500f, exact E6CD **326 → 328**, tracking **334 → 333**, blank 0. The one lost
+tracking point is Silpheed (two disk images) plus harakiri, and in all three **M88 is the
+frozen side** — M88 holds `tv2801/gv0` from frame 500 to 4000 on Silpheed while we now run the
+game. Riglas went from never leaving its loader to within 0.1% of M88's fill, JIKOCHU from an
+empty graphics plane to a picture, Wibarm to M88's count exactly.
+
+## Memory wait states
+
+(The opening lines of this section were lost in an earlier edit; what follows is what could
+be recovered.)
+Our Z80 does not model memory wait states (it says so in a comment), while M88 runs
 with `Config::enablewait`. That looked like a candidate for the long-standing "our emulator
 boots ~20 frames ahead of M88". **Reading M88's actual table rejects it.**
 
