@@ -70,9 +70,19 @@ export class Pc8801Machine {
     // disk sub-system: a second Z80 running disk.rom, reached only through
     // the crossed 8255 pair at FCh-FFh. Without a sub ROM the ports float
     // high and the boot ROM times out into BASIC, same as a drive-less 88.
-    this.sub = sub ? new Pc80s31({ rom: sub, clockHz }) : null;
+    // `patchMotorWait` is M88's SubSystem::PatchROM — see pc80s31.js. It is
+    // named here rather than buried in the board because it is a decision:
+    // we are matching M88, which does not run the real motor-spin-up wait.
+    this.sub = sub ? new Pc80s31({ rom: sub, clockHz, patchMotorWait: true }) : null;
     this.pio = this.sub ? new I8255() : null;
-    if (this.sub) crossWire(this.pio, this.sub.pio);
+    if (this.sub) {
+      crossWire(this.pio, this.sub.pio);
+      // The FDC's mechanical timers (upd765.js tick()) are opt-in per board
+      // because upd765.js is shared with the X68000, which has no clock to
+      // drive them. `_syncSub` below is the clock.
+      this.sub.fdc.seekTiming = true;
+      this.sub.fdc.readTiming = true;
+    }
 
     // power-on DRAM reads mostly-high on the real board, and the boot ROM
     // *depends* on it: the drive-presence tables at EF2D/EF35 are only
@@ -171,6 +181,7 @@ export class Pc8801Machine {
     this._opnClkPerCpu = (clockHz / frameHz) / (Math.round(clockHz / frameHz * (1 - dmaSteal)));
     this._pioLast = -1;
     this._pioPoll = 0;
+    this._fdcAcc = 0;    // main T-states not yet converted into 10 µs FDC ticks
     this._subMark = 0;   // main T-state count the sub has already been paid for
     this._subDebt = 0;   // fractional sub cycles carried between syncs
     this.keys = new Uint8Array(16).fill(0xff);
@@ -618,6 +629,16 @@ export class Pc8801Machine {
     const dt = this.tInFrame - this._subMark;
     this._subMark = this.tInFrame;
     if (dt <= 0) return;
+    // Advance the FDC's mechanical clock FIRST, and from `dt` — main-CPU
+    // T-states, i.e. real time. Two earlier attempts drove it from the sub's
+    // T-states instead; the sub is over-fed by the boost in stepFrame, so the
+    // disk clock ran 40% fast AND every timer the sub was waiting on shrank by
+    // the same factor, which is self-defeating. Doing it before sub.run() also
+    // means a timer that comes due in this slice has already raised INT when
+    // the sub gets to its EI/HALT.
+    this._fdcAcc += dt * 100_000;                  // T-states x 1e5
+    const ticks = Math.floor(this._fdcAcc / this.clockHz); // 1 tick = 10 µs
+    if (ticks > 0) { this._fdcAcc -= ticks * this.clockHz; this.sub.fdc.tick(ticks); }
     this._subDebt += dt * this.subRatio;
     const n = Math.floor(this._subDebt);
     if (n > 0) this._subDebt -= this.sub.run(n);
@@ -844,7 +865,7 @@ export class Pc8801Machine {
       // machine lands somewhere else on identical input. That silently broke
       // the determinism contract (and with it rewind, jog and the ICE's
       // branching tree) the moment `_syncSub` was introduced.
-      subClock: { mark: this._subMark, debt: this._subDebt },
+      subClock: { mark: this._subMark, debt: this._subDebt, fdcAcc: this._fdcAcc },
       tInFrame: this.tInFrame, frame: this.frame, acc: this._acc ?? 0,
     };
     if (this.sub) {
@@ -866,6 +887,10 @@ export class Pc8801Machine {
     const f = this.sub.fdc;
     return {
       phase: f.phase, cmdLen: f.cmdLen, cmd: [...f.cmd],
+      // The MSR is an explicit variable (upd765.js), not a function of `phase`
+      // — so it is part of the state and has to be snapshotted with it.
+      status: f.status, seekBusy: f.seekBusy, acceptTc: f.acceptTc, data: f.data,
+      now: f.now, _timerAt: f._timerAt, _timerKind: f._timerKind,
       result: [...f.result], resultPos: f.resultPos,
       execPos: f.execPos, execWrite: f.execWrite, int: f.int,
       seekEnd: f.seekEnd.map((p) => ({ ...p })), us: f.us, hd: f.hd,
@@ -904,6 +929,7 @@ export class Pc8801Machine {
     // `?? 0` keeps snapshots taken before this field existed loadable.
     this._subMark = s.subClock?.mark ?? 0;
     this._subDebt = s.subClock?.debt ?? 0;
+    this._fdcAcc = s.subClock?.fdcAcc ?? 0;
     this.tInFrame = s.tInFrame; this.frame = s.frame; this._acc = s.acc;
     if (this.sub && s.sub) {
       restoreObj(this.pio, s.pio);
@@ -920,6 +946,7 @@ export class Pc8801Machine {
       f.drives.forEach((d, i) => { d.cyl = fs.drives[i].cyl; d._idx = fs.drives[i]._idx; d.disk = fs.drives[i].disk; });
       f.execBuf = fs.execBuf;
       f._multi = fs._multi;
+      if (fs.status === undefined) f._statusFromPhase(); // snapshot predates the MSR variable
     }
     return this;
   }
