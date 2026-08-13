@@ -90,9 +90,17 @@ testing nothing**.
 
 **M88 is not a complete gold standard.** Demonstrated:
 
-- **Four titles (Hydlide3, Stercru, starclsr, PRO_FAN) are ones M88 itself fails to boot.**
-  `tv2678` is the N88-BASIC opening screen, and M88 is sitting on it. They spent days on
-  the divergence list described as *our* fault
+- ~~**Four titles (Hydlide3, Stercru, starclsr, PRO_FAN) are ones M88 itself fails to boot.**~~
+  **Wrong, corrected 2026-08-13.** What could not boot them was **our harness**, not M88.
+  `m88ref/refdrv.cpp` mounted `Mount(0, diskPath, true, 0, false)` — **image 0 into drive 0
+  and nothing else** — while the Node side put image 1 into drive 1. **202 of the 353
+  files hold more than one image**, so on most of the collection the two sides were
+  running **different machines**. Titles that want a second disk (Hydlide3's USER disk,
+  PRO_FAN's Gibs disk) found drive 1 empty and fell back to the N88-BASIC prompt. One
+  added line boots all four, two of them to an **exact match with us**, and moves the
+  sweep from 328 exact / 333 tracking to 332 / 341 with the divergence list down from
+  18 to 11. **The headline evidence that "M88 is not gold" was a hole in the harness
+  for five days.**
 - **M88 does not run the real sub ROM.** It NOPs out the motor-settle delay loop
   (`m88ref .../pc88/subsys.cpp`)
 - M88's trace omits the instruction after every EI

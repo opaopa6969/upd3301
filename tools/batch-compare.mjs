@@ -70,14 +70,29 @@ function ours(path) {
     return { e6cd: m.ram[0xe6cd], tvnz, gvnz, textOff, nimg: imgs.length };
   } catch (e) { return { err: e.message }; }
 }
+// A NON-ZERO EXIT IS NOT THE SAME AS NO DATA.
+//
+// On らぷてっく and マリちゃん危機一髪 refdrv aborts with "pure virtual method
+// called" — a vtable torn down before the last destructor runs. That happens
+// while it prints its ASCII screen dump, roughly twenty lines AFTER the
+// `# final` lines this function reads. Treating the abort as a failed run
+// discarded two titles that had in fact produced everything we needed, and they
+// sat in the sweep as `errors: 2` for the whole parity run.
+//
+// So: read the output first, and only call it an error if the numbers really
+// are missing. `e.stdout` holds what the process wrote before it died.
 function ref(path) {
+  let out;
   try {
-    const out = execFileSync(REFDRV, [ROMDIR, path, String(FRAMES)], { timeout: 40000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    const m = out.match(/# final E6CD=([0-9a-f]{2}) EC88=[0-9a-f]+ tvramNZ=(\d+)/i);
-    const g = out.match(/# final gvramNZ=(\d+)/i);
-    return m ? { e6cd: parseInt(m[1], 16), tvnz: parseInt(m[2], 10), gvnz: g ? parseInt(g[1], 10) : null }
-             : { err: 'no final line' };
-  } catch (e) { return { err: (e.message || '').slice(0, 40) }; }
+    out = execFileSync(REFDRV, [ROMDIR, path, String(FRAMES)], { timeout: 40000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (e) {
+    out = e.stdout ?? '';
+    if (!out) return { err: (e.message || '').slice(0, 40) };
+  }
+  const m = out.match(/# final E6CD=([0-9a-f]{2}) EC88=[0-9a-f]+ tvramNZ=(\d+)/i);
+  const g = out.match(/# final gvramNZ=(\d+)/i);
+  return m ? { e6cd: parseInt(m[1], 16), tvnz: parseInt(m[2], 10), gvnz: g ? parseInt(g[1], 10) : null }
+           : { err: 'no final line' };
 }
 
 const files = readdirSync(DISKDIR).filter((f) => /\.d88$/i.test(f)).sort();

@@ -2,25 +2,32 @@
 
 # upd3301 vs M88 — behavioural comparison
 
-> **Current state (2026-08-11, 1500 frames, m88204 ROM set)**
+> **Current state (2026-08-13, 1500 frames, m88204 ROM set, two drives on both sides)**
 >
 > | | |
 > |---|---|
-> | exact match | **327/353 (93%)** |
-> | tracking (exact + phase noise) | **339/353 (96%)** |
-> | divergence leads | **12 → really 7 titles** |
+> | exact match | **332/353 (94%)** |
+> | tracking (exact + phase noise) | **341/353 (97%)** |
+> | divergence leads | **11** |
+> | refdrv errors | 1 (マリちゃん危機一髪 — refdrv aborts at f342, never reaching `# final`) |
 >
 > **The body below still carries the older 250-frame numbers (335/353 and so on).**
 > They are kept as a record of how the work went; **for current figures read this
 > box and the appended sections at the end.**
 >
-> Four of the twelve leads turned out to be **M88 failing to boot the disk**
-> (Hydlide3, Stercru, starclsr, PRO_FAN). `tv2678` is the N88-BASIC opening
-> screen, and M88 is sitting on it. **M88 is only gold when M88 actually ran the
-> disk.** `isBasicScreen()` in `tools/verdict.js` now says so.
+> **Correction (2026-08-13): "four leads are M88 failing to boot" was wrong.**
+> What failed to boot them was **this harness**, not M88. `refdrv.cpp` mounted
+> `Mount(0, diskPath, true, 0, false)` — **image 0 into drive 0 and nothing else** —
+> while the Node side put image 1 into drive 1. **202 of the 353 files hold more than
+> one image**, so on most of the collection the two sides ran different machines.
+> One line mounting drive 1 boots all four (Hydlide3 and PRO_FAN to an **exact match
+> with us**) and also clears Silpheed / シルフィード / B_CRISIS from the list.
+> `isBasicScreen()` itself was right — what was misread was the **cause** of sitting
+> on the BASIC screen.
 >
-> What is actually left: JIKO_PZL, OHOTUKU, volguard, Yaksa, Seena, harakiri,
-> うる星やつら.
+> The 11 that remain: OHOTUKU, 北海道連鎖殺人事件, PROJ_AKO, JIKO_PZL, FIREHAWK,
+> harakiri, Yaksa, うる星やつら, WIZRDRY2, WIZRDRY3, wizrdry4. **Two of them (Yaksa,
+> うる星やつら) are now *ours* sitting at `tv2678`** — a lead pointing the other way.
 
 
 A living record of how `upd3301` compares to **M88** (`bubio/M88M`), produced with
@@ -201,6 +208,59 @@ node tools/batch-compare.mjs <romDir> <diskDir> 250
 ```
 See [`../m88ref/README.md`](../m88ref/README.md) for the full method and a
 paste-ready sub-agent prompt. Add rows/divergences here as they're found.
+
+## What this fingerprint cannot measure (read before judging by it)
+
+**The fingerprint is `ram[0xE6CD]` plus the non-zero byte counts of tvram/gvram —
+memory contents, and nothing else.** Anything a chip does that does not land in
+memory is invisible to it **by construction**. That was walked into twice:
+
+- **Display gating (issue #22)**: whether the CRTC DMA-fetches text does not change
+  what is in tvram. Dropping VE and sweeping 353 titles moves **not one line** of the
+  summary — while measuring screen cells shows one title's text plane going dead.
+- **Termination (issue #40)**: whether a command ended normally or abnormally leaves
+  no trace in memory unless the driver looked at the result bytes.
+
+**To see terminations use `tools/results.mjs`** (it tallies refdrv's `RESULT ST[..]`
+lines and our `_results` into the same shape and subtracts). To see display, read
+`crtc.getScreen().cells`.
+
+## Count reachability before judging whether a change worked
+
+"The sweep did not move" has **two meanings**, and they must be separated first:
+
+1. the changed code ran, and it made no difference to the fingerprint
+2. the changed code never ran at all
+
+A twenty-line probe tells them apart. No hook in the core is needed — wrap the
+method from the tool side:
+
+```js
+// tools/probe.mjs (throwaway): count how often the changed branch is taken
+const c = { hit: 0 };
+const orig = m.crtc.writeCommand.bind(m.crtc);
+m.crtc.writeCommand = (v) => { if (/* the changed condition */) c.hit++; return orig(v); };
+for (let i = 0; i < 1500; i++) m.stepFrame();
+console.log(JSON.stringify({ title: path.split('/').pop(), ...c }));
+```
+
+Sweeping 353 titles this way takes **minutes**, because refdrv is not involved (the
+full comparison sweep takes ~30):
+
+```sh
+find /mnt/c/var/emulator/PC8801 -maxdepth 1 -iname '*.d88' -print0 | sort -z |
+  xargs -0 -P 10 -I{} node tools/probe.mjs "$ROMDIR" "{}" 1500 > /tmp/probe.jsonl
+```
+
+Worked examples (2026-08-13):
+
+| What was counted | Result | What it settled |
+|---|---|---|
+| `SET INTERRUPT MASK` unmasks | **4 of 353 titles**, fired in all four | Reached — the fingerprint simply cannot see it |
+| μPD8257 Mode Set landing mid byte-pair | **0 out of 4,135** | Never reached: no title can tell the behaviours apart, so the citation decides |
+| EOT reached with no TC | **316 titles, 3,934 times** | The "unreachable" conclusion was itself the error |
+
+> **When a detector stays silent, first check that it could have fired.**
 
 ## Correction (2026-08-08): "low-address execution" is not a crash signal
 

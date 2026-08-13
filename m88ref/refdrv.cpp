@@ -129,6 +129,19 @@ int main(int argc, char** argv) {
   pc88.ApplyConfig(&cfg);
   pc88.Reset();
   if (!diskmgr.Mount(0, diskPath, true, 0, false)) { printf("ERR mount %s\n", diskPath); return 1; }
+  // MOUNT IMAGE 1 INTO DRIVE 1 AS WELL -- 202 of our 353 .d88 files hold more
+  // than one image, and the Node harness has always put image 1 into drive 1
+  // ("insert every image, u<2" in tools/batch-compare.mjs). Mounting only image
+  // 0 here meant the two emulators ran different machines on more than half the
+  // collection: any title that wants a second disk -- Hydlide3's USER disk,
+  // PRO_FAN's Gibs disk, Star Cruiser's disk B -- found drive 1 empty and sat on
+  // the N88-BASIC prompt. Those four titles spent the whole parity run recorded
+  // as "M88 cannot boot them", which was evidence that M88 is not a gold
+  // standard. It was this line. Mounting image 1 moved the sweep from 328 exact
+  // / 333 tracking to 332 / 341 and took the divergence list from 18 to 11.
+  // A single-image file simply fails the mount, which is fine and expected.
+  if (diskmgr.Mount(1, diskPath, true, 1, false)) printf("# drive1: image 1 mounted\n");
+  else printf("# drive1: single-image file, drive 1 left empty\n");
   pc88.Reset();
 
   PC8801::Memory* mem = pc88.GetMem1();
