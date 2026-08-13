@@ -70,7 +70,10 @@ export class Pc8801Machine {
     // disk sub-system: a second Z80 running disk.rom, reached only through
     // the crossed 8255 pair at FCh-FFh. Without a sub ROM the ports float
     // high and the boot ROM times out into BASIC, same as a drive-less 88.
-    this.sub = sub ? new Pc80s31({ rom: sub, clockHz }) : null;
+    // `patchMotorWait` is M88's SubSystem::PatchROM — see pc80s31.js. It is
+    // named here rather than buried in the board because it is a decision:
+    // we are matching M88, which does not run the real motor-spin-up wait.
+    this.sub = sub ? new Pc80s31({ rom: sub, clockHz, patchMotorWait: true }) : null;
     this.pio = this.sub ? new I8255() : null;
     if (this.sub) crossWire(this.pio, this.sub.pio);
 
