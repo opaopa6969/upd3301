@@ -22,11 +22,26 @@ loader stage.
 |------|------------|
 | `build.sh` | clone M88M @ pinned commit → apply hooks → build core + `refdrv` |
 | `m88m-hooks.patch` | the trace hooks, as a `git apply`-able diff (3 files) |
-| `refdrv.cpp` | the headless driver: boots a `.d88`, drives the hooks, dumps state |
+| `refdrv.cpp` | the headless driver: boots a `.d88`, drives the hooks, dumps state. **Mounts image 0 in drive 0 and image 1 in drive 1** (see below) |
 | `PATCHES.md` | prose description of each hook (for porting to a newer M88M) |
 | `README.ja.md` | 日本語版 |
 
 Nothing here needs the M88M tree checked in — `build.sh` fetches and patches it.
+
+### Both sides must be the same machine (a hole found on 2026-08-13)
+
+A `.d88` may hold several images. **202 of our 353 files do**, and the Node side
+(`tools/batch-compare.mjs`) has always put image 1 into drive 1. `refdrv.cpp` only called
+`Mount(0, …)`, so on most of the collection **the two emulators were running different
+machines**.
+
+Titles that want a USER disk or a disk B (Hydlide3, Stercru, starclsr, PRO_FAN) found
+drive 1 empty on the M88 side, fell back to the N88-BASIC prompt, and spent five days
+recorded as **"titles M88 cannot boot"**. Mounting drive 1 boots all four (exact 328→332,
+tracking 333→341, divergence list 18→11).
+
+**When touching refdrv, check that it inserts the same disks, in the same order, as the
+Node harness.**
 
 ## Build
 
