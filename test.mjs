@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Upd3301, STATUS, expandAttrRow, SCHEMA_VERSION } from './index.js';
+import {
+  Upd3301, STATUS, expandAttrRow, SCHEMA_VERSION, MAX_EX_ROWS, MAX_EX_ROW_BYTES,
+} from './index.js';
 import { Upd8257 } from './upd8257.js';
 import {
   Pc8001TextSystem, PC8001, decodeAttrPair, expandRowStates, renderScreen,
@@ -92,6 +94,32 @@ test('VRTC interrupt: masked by default state, fires when unmasked', () => {
   assert.equal(crtc.irqLine, false);
 });
 
+// Issue #22, PINNED NOT VERIFIED. Unmasking the VRTC interrupt clears status
+// bits as a side effect. MAME does `m_status = 0x80` here, which drops VE, and
+// since its get_display_status() is `m_status & STATUS_VE` that blanks the
+// text layer — its comment says pc8801:laptick depends on exactly that. We
+// keep VE instead. No datasheet text covering the side effect was found, and
+// the effect on the 353-title comparison has not been measured, so this test
+// records what we currently do rather than what the chip is known to do. See
+// docs/design.md "Unverified behaviour". If you change index.js to match MAME,
+// this test is supposed to fail — update it with sweep numbers attached.
+test('SET INTERRUPT MASK unmask clears E/LP/N/U and keeps VE (unverified, see #22)', () => {
+  const crtc = new Upd3301({ drq: (b) => (b.fill(0), b.length) });
+  resetTo(crtc);
+  crtc.writeCommand(0x20); // START DISPLAY → VE set
+  assert.ok(crtc.status & STATUS.VE);
+  crtc.status |= STATUS.E | STATUS.LP | STATUS.N | STATUS.U;
+  crtc.writeCommand(0x40); // SET INTERRUPT MASK, ME=0 → VRTC unmasked
+  assert.equal(crtc.status & (STATUS.E | STATUS.LP | STATUS.N | STATUS.U), 0);
+  assert.ok(crtc.status & STATUS.VE, 'we keep VE; MAME clears it');
+  assert.equal(crtc.ve, true, 'and display gating is untouched either way');
+  // Masking it again (ME=1) must not clear anything.
+  crtc.status |= STATUS.E | STATUS.U;
+  crtc.writeCommand(0x41);
+  assert.ok(crtc.status & STATUS.E);
+  assert.ok(crtc.status & STATUS.U);
+});
+
 test('cursor position, style and deterministic blink', () => {
   const crtc = new Upd3301({ drq: (b) => (b.fill(0), b.length) });
   resetTo(crtc);
@@ -115,6 +143,130 @@ test('cursor position, style and deterministic blink', () => {
   assert.equal(sc.cursor.x, 12);
   assert.equal(sc.cursor.y, 5);
   assert.equal(sc.cursor.block, false);
+});
+
+// Issue #28: the blinkPeriod=0 guard used to live inside each formula, so the
+// documented "attributes blink at half the cursor rate" ratio held only for
+// even periods >= 2. Walk the phases at the values that actually broke it —
+// 0 (a chip's state before its first RESET), 1, and the odd 3/5 — and assert
+// the measured full cycles, not the formula.
+function blinkCycle(crtc, fn) {
+  const first = fn.call(crtc);
+  for (let i = 1; i <= 4096; i++) {
+    crtc.frame = i;
+    if (fn.call(crtc) !== first) return i * 2; // half a cycle to the first flip
+  }
+  return null;
+}
+
+test('blink: attributes run at half the cursor rate for every blinkPeriod', () => {
+  for (const bp of [0, 1, 2, 3, 5, 16, 32, 48, 64]) {
+    const crtc = new Upd3301();
+    crtc.blinkPeriod = bp;
+    crtc.cursorMode = 0; // blink underline
+    crtc.frame = 0;
+    const cursor = blinkCycle(crtc, crtc.cursorBlinkOn);
+    crtc.frame = 0;
+    const attr = blinkCycle(crtc, crtc.attrBlinkOn);
+    assert.equal(attr, cursor * 2, `blinkPeriod=${bp}: attr ${attr} != 2x cursor ${cursor}`);
+  }
+});
+
+test('blink: blinkPeriod=0 (a chip before its first RESET) still blinks sanely', () => {
+  const crtc = new Upd3301();
+  assert.equal(crtc.blinkPeriod, 0); // the constructor's value — no RESET yet
+  assert.equal(crtc.blinkPeriodFrames(), 2); // clamped, and even
+  crtc.cursorMode = 0;
+  const cursor = [];
+  const attr = [];
+  for (crtc.frame = 0; crtc.frame < 8; crtc.frame++) {
+    cursor.push(crtc.cursorBlinkOn() ? 1 : 0);
+    attr.push(crtc.attrBlinkOn() ? 1 : 0);
+  }
+  assert.deepEqual(cursor, [1, 0, 1, 0, 1, 0, 1, 0]); // 2-frame cycle (unchanged)
+  assert.deepEqual(attr, [1, 1, 0, 0, 1, 1, 0, 0]); // 4-frame cycle: half the rate
+  assert.equal(crtc.getScreen().attrBlinkOn, true);
+});
+
+test('blink: the RESET-programmed periods are untouched by the clamp', () => {
+  // param byte 1 bits 7-6 encode (B+1)x16, i.e. the only periods the port
+  // encoding can express. Cursor blink time must stay exactly that many frames.
+  for (const [bits, period] of [[0, 16], [1, 32], [2, 48], [3, 64]]) {
+    const crtc = new Upd3301();
+    crtc.writeCommand(0x00);
+    crtc.writeParam(0x80 | (80 - 2));
+    crtc.writeParam((bits << 6) | (25 - 1));
+    crtc.writeParam(8 - 1);
+    crtc.writeParam((6 << 5) | 12);
+    crtc.writeParam(20 - 1);
+    assert.equal(crtc.blinkPeriod, period);
+    assert.equal(crtc.blinkPeriodFrames(), period); // no clamping in range
+    crtc.frame = 0;
+    assert.equal(blinkCycle(crtc, crtc.cursorBlinkOn), period);
+    assert.equal(blinkCycle(crtc, crtc.attrBlinkOn), period * 2);
+  }
+});
+
+// Issue #26: resetEx bypasses the port encoding, so it also bypassed the
+// Math.min truncation that keeps the port path in range. Each value below
+// actually broke something before the guard: -1 and a huge attrsPerRow threw
+// a bare "Invalid typed array length" from inside a typed-array constructor;
+// 80.5 silently built a 2012-cell screen with fractional row offsets; a string
+// made `cols + attrBytesPerRow` concatenate, so an 800-byte row buffer served
+// a 2000-cell screen; NaN and a missing cols produced a 0x0 chip that reported
+// no error at all; and cols=rows=1e6 reserved three 1 TB arrays that wedged
+// the process on the next stepFrame().
+test('resetEx rejects geometry the model cannot serve', () => {
+  const bad = [
+    ['missing cols/rows', undefined],
+    ['cols negative', { cols: -1, rows: 25 }],
+    ['cols fractional', { cols: 80.5, rows: 25 }],
+    ['cols NaN', { cols: NaN, rows: 25 }],
+    ['cols Infinity', { cols: Infinity, rows: 25 }],
+    ['cols string', { cols: '80', rows: '25' }],
+    ['rows negative', { cols: 80, rows: -1 }],
+    ['rows past MAX_EX_ROWS', { cols: 80, rows: MAX_EX_ROWS + 1 }],
+    ['attrsPerRow negative', { cols: 80, rows: 25, attrsPerRow: -1 }],
+    ['attrsPerRow enormous', { cols: 80, rows: 25, attrsPerRow: 1e9 }],
+    ['geometry that wedges stepFrame', { cols: 1e6, rows: 1e6 }],
+    ['row burst past MAX_EX_ROW_BYTES', { cols: 40000, rows: 1, attrPerCell: true }],
+    ['cursorMode out of range', { cols: 80, rows: 25, cursorMode: 4 }],
+    ['linesPerChar negative', { cols: 80, rows: 25, linesPerChar: -8 }],
+  ];
+  for (const [name, opts] of bad) {
+    const crtc = new Upd3301();
+    crtc.resetEx({ cols: 40, rows: 10 }); // a known-good geometry to fall back on
+    assert.throws(
+      () => (opts === undefined ? crtc.resetEx() : crtc.resetEx(opts)),
+      RangeError, `${name} should be rejected`);
+    // rejected before anything was assigned: the chip keeps its old geometry
+    assert.equal(crtc.cols, 40, `${name} left the chip half-reconfigured`);
+    assert.equal(crtc.rows, 10, `${name} left the chip half-reconfigured`);
+    assert.equal(crtc.cells.length, 400);
+  }
+});
+
+test('resetEx still accepts every geometry the codebase actually asks for', () => {
+  const good = [
+    ['degenerate but harmless: no columns', { cols: 0, rows: 25 }],
+    ['degenerate but harmless: no rows', { cols: 80, rows: 0 }],
+    ['initTextModeEx default (80x25, pairs)', { cols: 80, rows: 25, attrsPerRow: 160 }],
+    ['test suite 100x30', { cols: 100, rows: 30, attrsPerRow: 200 }],
+    ['UEX 320 wide, per-cell attributes', { cols: 320, rows: 100, attrPerCell: true }],
+    ['widest pair mode (positions are 8-bit)', { cols: 255, rows: 64, attrsPerRow: 510 }],
+    ['MAX_EX_ROWS exactly', { cols: 80, rows: MAX_EX_ROWS, attrsPerRow: 160 }],
+    ['MAX_EX_ROW_BYTES exactly', { cols: MAX_EX_ROW_BYTES / 2, rows: 1, attrPerCell: true }],
+  ];
+  for (const [name, opts] of good) {
+    const crtc = new Upd3301({ drq: (b) => (b.fill(0x41), b.length) });
+    crtc.resetEx(opts);
+    crtc.writeCommand(0x20); // START DISPLAY
+    crtc.stepFrame(); // must survive a real frame of DMA, not just the reset
+    assert.equal(crtc.cols, opts.cols, name);
+    assert.equal(crtc.rows, opts.rows, name);
+    assert.equal(crtc.cells.length, opts.cols * opts.rows, name);
+    assert.equal(crtc.status & STATUS.U, 0, `${name} underran`);
+  }
 });
 
 test('update(dt) is fixed-step and frame-exact', () => {
@@ -208,6 +360,55 @@ test('PC-8001 port 0x67: ch3 terminal-count pair decodes mode', () => {
   sys.out(0x66, 0x12); // ch3 address high byte → addr 0x1234
   assert.equal(sys.dmac.channels[3].baseAddr, 0x1234);
   assert.equal(sys.dmac.channels[3].addr, 0x1234);
+});
+
+// Issue #24, the other half of the boundary: which ports reach the DMAC at
+// all. pc8001.js decodes `port >= 0x60 && port <= 0x68`, so 0x5f and 0x69 must
+// fall through untouched — 0x69 in particular, because upd8257.writePort would
+// happily take it: (9 >> 1) & 3 = 0, so a leaked 0x69 would land on channel 0's
+// terminal count instead of being ignored.
+test('PC-8001 DMAC port window: 0x60-0x68 only, 0x5f and 0x69 fall through', () => {
+  const snapshot = (sys) => JSON.stringify([
+    sys.dmac.modeReg, sys.dmac._flipflop,
+    sys.dmac.channels.map((c) => [c.baseAddr, c.baseCount, c.mode]),
+  ]);
+  for (let port = 0x5e; port <= 0x6b; port++) {
+    const sys = new Pc8001TextSystem();
+    const before = snapshot(sys);
+    sys.out(port, 0xa5);
+    const reached = snapshot(sys) !== before;
+    const inWindow = port >= 0x60 && port <= 0x68;
+    assert.equal(reached, inWindow, `port 0x${port.toString(16)} write`);
+    // reads: inside the window the DMAC answers, outside the bus floats high
+    assert.equal(new Pc8001TextSystem().in(port), inWindow ? 0x00 : 0xff,
+      `port 0x${port.toString(16)} read`);
+  }
+});
+
+// KNOWN DEVIATION (issue #24), pinned deliberately rather than fixed: our
+// upd8257 clears the shared low/high flip-flop when the mode register (0x68)
+// is written. MAME's i8257 does not — it clears m_msb only in device_reset()
+// — and the Intel 8257 datasheet attributes the F/L flip-flop's clear to the
+// RESET input, listing only channel register accesses as toggling it. The
+// observable difference is below: a mode write between the two halves of a
+// byte pair desyncs the pair. It is latent in this codebase (initTextMode
+// programs 0x68 before the channel registers, which is also what N-BASIC
+// does), so changing it is a 353-title decision, not a test-file one.
+test('PC-8001 port 0x68: mode write clears the byte-pair flip-flop (deviates from MAME)', () => {
+  const sys = new Pc8001TextSystem();
+  sys.out(0x64, 0x00); // ch2 address low byte — F/F 0 → 1, pair now half-done
+  assert.equal(sys.dmac._flipflop, 1);
+  sys.out(0x68, 0x84); // mode write lands in the middle of the pair
+  assert.equal(sys.dmac._flipflop, 0); // ours resets; MAME's i8257 leaves it at 1
+  sys.out(0x64, 0xf3); // meant as the HIGH byte of 0xf300
+  // ...but the reset F/F took it as a low byte, so the address is 0x00f3.
+  assert.equal(sys.dmac.channels[2].baseAddr, 0x00f3);
+  // Whereas the order N-BASIC actually uses (mode first) is unaffected:
+  const ok = new Pc8001TextSystem();
+  ok.out(0x68, 0x84);
+  ok.out(0x64, 0x00);
+  ok.out(0x64, 0xf3);
+  assert.equal(ok.dmac.channels[2].baseAddr, 0xf300);
 });
 
 test('PC-8001 attribute pair decoding (color vs function spec)', () => {
