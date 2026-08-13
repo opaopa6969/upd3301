@@ -41,26 +41,42 @@
 // which is why narrowing the window changed nothing. The problem was never
 // whether to report EOC; it was dropping EXM at all.
 //
-// EOT is also unreachable on this board: 0300 pulls TC once its own counter runs
-// out (measured: 29 byte reads, then TC while still in execute, ending with a
-// normal status), and 0790 finishes through the 8255. Neither driver ever lets
-// the chip run off the end of the cylinder.
+// ATTEMPT 4 (2026-08-13) — THE EOC ONE LANDED, AND THE NOTE BELOW IT WAS WRONG.
 //
-// So these todos are not "not implemented yet" — they are **not expressible in
-// the current model**, where one JS call yields one byte and no time passes in
-// between. Reaching them needs the FDC to have a byte period (27us FM, 13us
-// MFM), so that "no next byte yet, waiting for TC" is a state that can exist at
-// all. That means putting the FDC into the frame scheduler: a large change, and
-// one to attempt on its own branch with the 353-title sweep after every step.
+// This header used to claim EOT was unreachable on this board and that EOC was
+// "not expressible in the current model" without giving the FDC a byte period.
+// Both claims were measured and are false:
 //
-// STATUS (2026-08-10): five of these fail against the current implementation,
-// and that is deliberate — they are the specification, not a description of
-// what we do. An attempt to satisfy them wholesale broke real titles: raising
-// End of Cylinder at EOT made Ys1 and GAZZEL retry their first load forever
-// (M88 returns ST0=00 for the same command), because the PC-8801 sub ROM only
-// pulses TC *after* the MSR's EXM drops — a chip that self-terminates abnormally
-// has already latched the status by then. Fixing this properly means modelling
-// when TC is asserted, not flipping a status bit. See issue #40.
+//   * Reachable, and often: across 353 titles at 1500 frames, **316 titles reach
+//     EOT with no TC, 3,934 times in total** (counted in _execDone).
+//   * M88 does raise EOC there. `refdrv` already prints every result phase, and
+//     Aggres alone shows `ST[40 80]` ×5 and `ST[44 80]` ×4 — abnormal termination
+//     with ST1.EN, exactly what the specification asks for.
+//
+// What was actually missing was the **window**, not the status. M88 does not end
+// the command at EOT; it parks on `SetTimer(timerphase, 20)` — 200 µs — and only
+// calls it End of Cylinder if that timer fires. A TC arriving first goes through
+// `tcphase` and ends normally. RQM and EXM are already down while it waits (M88's
+// `GetData` drops them on the last byte), so the window is indistinguishable from
+// the gap between two sectors — which is precisely what the 0300 driver watches
+// before pulsing TC. Real loads therefore land inside the window.
+//
+// Attempt 2 failed because it invented a different mechanism (a phase that held
+// the ending open) instead of M88's timer; attempt 3 raised EOC with no window at
+// all. With the window in place the 353-title sweep is **identical line for line**
+// to the baseline (328 exact / 333 tracking / 0 blank) and our result-byte
+// distribution lands next to M88's:
+//
+//     ST0 ST1     M88   ours
+//     00 00        15     18
+//     04 00        10     10
+//     40 80         5      5     <- EOC
+//     44 80         4      6     <- EOC, HD=1
+//     40 02         4      0     <- still missing on our side
+//     40 04         2      2
+//
+// So EOC is done; the remaining todos below are the MT/ND/WRITE items, and the
+// `40 02` column is the next thread to pull. See issue #40.
 //
 // So: these tests are the target, `test.todo` marks the ones we knowingly do not
 // meet, and the failures are documented rather than pinned as expected.
@@ -89,26 +105,85 @@ const twoSided = () => parseD88(buildD88({
 const cmd = (f, bytes) => { for (const b of bytes) f.write(b); };
 const result = (f) => Array.from({ length: 7 }, () => f.read());
 
-/** Run a READ DATA and drain `bytes` of execution data, then the result phase. */
-function readData(f, { mt = 0, hd = 0, c = 0, h = 0, r = 1, n = 1, eot = 3, bytes = Infinity, tc = false }) {
+/**
+ * Run a READ DATA and drain `bytes` of execution data, then the result phase.
+ *
+ * `settle` advances the mechanical clock after the transfer stops, which is what
+ * closes the 200 µs TC window that EOT opens (see upd765.js `_execDone`). Pass it
+ * when the test wants the window to expire; leave it off to inspect the chip while
+ * the window is still open.
+ */
+function readData(f, { mt = 0, hd = 0, c = 0, h = 0, r = 1, n = 1, eot = 3, bytes = Infinity, tc = false, settle = 0 }) {
   const op = (mt ? 0x80 : 0) | 0x40 | 0x06; // MT | MFM | READ DATA
   cmd(f, [op, (hd << 2), c, h, r, n, eot, 0x0e, 0xff]);
   let got = 0;
   while (got < bytes && (f.readStatus() & 0x20)) { f.read(); got++; } // EXM set = still executing
-  if (tc && (f.readStatus() & 0x20)) f.tc();
+  if (tc) f.tc(); // TC is gated on acceptTc, which outlives EXM by design
+  if (settle) f.tick(settle);
   return { data: got, res: result(f) };
 }
 
 const IC = (st0) => (st0 >> 6) & 3;
 
-test.todo('MT=0: reaching EOT without TC is End of Cylinder, not a normal end', () => {
+test('MT=0: reaching EOT without TC is End of Cylinder, not a normal end', () => {
   // The transfer runs off the end of the cylinder because the host never
   // asserted TC. The specification calls that abnormal: IC=01 with ST1.EN.
   const f = new Upd765();
+  f.eocTiming = true; // enabled by the board that owns the clock (machine88.js)
   f.insertDisk(0, twoSided());
-  const { res } = readData(f, { mt: 0, hd: 0, r: 1, eot: 3 });
+  const { res } = readData(f, { mt: 0, hd: 0, r: 1, eot: 3, settle: 20 });
   assert.equal(IC(res[0]), 1, 'ST0.IC should be 01 (abnormal termination)');
   assert.equal(res[1] & 0x80, 0x80, 'ST1.EN should be set');
+});
+
+test('EOT opens a 200 µs window: a TC inside it still ends the command normally', () => {
+  // This is the half that took three failed attempts to find. M88 parks on
+  // `SetTimer(timerphase, 20)` at EOT and only calls it End of Cylinder if that
+  // timer fires; a TC arriving first goes through tcphase and ends normally. The
+  // PC-8801 sub ROM's 0300-series driver pulses TC exactly here, after seeing
+  // EXM go low, so real loads must land on this path and not on EOC.
+  const f = new Upd765();
+  f.eocTiming = true;
+  f.insertDisk(0, twoSided());
+  const { res } = readData(f, { mt: 0, hd: 0, r: 1, eot: 3, tc: true, settle: 20 });
+  assert.equal(IC(res[0]), 0, 'a TC inside the window ends normally');
+  assert.equal(res[1] & 0x80, 0, 'ST1.EN must not be set');
+  // ...and the post-command ID still reports where the chip stopped, which is
+  // what the sub ROM's FAT walk reads to chain to the next cluster.
+  assert.equal(res[5], 1, 'R wrapped to 1');
+  assert.equal(res[3], 1, 'C advanced past the cylinder');
+});
+
+test('the EOT window is opt-in: a board with no clock keeps the old ending', () => {
+  // upd765.js is shared with the X68000 board (x68fdd.js), which never calls
+  // tick(). A window it cannot close would hang the command forever, so with
+  // eocTiming off the chip ends the same way it always did.
+  const f = new Upd765(); // eocTiming stays false
+  f.insertDisk(0, twoSided());
+  const { res } = readData(f, { mt: 0, hd: 0, r: 1, eot: 3 });
+  assert.equal(IC(res[0]), 0, 'no window, no abnormal termination');
+  assert.equal(res[1] & 0x80, 0, 'ST1.EN not set');
+});
+
+test('the EOT window is plain data: a mid-window save carries it as a string kind', () => {
+  // The window is a timer, and machine88's `_snapFdc` carries timers as
+  // `_timerAt` + `_timerKind` — a number and a string, no closures. Check the
+  // pending window survives JSON, which is what a real snapshot goes through.
+  const f = new Upd765();
+  f.eocTiming = true;
+  f.insertDisk(0, twoSided());
+  const op = 0x40 | 0x06; // MFM | READ DATA
+  cmd(f, [op, 0, 0, 0, 1, 1, 3, 0x0e, 0xff]);
+  while (f.readStatus() & 0x20) f.read();
+  assert.equal(f._timerKind, 'eoc', 'EOT should have opened the window');
+  const carried = JSON.parse(JSON.stringify({ at: f._timerAt, kind: f._timerKind, now: f.now }));
+  assert.equal(carried.kind, 'eoc');
+  assert.equal(carried.at, f.now + 20, 'the window closes 20 ticks (200 µs) out');
+  // ...and it really is the thing that produces EOC, not a bookkeeping field.
+  f.tick(20);
+  const res = result(f);
+  assert.equal(IC(res[0]), 1);
+  assert.equal(res[1] & 0x80, 0x80);
 });
 
 test('MT=0: TC before EOT ends normally and reports where it stopped', () => {
