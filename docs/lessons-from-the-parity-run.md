@@ -9,7 +9,10 @@ ICE headless, and build an analysis format.
 **This is not a list of achievements. It is a record kept so the same mistakes are not
 repeated.**
 
-The numbers first, to get them out of the way: exact matches 304→327/353, tests 63→1001.
+The numbers first, to get them out of the way: exact matches 304→328/353, tracking
+335→333/353, tests 63→1027. **Note that tracking went down by two.** Every title that
+dropped out was chased individually and found to be **M88 sitting frozen**, not us
+(e.g. M88 does not move a single bit in Silpheed from f500 to f3000).
 But **most of the time went into doubting the tools and the measurements**, not into
 writing emulator code.
 
@@ -175,24 +178,33 @@ nine machines run is a better state than not knowing.
 ## Where things stand (2026-08-13)
 
 ```
-main: 1001 tests / 976 pass / 0 fail / 19 skip / 6 todo
-M88 parity: 327/353 exact, 335/353 tracking
+main: 1027 tests / 1002 pass / 0 fail / 19 skip / 6 todo
+M88 parity: 328/353 exact, 333/353 tracking, 0 blank
 Machines: 9 (PC-8801/8001, Famicom/FDS, PC Engine, Mega Drive,
           Game Boy, X68000, Seta arcade, PC-9801)
 ```
 
-**Two of the five layers of M88's timing model are in main:**
+**M88's timing model was settled in the last two days of the run:**
 
 | Layer | State |
 |---|---|
 | Frame period 71,680 cycles (24kHz / 55.71 Hz) | **landed** |
 | Port 40h fv15k and b7/b6 | **landed** |
-| Sub-ROM motor-delay patch | written, **cannot land** |
-| FDC seek timer `400 × tracks + 500` | written, **cannot land** |
-| FDC read timer `250 << n` | written, **cannot land** |
+| Sub-ROM motor-delay patch | **landed** (#55) |
+| FDC seek timer `400 × tracks + 500` | **landed** (#55, opt-in, PC-8801 only) |
+| FDC read timer `250 << n` | **landed** (#55, same) |
+| ×15 sub-CPU boost | **deleted** (#57) |
 
-**One reason for all three**: `upd765.js` derives its MSR, so "ignore accesses while RQM is
-low" cannot be expressed. **Rewriting that MSR into a state variable is the next move** —
-it serves both the PC-8801 and the X68000, and deserves to be its own piece of work.
+Three layers were blocked by one thing: `upd765.js` derived its MSR, so "ignore accesses
+while RQM is low" could not be expressed. **Rewriting the MSR into a state variable landed
+all three at once** (#55). M88's `FDC::Status()` is literally `return seekstate | status;` —
+a shape that cannot be anything but a state variable.
+
+The fourth layer, the ×15 boost, had to be **deleted rather than kept**. It was patching
+over the era when the frame period was 60 Hz (wrong), and what it actually imitated was
+**M88's ROM patch, not any hardware**. Worse, once #55 made the FDC park the sub-CPU in
+"command phase, RQM low", its trigger condition was finally met and it had grown to
+**4–12.7×**  — applied twice over. Deleting it took exact matches from 326 to 328.
+**Not one coefficient of the timing model is left.**
 
 The full trail is in [#13](https://github.com/opaopa6969/upd3301/issues/13).
