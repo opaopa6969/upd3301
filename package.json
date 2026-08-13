@@ -77,7 +77,8 @@
     "./icecore": "./icecore.js",
     "./icearch": "./icearch.js",
     "./rngfind": "./rngfind.js",
-    "./reachdiff": "./reachdiff.js"
+    "./reachdiff": "./reachdiff.js",
+    "./resultdiff": "./resultdiff.js"
   },
   "files": [
     "*.js",
