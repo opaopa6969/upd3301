@@ -41,26 +41,42 @@
 // which is why narrowing the window changed nothing. The problem was never
 // whether to report EOC; it was dropping EXM at all.
 //
-// EOT is also unreachable on this board: 0300 pulls TC once its own counter runs
-// out (measured: 29 byte reads, then TC while still in execute, ending with a
-// normal status), and 0790 finishes through the 8255. Neither driver ever lets
-// the chip run off the end of the cylinder.
+// ATTEMPT 4 (2026-08-13) — THE EOC ONE LANDED, AND THE NOTE BELOW IT WAS WRONG.
 //
-// So these todos are not "not implemented yet" — they are **not expressible in
-// the current model**, where one JS call yields one byte and no time passes in
-// between. Reaching them needs the FDC to have a byte period (27us FM, 13us
-// MFM), so that "no next byte yet, waiting for TC" is a state that can exist at
-// all. That means putting the FDC into the frame scheduler: a large change, and
-// one to attempt on its own branch with the 353-title sweep after every step.
+// This header used to claim EOT was unreachable on this board and that EOC was
+// "not expressible in the current model" without giving the FDC a byte period.
+// Both claims were measured and are false:
 //
-// STATUS (2026-08-10): five of these fail against the current implementation,
-// and that is deliberate — they are the specification, not a description of
-// what we do. An attempt to satisfy them wholesale broke real titles: raising
-// End of Cylinder at EOT made Ys1 and GAZZEL retry their first load forever
-// (M88 returns ST0=00 for the same command), because the PC-8801 sub ROM only
-// pulses TC *after* the MSR's EXM drops — a chip that self-terminates abnormally
-// has already latched the status by then. Fixing this properly means modelling
-// when TC is asserted, not flipping a status bit. See issue #40.
+//   * Reachable, and often: across 353 titles at 1500 frames, **316 titles reach
+//     EOT with no TC, 3,934 times in total** (counted in _execDone).
+//   * M88 does raise EOC there. `refdrv` already prints every result phase, and
+//     Aggres alone shows `ST[40 80]` ×5 and `ST[44 80]` ×4 — abnormal termination
+//     with ST1.EN, exactly what the specification asks for.
+//
+// What was actually missing was the **window**, not the status. M88 does not end
+// the command at EOT; it parks on `SetTimer(timerphase, 20)` — 200 µs — and only
+// calls it End of Cylinder if that timer fires. A TC arriving first goes through
+// `tcphase` and ends normally. RQM and EXM are already down while it waits (M88's
+// `GetData` drops them on the last byte), so the window is indistinguishable from
+// the gap between two sectors — which is precisely what the 0300 driver watches
+// before pulsing TC. Real loads therefore land inside the window.
+//
+// Attempt 2 failed because it invented a different mechanism (a phase that held
+// the ending open) instead of M88's timer; attempt 3 raised EOC with no window at
+// all. With the window in place the 353-title sweep is **identical line for line**
+// to the baseline (328 exact / 333 tracking / 0 blank) and our result-byte
+// distribution lands next to M88's:
+//
+//     ST0 ST1     M88   ours
+//     00 00        15     18
+//     04 00        10     10
+//     40 80         5      5     <- EOC
+//     44 80         4      6     <- EOC, HD=1
+//     40 02         4      0     <- still missing on our side
+//     40 04         2      2
+//
+// So EOC is done; the remaining todos below are the MT/ND/WRITE items, and the
+// `40 02` column is the next thread to pull. See issue #40.
 //
 // So: these tests are the target, `test.todo` marks the ones we knowingly do not
 // meet, and the failures are documented rather than pinned as expected.
