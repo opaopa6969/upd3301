@@ -711,7 +711,23 @@ export class Pc8801Machine {
     const period = this._crtcPeriodT();
     if (!(period > 0)) return;
     const disp = this._crtcDispT();
-    this._crtcPhase += dtCpu * this.subRatio;
+    // THE DMA STEAL IS NOT SPREAD EVENLY OVER THE PERIOD.
+    //
+    // The CRTC only takes the bus while it is fetching rows, i.e. during the
+    // DISPLAY period; through vertical blanking the CPU has the bus to itself
+    // and runs at full speed. `subRatio` is the frame-wide average
+    // (realFrame / frameT), so using it everywhere makes the CPU look slow
+    // during blanking and fast during display — a phase error that grows with
+    // how much DMA a title does. FIREHAWK, which is graphics-heavy, is exactly
+    // the shape that suffers (issue #72).
+    //
+    // Put the whole steal back where it happens: blanking converts 1:1, and
+    // the display period carries all of it.
+    const steal = Math.max(0, 1 - this.frameT / (this.clockHz / this.frameHz));
+    const stealT = period * steal;                     // real T-states lost per period
+    const dispCpu = Math.max(1, disp - stealT);        // CPU time inside the display period
+    const k = this._crtcPhase >= disp ? 1 : disp / dispCpu;
+    this._crtcPhase += dtCpu * k;
     while (this._crtcPhase >= period) this._crtcPhase -= period;
     const vrtc = this._crtcPhase >= disp;
     // VSYNC fires on the VRTC *rising edge* -- the end of the display period,
