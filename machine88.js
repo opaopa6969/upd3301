@@ -281,8 +281,15 @@ export class Pc8801Machine {
     // `IN A,(40h) / AND 20h / JR NZ`; over 60 frames M88 spins that loop 535
     // times and we spun it 207 -- and the first divergence in the entire run
     // (identical for 7,638 instructions, PC *and* R) is exactly there. See #72.
-    this._crtcPhase = 0; // position inside the CRTC's own period, in REAL T-states
-    this._vrtcPrev = false;
+    // Mirror M88's two separate things: the VRTC PIN and the EVENT CHAIN.
+    //   ExpandLineEnd : bus->Out(vrtc,1); AddEvent(linetime*vretrace, StartDisplay)
+    //   StartDisplay  : bus->Out(vrtc,0); (then a row event per displayed row)
+    // Deriving the pin from a phase counter conflated them, and re-seeding the
+    // phase on every CRTC command then pushed the next rising edge a whole
+    // period away — FIREHAWK ended up with 0.18 VSYNC per frame instead of 1.0.
+    this._vrtc = false;      // the pin
+    this._crtcNext = 0;      // real T-states until the next chain event
+    this._crtcBlank = false; // which half of the chain we are in
     this._nomFrameT = clockHz / frameHz; // nominal (constant) frame length for a monotonic tape clock
 
     this.cpu = new Z80({
@@ -455,7 +462,7 @@ export class Pc8801Machine {
       // with a constant. M88 derives the same window from the CRTC
       // (`crtc.cpp`: retrace runs `linetime * vretrace`).
       const vrtc = this._crtcUsable()
-        ? this._crtcPhase >= this._crtcDispT()          // the CRTC's own clock, see _advanceCrtc
+        ? this._vrtc                                     // the CRTC's own pin, see _advanceCrtc
         : this.tInFrame > this.frameT * this._dispFrac(); // chip not programmed yet
       // b2 = CMT carrier-detect: high while the tape is parked on a MARK
       let cmt = 0;
@@ -582,8 +589,12 @@ export class Pc8801Machine {
         // syncing `_vrtcPrev` the jump looks like a rising edge and fires a spare
         // VSYNC every time the program touches the command port — FIREHAWK ends up
         // spinning in its RST 18h handler (9,257 hits in 60 frames).
-        if ((v & 0xe0) === 0x00) { this._crtcPhase = 0; this._vrtcPrev = false; }
-        else if ((v & 0xe0) === 0x20) { this._crtcPhase = this._crtcDispT(); this._vrtcPrev = true; }
+        if ((v & 0xe0) === 0x00) {          // RESET -> StartDisplay immediately
+          this._vrtc = false; this._crtcBlank = false; this._crtcNext = this._crtcDispT();
+        } else if ((v & 0xe0) === 0x20) {   // START DISPLAY -> blank, then display
+          if (globalThis.__startdisp) globalThis.__startdisp();
+          this._crtcBlank = true; this._crtcNext = this._crtcPeriodT() - this._crtcDispT();
+        }
         return;
       case 0x70: this._txtwnd = (v & 0xff) << 8; return; // text window base (see readMem)
       case 0x78: this._txtwnd = (this._txtwnd + 0x100) & 0xff00; return; // text window += one page
@@ -712,38 +723,31 @@ export class Pc8801Machine {
   // CPU time to real time (the CPU is short by the DMA steal, the CRTC is not),
   // which is the same conversion the sub-board clock uses.
   _advanceCrtc(dtCpu) {
-    if (!this._crtcUsable()) { this._vrtcPrev = false; return; }
+    if (!this._crtcUsable()) { if (globalThis.__unusable) globalThis.__unusable(); return; }
+    const lineT = this._crtcLineT();
+    if (!(lineT > 0)) return;
+    // Blanking converts 1:1 (the CRTC is not taking the bus); the display period
+    // carries the whole DMA steal.
     const period = this._crtcPeriodT();
-    if (!(period > 0)) return;
     const disp = this._crtcDispT();
-    // THE DMA STEAL IS NOT SPREAD EVENLY OVER THE PERIOD.
-    //
-    // The CRTC only takes the bus while it is fetching rows, i.e. during the
-    // DISPLAY period; through vertical blanking the CPU has the bus to itself
-    // and runs at full speed. `subRatio` is the frame-wide average
-    // (realFrame / frameT), so using it everywhere makes the CPU look slow
-    // during blanking and fast during display — a phase error that grows with
-    // how much DMA a title does. FIREHAWK, which is graphics-heavy, is exactly
-    // the shape that suffers (issue #72).
-    //
-    // Put the whole steal back where it happens: blanking converts 1:1, and
-    // the display period carries all of it.
     const steal = Math.max(0, 1 - this.frameT / (this.clockHz / this.frameHz));
-    const stealT = period * steal;                     // real T-states lost per period
-    const dispCpu = Math.max(1, disp - stealT);        // CPU time inside the display period
-    const k = this._crtcPhase >= disp ? 1 : disp / dispCpu;
-    this._crtcPhase += dtCpu * k;
-    while (this._crtcPhase >= period) this._crtcPhase -= period;
-    const vrtc = this._crtcPhase >= disp;
-    // VSYNC fires on the VRTC *rising edge* -- the end of the display period,
-    // not the end of blanking. The uPD3301's end-of-screen interrupt and the
-    // VRTC bit a program polls at port 40h are the same event on real hardware,
-    // so raising the interrupt a whole blanking period late makes a handler that
-    // reads port 40h see the opposite answer from what the interrupt implied.
-    // (docs/review/2026-08-10-*.md, and 54dc580 which first moved it here.)
-    if (vrtc && !this._vrtcPrev && (this.intMaskBits & 2)) this.intPending |= 1 << 1;
-    this._vrtcPrev = vrtc;
+    const k = this._crtcBlank ? 1 : disp / Math.max(1, disp - period * steal);
+    this._crtcNext -= dtCpu * k;
+    let guard = 8; // a geometry change can leave a stale countdown; do not spin
+    while (this._crtcNext <= 0 && guard-- > 0) {
+      if (this._crtcBlank) {          // StartDisplay: pin low, display the rows
+        this._vrtc = false;
+        this._crtcBlank = false;
+        this._crtcNext += disp;
+      } else {                        // ExpandLineEnd: pin high, VSYNC edge
+        this._vrtc = true;
+        this._crtcBlank = true;
+        this._crtcNext += period - disp;
+        if (this.intMaskBits & 2) { this.intPending |= 1 << 1; if (globalThis.__irq) globalThis.__irq(1); } // VSYNC, source 1
+      }
+    }
   }
+
 
   _dispFrac() {
     const r = this.crtc.rows, b = this.crtc.vblankRows;
@@ -996,7 +1000,7 @@ export class Pc8801Machine {
       // branching tree) the moment `_syncSub` was introduced.
       subClock: { mark: this._subMark, debt: this._subDebt, fdcAcc: this._fdcAcc },
       tInFrame: this.tInFrame, frame: this.frame, acc: this._acc ?? 0,
-      crtcPhase: this._crtcPhase, vrtcPrev: this._vrtcPrev,
+      vrtc: this._vrtc, crtcNext: this._crtcNext, crtcBlank: this._crtcBlank,
     };
     if (this.sub) {
       s.pio = snapObj(this.pio);
@@ -1061,7 +1065,7 @@ export class Pc8801Machine {
     this._subDebt = s.subClock?.debt ?? 0;
     this._fdcAcc = s.subClock?.fdcAcc ?? 0;
     this.tInFrame = s.tInFrame; this.frame = s.frame; this._acc = s.acc;
-    this._crtcPhase = s.crtcPhase ?? 0; this._vrtcPrev = s.vrtcPrev ?? false;
+    this._vrtc = s.vrtc ?? false; this._crtcNext = s.crtcNext ?? 0; this._crtcBlank = s.crtcBlank ?? false;
     if (this.sub && s.sub) {
       restoreObj(this.pio, s.pio);
       this.sub.cpu.setState(s.sub.cpu);
