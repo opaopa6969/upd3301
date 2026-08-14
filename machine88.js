@@ -568,7 +568,18 @@ export class Pc8801Machine {
       case 0x5e: this.gvramWindow = 2; return; // plane G
       case 0x5f: this.gvramWindow = -1; return; // main RAM back
       case 0x50: this.crtc.writeParam(v); return;
-      case 0x51: this.crtc.writeCommand(v); return;
+      case 0x51:
+        this.crtc.writeCommand(v);
+        // M88's CRTC restarts its event chain on these two commands, so the
+        // VRTC phase is anchored to them and not to power-on:
+        //   RESET         crtc.cpp:193 `DelEvent(sev); StartDisplay();`
+        //                 -> display begins immediately, VRTC low
+        //   START DISPLAY crtc.cpp:333 `DelEvent(sev);
+        //                 AddEvent(linetime*vretrace, StartDisplay)`
+        //                 -> a blanking period first, so VRTC is high right now
+        if ((v & 0xe0) === 0x00) this._crtcPhase = 0;
+        else if ((v & 0xe0) === 0x20) this._crtcPhase = this._crtcDispT();
+        return;
       case 0x70: this._txtwnd = (v & 0xff) << 8; return; // text window base (see readMem)
       case 0x78: this._txtwnd = (this._txtwnd + 0x100) & 0xff00; return; // text window += one page
       case 0x00: this._pcgDat = v; this._pcgWrite(); return;                          // PCG data
@@ -673,7 +684,15 @@ export class Pc8801Machine {
   _crtcLineT() {
     const lpc = this.crtc.linesPerChar || 1;
     const line200 = this.crtc.rows * lpc <= 200;
-    return (line200 ? 62.58e-6 : 40.28e-6) * this.clockHz * lpc;
+    // Round exactly the way M88 does, in its own 10 us tick, before converting:
+    //     linetime = int(6.258*1024 or 4.028*1024) * linesperchar / 1024
+    // Integer division, so the result is a whole number of 10 us ticks. Keeping
+    // this in floating point looks harmless (<1% off) but the whole point of
+    // this clock is that it drifts against the frame — a sub-tick error in the
+    // period is a phase error that accumulates.
+    const base = line200 ? Math.trunc(6.258 * 1024) : Math.trunc(4.028 * 1024);
+    const ticks = Math.trunc(base * lpc / 1024); // 10 us units, M88's `linetime`
+    return ticks * 1e-5 * this.clockHz;
   }
 
   _crtcPeriodT() { return this._crtcLineT() * ((this.crtc.rows + this.crtc.vblankRows) || 1); }
