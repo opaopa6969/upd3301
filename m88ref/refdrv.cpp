@@ -25,6 +25,13 @@ static void e6cdLog(unsigned pc, unsigned addr, unsigned val) {
 
 static int g_rdN = 0;
 static int g_traceOn = 0, g_traceN = 0, g_traceMax = 0;
+// M88_TRACE_R=1: record the Z80 refresh counter alongside each PC. R counts M1
+// cycles, so it is a direct fingerprint of "how many instructions has this CPU
+// actually executed" — and it stops advancing while the CRTC's DMA holds the
+// bus. Two emulators running the identical instruction stream can still差 here
+// if they steal cycles differently, which is exactly what a PC-only trace hides.
+static int g_traceR = 0;
+static unsigned char* g_rbuf = nullptr;
 static unsigned* g_pcbuf = nullptr;
 void* g_mainCpu = nullptr;
 void (*g_pcHook)(unsigned pc) = nullptr;
@@ -40,7 +47,13 @@ static void pcLog(unsigned pc) {
     else if (g_armFrame >= 0 && g_frame >= g_armFrame) g_traceOn = 1;
     else return;
   }
-  if (g_traceN < g_traceMax) g_pcbuf[g_traceN++] = pc;
+  if (g_traceN < g_traceMax) {
+    if (g_traceR && g_rbuf && g_mainCpu) {
+      const Z80Reg& rg = ((Z80C*)g_mainCpu)->GetReg();
+      g_rbuf[g_traceN] = (unsigned char)((rg.rreg & 0x7f) | (rg.rreg7 & 0x80));
+    }
+    g_pcbuf[g_traceN++] = pc;
+  }
 }
 
 // Range write-watch, the M88-side mirror of tools/watch-write.mjs.
@@ -174,6 +187,7 @@ int main(int argc, char** argv) {
     g_traceMax = (int)((getenv("M88_TRACE_MAX")) ? atol(getenv("M88_TRACE_MAX")) : 200000);
     if (g_armFrame < 0 && g_armPc < 0 && g_armFdc == 0) g_armFrame = 0;  // default: from boot
     g_pcbuf = new unsigned[g_traceMax];
+    if (getenv("M88_TRACE_R")) { g_traceR = 1; g_rbuf = new unsigned char[g_traceMax]; }
     g_pcHook = pcLog;
     printf("# trace -> %s  (armFrame=%d armPc=%ld armFdc=%d max=%d)\n",
            tracePath, g_armFrame, g_armPc, g_armFdc, g_traceMax);
@@ -216,6 +230,11 @@ int main(int argc, char** argv) {
     else {
       unsigned prev = 0xffffffff;
       long n = 0;
+      if (g_traceR) {
+        // no dedup: R changes every instruction, so a repeat of the same PC is
+        // still a distinct sample
+        for (int i = 0; i < g_traceN; i++) { fprintf(tf, "%04x %02x\n", g_pcbuf[i], g_rbuf[i]); n++; }
+      } else
       for (int i = 0; i < g_traceN; i++) { if (g_pcbuf[i] != prev) { fprintf(tf, "%04x\n", g_pcbuf[i]); prev = g_pcbuf[i]; n++; } }
       fclose(tf);
       printf("# traced %d instrs (%ld after dedup) -> %s\n", g_traceN, n, tracePath);
