@@ -577,8 +577,13 @@ export class Pc8801Machine {
         //   START DISPLAY crtc.cpp:333 `DelEvent(sev);
         //                 AddEvent(linetime*vretrace, StartDisplay)`
         //                 -> a blanking period first, so VRTC is high right now
-        if ((v & 0xe0) === 0x00) this._crtcPhase = 0;
-        else if ((v & 0xe0) === 0x20) this._crtcPhase = this._crtcDispT();
+        // Move the phase, but do NOT let that count as a VRTC edge: M88 only
+        // reschedules its event here, it never calls `bus->Out(vrtc, …)`. Without
+        // syncing `_vrtcPrev` the jump looks like a rising edge and fires a spare
+        // VSYNC every time the program touches the command port — FIREHAWK ends up
+        // spinning in its RST 18h handler (9,257 hits in 60 frames).
+        if ((v & 0xe0) === 0x00) { this._crtcPhase = 0; this._vrtcPrev = false; }
+        else if ((v & 0xe0) === 0x20) { this._crtcPhase = this._crtcDispT(); this._vrtcPrev = true; }
         return;
       case 0x70: this._txtwnd = (v & 0xff) << 8; return; // text window base (see readMem)
       case 0x78: this._txtwnd = (this._txtwnd + 0x100) & 0xff00; return; // text window += one page
