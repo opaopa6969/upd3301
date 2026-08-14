@@ -85,12 +85,38 @@ export class Pc8801Machine {
       this.sub.fdc.eocTiming = true;
     }
 
-    // power-on DRAM reads mostly-high on the real board, and the boot ROM
-    // *depends* on it: the drive-presence tables at EF2D/EF35 are only
-    // written by an option ROM's hook — absent one, bit4 of the power-on
-    // garbage must read 1 ("no drive") or the ROM invents phantom drives
-    // and boots from them instead of the sub-system.
-    this.ram = new Uint8Array(0x10000).fill(0xff);
+    // POWER-ON DRAM IS A PATTERN, NOT A CONSTANT.
+    //
+    // We used to fill main RAM with 0xff, on the reasoning that DRAM reads
+    // mostly-high on the real board and the boot ROM depends on it (the
+    // drive-presence tables at EF2D/EF35 are only written by an option ROM's
+    // hook — absent one, bit4 of the power-on garbage must read 1 or the ROM
+    // invents phantom drives and boots from them instead of the sub-system).
+    // The premise is right and the constant is wrong: real DRAM comes up in a
+    // checkerboard, and M88 models it (`Memory::SetRAMPattern`, memory.cpp):
+    //
+    //     for (i = 0; i < length; i += 0x80, ram += 0x80) {
+    //         uint8 b = ((i >> 7) ^ i) & 0x100 ? 0x00 : 0xff;
+    //         memset(ram,        b, 0x40);
+    //         memset(ram + 0x40, ~b, 0x40);
+    //         ram[0x7f] = b;
+    //     }
+    //     ram[-1] = 0;
+    //
+    // EF2D/EF35 land in a 0xff half either way, so the boot ROM still sees "no
+    // drive" — that reasoning survives. What does not survive is any game that
+    // reads a word it never wrote: with a constant fill it can only ever see
+    // 0xffff, and Yaksa's `LD H,(IX+0) / LD L,(IX+1) / OR H / JR NZ` at 7120
+    // takes the other branch under M88 (issue #69).
+    this.ram = new Uint8Array(0x10000);
+    for (let i = 0; i < 0x10000; i += 0x80) {
+      const b = (((i >> 7) ^ i) & 0x100) ? 0x00 : 0xff;
+      this.ram.fill(b, i, i + 0x40);
+      this.ram.fill(~b & 0xff, i + 0x40, i + 0x80);
+      this.ram[i + 0x7f] = b;
+    }
+    this.ram[0xffff] = 0; // M88's `ram[-1] = 0` — the last byte of the fill
+    this.ram[0xff33] = 0; // M88 comments this one "PACMAN 対策"
     this.gvram = [new Uint8Array(GVRAM_SIZE), new Uint8Array(GVRAM_SIZE), new Uint8Array(GVRAM_SIZE)];
     // Dedicated 4 KB TEXT VRAM (mkII SR V2). It is PHYSICALLY separate from main
     // RAM: the CRTC's DMA always reads this, while the CPU sees it at 0xF000-
