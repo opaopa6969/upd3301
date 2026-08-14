@@ -266,6 +266,23 @@ export class Pc8801Machine {
     this.subRatio = (clockHz / frameHz) / this.frameT;
     this.tInFrame = 0;
     this.frame = 0;
+    // THE CRTC KEEPS ITS OWN CLOCK, AND IT DOES NOT DIVIDE THE FRAME EVENLY.
+    //
+    // VRTC used to be derived as "past dispFrac of this frame", which pins the
+    // blanking phase to the frame boundary forever. The real chip has no notion
+    // of our frame: it counts character rows at its own line rate and raises
+    // VRTC when the displayed rows are done. M88 models that with scheduler
+    // events (crtc.cpp: `bus->Out(vrtc,1)` then `AddEvent(linetime*vretrace,
+    // StartDisplay)`), and its CRTC period -- linetime x (rows + vretrace) --
+    // is about 1% SHORTER than its frame period (1,773 vs 1,792 ticks). So in
+    // M88 the VRTC phase drifts against the frame by ~1% per frame.
+    //
+    // That drift is observable. Yaksa waits for the vertical edge with
+    // `IN A,(40h) / AND 20h / JR NZ`; over 60 frames M88 spins that loop 535
+    // times and we spun it 207 -- and the first divergence in the entire run
+    // (identical for 7,638 instructions, PC *and* R) is exactly there. See #72.
+    this._crtcPhase = 0; // position inside the CRTC's own period, in REAL T-states
+    this._vrtcPrev = false;
     this._nomFrameT = clockHz / frameHz; // nominal (constant) frame length for a monotonic tape clock
 
     this.cpu = new Z80({
@@ -437,7 +454,9 @@ export class Pc8801Machine {
       // for the edge, or a "draw during blanking" window) sees the wrong budget
       // with a constant. M88 derives the same window from the CRTC
       // (`crtc.cpp`: retrace runs `linetime * vretrace`).
-      const vrtc = this.tInFrame > this.frameT * this._dispFrac();
+      const vrtc = this._crtcUsable()
+        ? this._crtcPhase >= this._crtcDispT()          // the CRTC's own clock, see _advanceCrtc
+        : this.tInFrame > this.frameT * this._dispFrac(); // chip not programmed yet
       // b2 = CMT carrier-detect: high while the tape is parked on a MARK
       let cmt = 0;
       if (this.tape) { this.tape.pump(this._tapeNow()); cmt = this.tape.carrier() ? 0x04 : 0; }
@@ -647,6 +666,45 @@ export class Pc8801Machine {
   // Fraction of the frame spent displaying, from what the CRTC was actually
   // programmed with. Both the polled VRTC bit and the VSYNC interrupt derive
   // from this one number so they can never disagree.
+  // One character row of CRTC time, in real T-states. M88 (crtc.cpp:282):
+  //     linetime = (line200 ? 6.258 : 4.028) * linesperchar   [10 us units]
+  // i.e. one raster is 62.58 us on a 200-line (15 kHz) screen and 40.28 us on a
+  // 400-line (24 kHz) one. `line200` is the screen geometry, not a strap.
+  _crtcLineT() {
+    const lpc = this.crtc.linesPerChar || 1;
+    const line200 = this.crtc.rows * lpc <= 200;
+    return (line200 ? 62.58e-6 : 40.28e-6) * this.clockHz * lpc;
+  }
+
+  _crtcPeriodT() { return this._crtcLineT() * ((this.crtc.rows + this.crtc.vblankRows) || 1); }
+  _crtcDispT() { return this._crtcLineT() * this.crtc.rows; }
+
+  // Before the boot ROM programs the CRTC there is no geometry to count rows
+  // with (rows = 0 would make the display period zero, i.e. VRTC stuck high).
+  // Until then, keep the old frame-anchored derivation.
+  _crtcUsable() { return this.crtc.rows > 0 && this.crtc.linesPerChar > 0; }
+
+  // Advance the CRTC's own clock by `dtCpu` CPU T-states. `subRatio` converts
+  // CPU time to real time (the CPU is short by the DMA steal, the CRTC is not),
+  // which is the same conversion the sub-board clock uses.
+  _advanceCrtc(dtCpu) {
+    if (!this._crtcUsable()) { this._vrtcPrev = false; return; }
+    const period = this._crtcPeriodT();
+    if (!(period > 0)) return;
+    const disp = this._crtcDispT();
+    this._crtcPhase += dtCpu * this.subRatio;
+    while (this._crtcPhase >= period) this._crtcPhase -= period;
+    const vrtc = this._crtcPhase >= disp;
+    // VSYNC fires on the VRTC *rising edge* -- the end of the display period,
+    // not the end of blanking. The uPD3301's end-of-screen interrupt and the
+    // VRTC bit a program polls at port 40h are the same event on real hardware,
+    // so raising the interrupt a whole blanking period late makes a handler that
+    // reads port 40h see the opposite answer from what the interrupt implied.
+    // (docs/review/2026-08-10-*.md, and 54dc580 which first moved it here.)
+    if (vrtc && !this._vrtcPrev && (this.intMaskBits & 2)) this.intPending |= 1 << 1;
+    this._vrtcPrev = vrtc;
+  }
+
   _dispFrac() {
     const r = this.crtc.rows, b = this.crtc.vblankRows;
     return r > 0 ? r / (r + b) : 0.86;
@@ -683,10 +741,6 @@ export class Pc8801Machine {
     // so without these 10 ticks per frame the machine halts forever
     const timerPeriod = this.frameT / 10;
     let nextTimer = this.tInFrame + timerPeriod;
-    // The display-period end, in T-states — the same boundary port 40h's VRTC
-    // bit is derived from, so the interrupt and the polled bit agree.
-    const vsyncAt = this.frameT * this._dispFrac();
-    this._vsyncFired = false;
     // raster-accurate text fetch: space the CRTC's per-row DMA + palette
     // snapshot across the frame, so mid-frame VRAM/palette rewrites land on the
     // rows actually scanning at that moment.
@@ -700,6 +754,7 @@ export class Pc8801Machine {
       while (this.tInFrame < target) {
         const cyc = this.cpu.step();
         this.tInFrame += cyc;
+        this._advanceCrtc(cyc);
         while (this._crtcRow < dispRows && this.tInFrame >= this._crtcRow * rowT) {
           this.crtc.fetchRow(this._crtcRow);
           this.rowPal.set(this.palette, this._crtcRow * 24);
@@ -736,11 +791,7 @@ export class Pc8801Machine {
         // µPD3301 end-of-screen timing, and a behavioural analysis that put
         // "the phase model of time" ahead of the 8255 as the shared root of
         // the remaining divergences. (docs/review/2026-08-10-*.md)
-        if (!this._vsyncFired && this.tInFrame >= vsyncAt) {
-          this._vsyncFired = true;
-          if (this.intMaskBits & 2) this.intPending |= 1 << 1; // VSYNC, source 1
-        }
-        this._serviceInterrupts();
+        this._serviceInterrupts(); // VSYNC is raised by _advanceCrtc, on the VRTC edge
       }
       if (this.sub) {
         // The sub runs at REAL TIME here — one slice of main T-states buys
@@ -905,6 +956,7 @@ export class Pc8801Machine {
       // branching tree) the moment `_syncSub` was introduced.
       subClock: { mark: this._subMark, debt: this._subDebt, fdcAcc: this._fdcAcc },
       tInFrame: this.tInFrame, frame: this.frame, acc: this._acc ?? 0,
+      crtcPhase: this._crtcPhase, vrtcPrev: this._vrtcPrev,
     };
     if (this.sub) {
       s.pio = snapObj(this.pio);
@@ -969,6 +1021,7 @@ export class Pc8801Machine {
     this._subDebt = s.subClock?.debt ?? 0;
     this._fdcAcc = s.subClock?.fdcAcc ?? 0;
     this.tInFrame = s.tInFrame; this.frame = s.frame; this._acc = s.acc;
+    this._crtcPhase = s.crtcPhase ?? 0; this._vrtcPrev = s.vrtcPrev ?? false;
     if (this.sub && s.sub) {
       restoreObj(this.pio, s.pio);
       this.sub.cpu.setState(s.sub.cpu);
