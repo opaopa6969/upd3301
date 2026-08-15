@@ -38,9 +38,9 @@ const ROMDIR = args[4] || '/mnt/c/var/emulator/エミュレーター本体/PC88/
 const rd = (p) => new Uint8Array(readFileSync(p));
 // Load the ROM set the way M88 does (combined pc88.rom first) so both sides run
 // the same bytes — see docs/m88-comparison.md.
-const { main, ext, sub } = loadRomSet(ROMDIR);
+const { main, ext, sub, n80 } = loadRomSet(ROMDIR);
 
-const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
+const m = new Pc8801Machine({ main, ext, sub, n80, mode: 'n88' });
 if (FORCE !== 'normal') Object.defineProperty(m, '_tvramOn', { get: () => FORCE === 'on' });
 mountD88(m, rd(resolve(disk))); // same machine as the sweep — tools/mount.mjs
 

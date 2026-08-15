@@ -51,7 +51,7 @@ const rd = (p) => new Uint8Array(readFileSync(p));
 // Load the ROM set exactly the way M88 does — it prefers a combined pc88.rom
 // and only falls back to the separate files, and mixing the two means the two
 // emulators run different revisions (see docs/m88-comparison.md).
-const { main, ext, sub } = loadRomSet(ROMDIR);
+const { main, ext, sub, n80 } = loadRomSet(ROMDIR);
 const hex = (v, w = 2) => (v >>> 0).toString(16).padStart(w, '0');
 
 function fingerprint(Klass, bytes) {

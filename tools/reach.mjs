@@ -32,8 +32,8 @@ const ROMDIR = opt('romdir', '/mnt/c/var/emulator/エミュレーター本体/PC
 const REFDRV = opt('refdrv', 'm88ref/_m88m_build/M88M/refdrv');
 const OURS_ONLY = argv.includes('--ours-only');
 
-const { main, ext, sub } = loadRomSet(ROMDIR);
-const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
+const { main, ext, sub, n80 } = loadRomSet(ROMDIR);
+const m = new Pc8801Machine({ main, ext, sub, n80, mode: 'n88' });
 mountD88(m, readFileSync(resolve(disk))); // same machine as the sweep — tools/mount.mjs
 
 // Record the set of addresses we execute, and when each was first reached.

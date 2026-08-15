@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="13c9a5b5-592b-416e-83e8-2c79924739c7" name="変更" comment="">
+      <change beforePath="$PROJECT_DIR$/m88ref/_m88m_build/M88M/src/devices/Z80c.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/m88ref/_m88m_build/M88M/src/devices/Z80c.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/m88ref/_m88m_build/M88M/src/pc88/fdc.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/m88ref/_m88m_build/M88M/src/pc88/fdc.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/m88ref/_m88m_build/M88M/src/pc88/subsys.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/m88ref/_m88m_build/M88M/src/pc88/subsys.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xterm/dist/ttyd-crt.html" beforeDir="false" afterPath="$PROJECT_DIR$/xterm/dist/ttyd-crt.html" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "associatedIndex": 5
+}]]></component>
+  <component name="ProjectId" id="3HAzIxcXF5GP9tsRuxPYaAOhE6e" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "git-widget-placeholder": "main",
+    "kotlin-language-version-configured": "true"
+  }
+}]]></component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-jdk-30f59d01ecdd-cffe25b9f5b3-intellij.indexing.shared.core-IU-253.28294.334" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="デフォルトタスク">
+      <changelist id="13c9a5b5-592b-416e-83e8-2c79924739c7" name="変更" comment="" />
+      <created>1785325586075</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1785325586075</updated>
+    </task>
+    <servers />
+  </component>
+</project>

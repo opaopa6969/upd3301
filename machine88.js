@@ -306,6 +306,34 @@ export class Pc8801Machine {
   readMem(a) {
     a &= 0xffff;
     if (a < 0x8000 && this.romEnabled) {
+      // PORT 31h BIT 2 SWAPS IN THE N80 ROM WITHOUT LEAVING N88 MODE.
+      //
+      //     Memory::Update00R:  read = rom + (port31 & 4 ? n80 : n88);
+      //     Memory::Update60R:  ROM at 6000-7fff only when (port31 & 6) == 0
+      //
+      // So bit 2 is not "the machine is an N80" — it is a live bank select over
+      // 0000-5fff, and it leaves 6000-7fff as plain RAM. We honoured the bit in
+      // the text-window test below and nowhere else, so a game that switched to
+      // the N80 ROM kept reading N88 bytes.
+      //
+      // Games use it as a probe, because the two ROMs differ in their first
+      // instruction: N88 opens `LD SP,0E1A0h`, N80 opens `LD SP,0FFFFh`. Reading
+      // the word at 0x0002 therefore says which one is mapped. オホーツクに消ゆ
+      // does exactly that, and treats "not FFFF" as fatal:
+      //
+      //     c000  LD HL,(0002h)      ; the LD SP operand
+      //     c003  INC HL
+      //     c004  LD A,H / OR L
+      //     c006  JR NZ,0C040h       ; not the N80 ROM -> give up
+      //     c040  LD A,04h / OUT (31h),A / RST 00h   ; select N80, reboot, retry
+      //
+      // Reading N88 bytes made the check fail forever: the title rebooted
+      // through this every ~40 frames for the whole run, clearing GVRAM each
+      // time, and never got past its loader.
+      if (!this.n80mode && (this._port31 & 4) && this.romN80) {
+        if (a < 0x6000) return this.romN80[a] ?? 0xff;
+        return this.ram[a]; // Update60R leaves 6000-7fff as RAM here
+      }
       if (a >= 0x6000 && this.extMapped && this.romExt && !this.n80mode) {
         const bank = this._port32 & 3; // EROMSL
         return this.romExt[bank * 0x2000 + (a - 0x6000)] ?? 0xff;

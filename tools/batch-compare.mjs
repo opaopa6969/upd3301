@@ -50,11 +50,11 @@ const rd = (p) => new Uint8Array(readFileSync(p));
 // only falls back to n88.rom/disk.rom; reading the separate files here while M88
 // read the combined image had the two sides running *different ROM revisions*
 // (2021 of 8192 bytes differ in the sub ROM alone). See docs/m88-comparison.md.
-const { main, ext, sub } = loadRomSet(ROMDIR);
+const { main, ext, sub, n80 } = loadRomSet(ROMDIR);
 
 function ours(path) {
   try {
-    const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
+    const m = new Pc8801Machine({ main, ext, sub, n80, mode: 'n88' });
     const imgs = mountD88(m, rd(path)); // image0→drive0, image1→drive1, both read-only — tools/mount.mjs
     for (let i = 0; i < FRAMES; i++) m.stepFrame();
     // count text RAM only when the text plane is actually displayed (port 53h

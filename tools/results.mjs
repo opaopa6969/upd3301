@@ -31,13 +31,13 @@ const TARGET = process.argv[3] || '/mnt/c/var/emulator/PC8801';
 const FRAMES = Number(process.argv[4] || 1500);
 const REFDRV = resolve(HERE, '../m88ref/_m88m_build/M88M/refdrv');
 
-const { main, ext, sub } = loadRomSet(ROMDIR);
+const { main, ext, sub, n80 } = loadRomSet(ROMDIR);
 
 // Ours: tally the seven-byte result phases the FDC hands back. `_results` is the
 // one funnel every command ends through, so wrapping it here beats threading a
 // hook through the core — upd765.js stays free of instrumentation.
 function ours(path) {
-  const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
+  const m = new Pc8801Machine({ main, ext, sub, n80, mode: 'n88' });
   mountD88(m, readFileSync(path)); // same mount as refdrv — see tools/mount.mjs
   const f = m.sub.fdc;
   const seen = [];

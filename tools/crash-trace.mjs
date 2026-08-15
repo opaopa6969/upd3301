@@ -35,10 +35,10 @@ const rd = (p) => new Uint8Array(readFileSync(p));
 // Load the ROM set exactly the way M88 does — it prefers a combined pc88.rom
 // and only falls back to the separate files, and mixing the two means the two
 // emulators run different revisions (see docs/m88-comparison.md).
-const { main, ext, sub } = loadRomSet(ROMDIR);
+const { main, ext, sub, n80 } = loadRomSet(ROMDIR);
 
 function boot() {
-  const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
+  const m = new Pc8801Machine({ main, ext, sub, n80, mode: 'n88' });
   mountD88(m, rd(disk)); // same machine as the sweep — tools/mount.mjs
   return m;
 }
