@@ -408,18 +408,81 @@ export class Upd765 {
     this._toExecRead(sec.data);
   }
 
+  // READ DIAGNOSTIC streams the whole track from the index hole and never hunts
+  // for the sector you named. The IDR is not a search key here — it is a
+  // *comparison*: the chip checks the ID under the head against it and raises
+  // ST1.ND if they did not match, while the command still ends NORMALLY (IC=00).
+  // M88 keeps that split because FDU::ReadDiag returns a bare ST1_ND with no
+  // ST0_AT (fdu.cpp:434) and CmdReadDiagnostic only bails early on `result &
+  // ST0_AT`. So `ST[00 04]` — a normal termination carrying ND — is a legal and
+  // common answer, and it is exactly how a loader asks "what is really formatted
+  // on this track?".
+  //
+  // CHOPLIFT issues `42 00 19 00 01 02 10 13 ff` on all 40 cylinders: it asks
+  // for C=25 N=2 while the track holds C=0 N=1, so nothing can ever match and
+  // M88 answers ST[00 04] / ST[04 04] on all 80 commands. We answered a clean
+  // ST[00 00] and reported the *found sector's* id (0/0/1/1) where M88 reports
+  // the requested IDR walked forward by IDIncrement (C25 H0 R2 N2).
   _startReadTrack() {
     const [, , c, h, r, n] = this.cmd;
     const d = this.drives[this.us];
     const trk = d.disk?.tracks[d.cyl * 2 + this.hd];
+    // MakeDiagData returns ST0_AT|ST1_ND when it laid down no bytes at all —
+    // that one IS an abnormal termination, unlike the id-mismatch above.
     if (!trk || !trk.sectors.length) return this._rwError(0x04, c, h, r, n);
-    // stream every sector from the index hole, ignoring id match
-    const total = trk.sectors.reduce((a, s) => a + s.size, 0);
+    const offs = [];
+    let total = 0;
+    for (const s of trk.sectors) { offs.push(total); total += s.size; }
     const buf = new Uint8Array(total);
-    let o = 0;
-    for (const s of trk.sectors) { buf.set(s.data, o); o += s.size; }
-    this._multi = { c, h, r, n, eot: r, sec: trk.sectors[0] };
+    for (let i = 0; i < trk.sectors.length; i++) buf.set(trk.sectors[i].data, offs[i]);
+    // `sec: null` on purpose: a diagnostic read reports neither the sector's
+    // stored status nor its id, so none of `_endRw`'s per-sector logic applies.
+    this._multi = {
+      c, h, r, n, eot: r, sec: null,
+      // step size: `xbyte = idr.n ? 0x80 << Min(8, idr.n) : Min(dtl, 0x80)` —
+      // with N=0 the length comes from DTL, which is the one case where the
+      // command's last parameter is not just padding.
+      diag: {
+        sectors: trk.sectors, offs, c, h, r, n, eot: this.cmd[6],
+        // (clamped to 1: DTL=0 would make the replay below never advance)
+        step: n ? 0x80 << Math.min(8, n) : Math.max(1, Math.min(this.cmd[8], 0x80)),
+      },
+    };
     this._toExecRead(buf);
+  }
+
+  // Replay M88's stepping to find where the command stopped: which physical
+  // sector sat under the head, and what the IDR had walked to.
+  //
+  //     case executephase:   ReadDiagnostic();                 // compare + serve
+  //         xbyte = idr.n ? 0x80 << Min(8, idr.n) : Min(dtl, 0x80);
+  //     case execreadphase:  if (!IDIncrement()) ...            // advance R
+  //
+  // Two details decide the answer. A step serves `0x80 << N` bytes taken from
+  // the *command's* N, not the sector's — so on CHOPLIFT (N=2 over 256-byte
+  // sectors) one step spans two sectors. And ReadDiag snaps the cursor
+  // *forward* to the next sector boundary before comparing, wrapping back to
+  // the index hole past the last one.
+  _diagState(m) {
+    const g = m.diag;
+    const id = { c: g.c, h: g.h, r: g.r, n: g.n };
+    let k = 0, cur = 0, left = this.execPos | 0; // bytes the host actually took
+    for (;;) {
+      while (k < g.offs.length && g.offs[k] < cur) k++;
+      if (k >= g.offs.length) k = 0;   // past the last sector → back to the index hole
+      cur = g.offs[k];
+      if (left < g.step) break;        // the host stopped inside this step
+      left -= g.step;
+      cur += g.step;
+      // IDIncrement runs once the host has drained the step, before the next
+      // one is served — which is why M88 reports R=2 after a single 512-byte
+      // step, not R=1.
+      if (id.r === g.eot) { id.r = 1; id.c = (id.c + 1) & 0xff; }
+      else id.r = (id.r + 1) & 0xff;
+    }
+    const s = g.sectors[k];
+    const nd = (s.c === id.c && s.h === id.h && s.r === id.r && s.n === id.n) ? 0 : 0x04;
+    return { id, nd };
   }
 
   _startWrite(deleted) {
@@ -563,6 +626,20 @@ export class Upd765 {
     // D88 status 0xB0 = data CRC error → ST1 DE, 0xF0 = no data → ST1 ND
     const stHd = m.stHd !== undefined ? m.stHd : this.hd; // see _execDone
     let xst1 = st1, xst2 = st2, st0 = this.us | (stHd << 2) | st0extra;
+    if (m.diag) {
+      // READ DIAGNOSTIC reports the requested IDR, not a sector it found — see
+      // _startReadTrack. ShiftToResultPhase7 prints idr.c/h/r/n either way; for
+      // every other command IDIncrement has already walked idr to the right
+      // place, but a diagnostic read never had a sector to walk from.
+      const { id, nd } = this._diagState(m);
+      // End of Cylinder *replaces* the status rather than adding to it —
+      // `case timerphase: result = ST0_AT | ST1_EN;` is an assignment, so the
+      // id-comparison verdict from the last step is discarded. Only a normal
+      // ending carries ND.
+      const keepNd = (xst1 & 0x80) ? 0 : nd;
+      this._results([st0, xst1 | keepNd, xst2, id.c, id.h, id.r, id.n]);
+      return;
+    }
     if (sec && sec.status) {
       st0 |= ST0_AT;
       if (sec.status === 0xa0 || sec.status === 0xb0) { xst1 |= 0x20; xst2 |= (sec.status === 0xb0 ? 0x20 : 0); }
