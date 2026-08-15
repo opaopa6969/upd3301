@@ -387,3 +387,33 @@ test('READ DIAGNOSTIC: End of Cylinder replaces the verdict rather than adding t
   assert.equal(res[1] & 0x80, 0x80, 'ST1.EN should be set');
   assert.equal(res[1] & 0x04, 0, 'ST1.ND must NOT survive the overwrite');
 });
+
+test('the execution phase has a byte period: RQM/INT do not return instantly', () => {
+  // 250 kbps MFM is one byte per 32 µs, and in non-DMA mode the chip raises INT
+  // once per byte. The gap is not cosmetic — the PC-8801 sub ROM and the
+  // RAM-resident drivers games load into the sub both pace themselves on it with
+  // `EI / HALT` between bytes. With the gap at zero the HALT falls straight
+  // through and the driver overwrites the 8255 data latch before the main CPU
+  // can sample it (Wizardry II/III: the main read every odd byte twice and none
+  // of the even ones, then executed the corrupted loader).
+  const f = new Upd765();
+  f.byteTiming = true;
+  f.insertDisk(0, twoSided());
+  cmd(f, [0x40 | 0x06, 0x00, 0, 0, 1, 1, 3, 0x0e, 0xff]); // MFM READ DATA
+  assert.equal(f.readStatus() & 0x80, 0x80, 'the first byte is ready at once');
+  f.read();
+  assert.equal(f.readStatus() & 0x80, 0, 'RQM drops until the next byte arrives');
+  assert.equal(f.int, false, 'and so does INT — this is what the sub sleeps on');
+  f.tick(f.bytePeriod);
+  assert.equal(f.readStatus() & 0x80, 0x80, 'one byte period later it is back');
+  assert.equal(f.int, true, 'the interrupt that wakes the sub CPU');
+});
+
+test('the byte period is opt-in: a board with no clock still transfers', () => {
+  // x68fdd.js never calls tick(); a byte that only arrives on a tick would
+  // never arrive there at all.
+  const f = new Upd765();
+  f.insertDisk(0, twoSided());
+  const { data } = readData(f, { mt: 0, hd: 0, r: 1, n: 1, eot: 1 });
+  assert.equal(data, 256, 'the whole sector still transfers with no clock');
+});
