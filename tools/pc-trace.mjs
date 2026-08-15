@@ -22,7 +22,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { Pc8801Machine } from '../machine88.js';
-import { parseD88All } from '../d88.js';
+import { mountD88 } from './mount.mjs';
 import { loadRomSet } from './romset.mjs';
 
 const argv = process.argv.slice(2);
@@ -48,7 +48,7 @@ const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
 // what changes the trace (see docs/m88-comparison.md).
 const TV = opt('tvram', 'normal');
 if (TV !== 'normal') Object.defineProperty(m, '_tvramOn', { get: () => TV === 'on' });
-parseD88All(rd(resolve(disk))).forEach((img, u) => { if (u < 2) m.insertDisk(u, img); });
+mountD88(m, rd(resolve(disk))); // same machine as the sweep — tools/mount.mjs
 
 const SUB = (opt('cpu', 'main') || 'main').startsWith('s');
 if (SUB && !m.sub) { console.error('no sub CPU on this machine (needs a DISK.ROM)'); process.exit(2); }

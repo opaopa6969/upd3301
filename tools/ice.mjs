@@ -78,7 +78,7 @@ const MACHINES = {
     buckets: PC88_BUCKETS,
     async build() {
       const { Pc8801Machine } = await import('../machine88.js');
-      const { parseD88All } = await import('../d88.js');
+      const { mountD88 } = await import('./mount.mjs');
       const { loadRomSet } = await import('./romset.mjs');
       const { main, ext, sub } = loadRomSet(opt('romdir', DEFAULT_ROMDIR));
       const m = new Pc8801Machine({ main, ext, sub, mode: opt('mode', 'n88') });
@@ -87,7 +87,7 @@ const MACHINES = {
       const tv = opt('tvram', 'normal');
       if (tv !== 'normal') Object.defineProperty(m, '_tvramOn', { get: () => tv === 'on' });
       const disk = opt('disk') ?? pos(0);
-      if (disk) parseD88All(new Uint8Array(readFileSync(resolve(disk)))).forEach((img, u) => { if (u < 2) m.insertDisk(u, img); });
+      if (disk) mountD88(m, readFileSync(resolve(disk))); // same machine as the sweep — tools/mount.mjs
       return m;
     },
     // The one-line "where is this machine" fingerprint the M88 comparison used.

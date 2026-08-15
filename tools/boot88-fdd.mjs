@@ -2,7 +2,7 @@
 // usage: node tools/boot88-fdd.mjs [frames] [path.d88]
 import { readFile } from 'node:fs/promises';
 import { Pc8801Machine } from '../machine88.js';
-import { parseD88All } from '../d88.js';
+import { mountD88 } from './mount.mjs';
 
 const frames = Number(process.argv[2] ?? 240);
 const d88path = process.argv[3] ?? null;
@@ -17,8 +17,7 @@ for (let i = 0; i < 4; i++) {
 const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
 
 if (d88path) {
-  const disks = parseD88All(new Uint8Array(await readFile(d88path)));
-  m.insertDisk(0, disks[0]);
+  const disks = mountD88(m, await readFile(d88path)); // same machine as the sweep — tools/mount.mjs
   console.log(`mounted: "${disks[0].name}" (${disks.length} disk(s) in file)`);
 }
 

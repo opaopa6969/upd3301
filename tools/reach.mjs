@@ -16,7 +16,7 @@ import { execFileSync } from 'child_process';
 import { resolve } from 'path';
 import { tmpdir } from 'os';
 import { Pc8801Machine } from '../machine88.js';
-import { parseD88All } from '../d88.js';
+import { mountD88 } from './mount.mjs';
 import { loadRomSet } from './romset.mjs';
 import { reachDiff, format } from '../reachdiff.js';
 
@@ -34,7 +34,7 @@ const OURS_ONLY = argv.includes('--ours-only');
 
 const { main, ext, sub } = loadRomSet(ROMDIR);
 const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
-parseD88All(new Uint8Array(readFileSync(resolve(disk)))).forEach((img, u) => { if (u < 2) m.insertDisk(u, img); });
+mountD88(m, readFileSync(resolve(disk))); // same machine as the sweep — tools/mount.mjs
 
 // Record the set of addresses we execute, and when each was first reached.
 const ours = new Set();

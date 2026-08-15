@@ -25,7 +25,7 @@
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { Pc8801Machine } from '../machine88.js';
-import { parseD88All } from '../d88.js';
+import { mountD88 } from './mount.mjs';
 import { loadRomSet } from './romset.mjs';
 
 const argv = process.argv.slice(2);
@@ -51,7 +51,7 @@ const rd = (p) => new Uint8Array(readFileSync(p));
 const { main, ext, sub } = loadRomSet(ROMDIR);
 
 const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
-parseD88All(rd(resolve(disk))).forEach((img, u) => { if (u < 2) m.insertDisk(u, img); });
+mountD88(m, rd(resolve(disk))); // same machine as the sweep — tools/mount.mjs
 
 const hex = (v, w = 2) => (v >>> 0).toString(16).padStart(w, '0');
 const c = m.cpu;
