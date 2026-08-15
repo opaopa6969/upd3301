@@ -288,7 +288,7 @@ export class Pc8801Machine {
     // phase on every CRTC command then pushed the next rising edge a whole
     // period away — FIREHAWK ended up with 0.18 VSYNC per frame instead of 1.0.
     this._vrtc = false;      // the pin
-    this._crtcNext = 0;      // real T-states until the next chain event
+    this._crtcNext = -1;     // <0 = seed from the display period on the first step
     this._crtcBlank = false; // which half of the chain we are in
     this._nomFrameT = clockHz / frameHz; // nominal (constant) frame length for a monotonic tape clock
 
@@ -698,7 +698,7 @@ export class Pc8801Machine {
   // i.e. one raster is 62.58 us on a 200-line (15 kHz) screen and 40.28 us on a
   // 400-line (24 kHz) one. `line200` is the screen geometry, not a strap.
   _crtcLineT() {
-    const lpc = this.crtc.linesPerChar || 1;
+    const lpc = this.crtc.linesPerChar || 16;
     const line200 = this.crtc.rows * lpc <= 200;
     // Round exactly the way M88 does, in its own 10 us tick, before converting:
     //     linetime = int(6.258*1024 or 4.028*1024) * linesperchar / 1024
@@ -711,19 +711,31 @@ export class Pc8801Machine {
     return ticks * 1e-5 * this.clockHz;
   }
 
-  _crtcPeriodT() { return this._crtcLineT() * ((this.crtc.rows + this.crtc.vblankRows) || 1); }
-  _crtcDispT() { return this._crtcLineT() * this.crtc.rows; }
+  // `StartDisplay` drops VRTC and serves row 0 at time zero, scheduling one
+  // `linetime` per REMAINING row (crtc.cpp:506-516 -> ExpandLine), so the low
+  // period is (rows - 1) lines. M88's own `GetFramePeriod()` (rows + vretrace)
+  // is deliberately one line longer than its event chain — that line IS the ~1%
+  // drift of VRTC against the frame.
+  //
+  // The geometry falls back to HotReset's defaults (crtc.cpp:185-187: height 25,
+  // vretrace 3, linetime 4.028*16) so the chain runs from power-on, the way M88's
+  // does. Freezing it until the CRTC is programmed is exactly the window Yaksa's
+  // first VRTC wait falls into.
+  _crtcRows() { return this.crtc.rows || 25; }
+  _crtcVb() { return this.crtc.vblankRows || 3; }
+  _crtcDispT() { return this._crtcLineT() * Math.max(this._crtcRows() - 1, 0); }
+  _crtcPeriodT() { return this._crtcLineT() * Math.max(this._crtcRows() - 1 + this._crtcVb(), 1); }
 
   // Before the boot ROM programs the CRTC there is no geometry to count rows
   // with (rows = 0 would make the display period zero, i.e. VRTC stuck high).
   // Until then, keep the old frame-anchored derivation.
-  _crtcUsable() { return this.crtc.rows > 0 && this.crtc.linesPerChar > 0; }
+  _crtcUsable() { return true; } // always run the chain; geometry falls back to HotReset's
 
   // Advance the CRTC's own clock by `dtCpu` CPU T-states. `subRatio` converts
   // CPU time to real time (the CPU is short by the DMA steal, the CRTC is not),
   // which is the same conversion the sub-board clock uses.
   _advanceCrtc(dtCpu) {
-    if (!this._crtcUsable()) { if (globalThis.__unusable) globalThis.__unusable(); return; }
+    if (this._crtcNext < 0) this._crtcNext = this._crtcDispT(); // seed the chain
     const lineT = this._crtcLineT();
     if (!(lineT > 0)) return;
     // Blanking converts 1:1 (the CRTC is not taking the bus); the display period
