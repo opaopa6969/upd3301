@@ -575,7 +575,12 @@ export class Pc8801Machine {
       case 0x5e: this.gvramWindow = 2; return; // plane G
       case 0x5f: this.gvramWindow = -1; return; // main RAM back
       case 0x50: this.crtc.writeParam(v); return;
-      case 0x51:
+      case 0x51: {
+        // M88 tests `!(status & 0x10)` BEFORE the command is applied
+        // (crtc.cpp:318-336). Our writeCommand raises VE immediately
+        // (index.js START_DISPLAY), so reading it afterwards is always false and
+        // the reschedule never ran.
+        const wasVe = (this.crtc.status & 0x10) !== 0;
         this.crtc.writeCommand(v);
         // M88's CRTC restarts its event chain on these two commands, so the
         // VRTC phase is anchored to them and not to power-on:
@@ -591,11 +596,12 @@ export class Pc8801Machine {
         // START DISPLAY (crtc.cpp:318-339) reschedules StartDisplay one blanking
         // period out, and only while the display is enabled and VE is not already
         // set. It does not raise VRTC either: the pin keeps the value it had.
-        if ((v & 0xe0) === 0x20 && !(this.crtc.status & 0x10)) {
+        if ((v & 0xe0) === 0x20 && !wasVe) {
           this._crtcBlank = true;
           this._crtcNext = this._crtcPeriodT() - this._crtcDispT();
         }
         return;
+      }
       case 0x70: this._txtwnd = (v & 0xff) << 8; return; // text window base (see readMem)
       case 0x78: this._txtwnd = (this._txtwnd + 0x100) & 0xff00; return; // text window += one page
       case 0x00: this._pcgDat = v; this._pcgWrite(); return;                          // PCG data
@@ -716,7 +722,10 @@ export class Pc8801Machine {
     // period is a phase error that accumulates.
     const base = line200 ? Math.trunc(6.258 * 1024) : Math.trunc(4.028 * 1024);
     const ticks = Math.trunc(base * lpc / 1024); // 10 us units, M88's `linetime`
-    return ticks * 1e-5 * this.clockHz;
+    // 40 T per 10 µs tick, exactly as the reference driver runs it
+    // (refdrv reports `clock=40`; PC88::Proceed budgets ptime × clock).
+    // `1e-5 * clockHz` gives 39.936 and leaves the countdown 0.16% short.
+    return ticks * 40;
   }
 
   // `StartDisplay` drops VRTC and serves row 0 at time zero, scheduling one
@@ -923,7 +932,10 @@ export class Pc8801Machine {
     if (!this.autoSteal) return this.dmaSteal;
     // text DMA runs only when the text plane is displayed (not masked by 53h b0,
     // not in N80 mode). Scale the steal by cells fetched vs a full 80×25 screen.
-    const textOn = (this._port53 & 1) === 0 && !this.n80mode;
+    // No text DMA before the CRTC has been told to display: the chip is not
+    // fetching rows yet, so there is nothing to steal (M88's PD8257 comes out of
+    // reset with every channel disabled, pd8257.cpp:80-92).
+    const textOn = this.crtc.ve && (this._port53 & 1) === 0 && !this.n80mode;
     if (!textOn) return 0;
     const cells = (this.crtc.cols || 80) * (this.crtc.rows || 25);
     return this.textDmaSteal * Math.min(1, cells / (80 * 25));
