@@ -43,7 +43,7 @@ const rd = (p) => new Uint8Array(readFileSync(p));
 // the same bytes — see docs/m88-comparison.md.
 const { main, ext, sub, n80 } = loadRomSet(ROMDIR);
 
-const m = new Pc8801Machine({ main, ext, sub, n80, mode: 'n88' });
+const m = new Pc8801Machine({ main, ext, sub, n80, opna44: true, mode: 'n88' });
 // --tvram on|off forces the F000-FFFF routing, to test whether that mapping is
 // what changes the trace (see docs/m88-comparison.md).
 const TV = opt('tvram', 'normal');

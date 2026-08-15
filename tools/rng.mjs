@@ -127,7 +127,7 @@ const MACHINES = {
       const diskPath = opt('disk') ?? pos(0);
       const diskBytes = diskPath ? new Uint8Array(readFileSync(resolve(diskPath))) : null;
       return () => {
-        const m = new Pc8801Machine({ main, ext, sub, n80, mode: opt('mode', 'n88') });
+        const m = new Pc8801Machine({ main, ext, sub, n80, opna44: true, mode: opt('mode', 'n88') });
         if (diskBytes) mountD88(m, diskBytes); // same machine as the sweep — tools/mount.mjs
         return withKeyScript(m, opt('keys'));
       };

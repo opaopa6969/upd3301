@@ -14,7 +14,7 @@ for (let i = 0; i < 4; i++) {
   ext.set(new Uint8Array(await readFile(`roms/8801mkIIFR/n88_${i}.rom`)), i * 0x2000);
 }
 
-const m = new Pc8801Machine({ main, ext, sub, n80, mode: 'n88' });
+const m = new Pc8801Machine({ main, ext, sub, n80, opna44: true, mode: 'n88' });
 
 if (d88path) {
   const disks = mountD88(m, await readFile(d88path)); // same machine as the sweep — tools/mount.mjs

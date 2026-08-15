@@ -33,7 +33,7 @@ const REFDRV = opt('refdrv', 'm88ref/_m88m_build/M88M/refdrv');
 const OURS_ONLY = argv.includes('--ours-only');
 
 const { main, ext, sub, n80 } = loadRomSet(ROMDIR);
-const m = new Pc8801Machine({ main, ext, sub, n80, mode: 'n88' });
+const m = new Pc8801Machine({ main, ext, sub, n80, opna44: true, mode: 'n88' });
 mountD88(m, readFileSync(resolve(disk))); // same machine as the sweep — tools/mount.mjs
 
 // Record the set of addresses we execute, and when each was first reached.

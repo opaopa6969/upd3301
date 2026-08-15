@@ -38,7 +38,7 @@ const rd = (p) => new Uint8Array(readFileSync(p));
 const { main, ext, sub, n80 } = loadRomSet(ROMDIR);
 
 function boot() {
-  const m = new Pc8801Machine({ main, ext, sub, n80, mode: 'n88' });
+  const m = new Pc8801Machine({ main, ext, sub, n80, opna44: true, mode: 'n88' });
   mountD88(m, rd(disk)); // same machine as the sweep — tools/mount.mjs
   return m;
 }
