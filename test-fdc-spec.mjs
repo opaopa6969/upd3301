@@ -314,3 +314,76 @@ test.todo('WRITE DATA honours MT the same way READ does', () => {
   while (wrote < 256 * 6 && (f.readStatus() & 0x20)) { f.write(0xa5); wrote++; }
   assert.equal(wrote, 256 * 6, 'a write under MT should cross to head 1 as well');
 });
+
+// ---------------------------------------------------------------------------
+// READ DIAGNOSTIC (READ TRACK) — the command whose IDR is a comparison, not a
+// search key. It streams the whole track from the index hole; the ID field is
+// only checked against what passes under the head, and a mismatch raises ST1.ND
+// while the command still ends NORMALLY (IC=00). M88 gets this from
+// FDU::ReadDiag returning a bare ST1_ND with no ST0_AT (fdu.cpp:434).
+//
+// Measured, not assumed: CHOPLIFT issues `42 00 19 00 01 02 10 13 ff` on all 40
+// cylinders — asking for C=25 N=2 against a track holding C=0 N=1 — and M88
+// answers `ST[00 04 00] C25 H0 R2 N2` every time. We answered `ST[00 00 00]`
+// with the found sector's id (0/0/1/1): 80 wrong terminations on that one title,
+// 423 across the collection (`tools/results.mjs` BY STATUS PAIR).
+function readTrack(f, { hd = 0, c = 0, h = 0, r = 1, n = 1, eot = 3, bytes = Infinity, tc = true, settle = 0 }) {
+  cmd(f, [0x40 | 0x02, (hd << 2), c, h, r, n, eot, 0x13, 0xff]); // MFM | READ DIAGNOSTIC
+  let got = 0;
+  while (got < bytes && (f.readStatus() & 0x20)) { f.read(); got++; }
+  if (tc) f.tc();
+  if (settle) f.tick(settle);
+  return { data: got, res: result(f) };
+}
+
+test('READ DIAGNOSTIC: an id that never matches raises ND but ends normally', () => {
+  const f = new Upd765();
+  f.insertDisk(0, twoSided()); // the track really holds C0 H0 R1..3 N1
+  const { res } = readTrack(f, { c: 25, h: 0, r: 1, n: 2, eot: 16, bytes: 100 });
+  assert.equal(IC(res[0]), 0, 'IC stays 00 — a diagnostic read does not abort on a mismatch');
+  assert.equal(res[1] & 0x04, 0x04, 'ST1.ND should be set');
+  assert.equal(res[1] & 0x20, 0, 'ST1.DE must not be — nothing failed CRC');
+});
+
+test('READ DIAGNOSTIC: a matching id leaves ND clear', () => {
+  const f = new Upd765();
+  f.insertDisk(0, twoSided());
+  const { res } = readTrack(f, { c: 0, h: 0, r: 1, n: 1, eot: 3, bytes: 100 });
+  assert.equal(IC(res[0]), 0);
+  assert.equal(res[1] & 0x04, 0, 'the first sector is C0 H0 R1 N1 — exactly what was asked for');
+});
+
+test('READ DIAGNOSTIC reports the requested id, walked forward per step', () => {
+  // The result phase prints idr.c/h/r/n, and IDIncrement runs once the host has
+  // drained a step — so a single 256-byte step (N=1) leaves R=2, pointing at the
+  // *next* record rather than the one just compared. Reporting the found
+  // sector's id instead is what made us print R1 where M88 prints R2.
+  const f = new Upd765();
+  f.insertDisk(0, twoSided());
+  const { res } = readTrack(f, { c: 0, h: 0, r: 1, n: 1, eot: 3, bytes: 256 });
+  assert.deepEqual(res.slice(3), [0, 0, 2, 1], 'C/H/R/N = the IDR after one IDIncrement');
+  assert.equal(res[1] & 0x04, 0, 'and it is compared against sector 2, which matches');
+});
+
+test('READ DIAGNOSTIC ignores the id when choosing what to stream', () => {
+  // The whole point of the command: the bytes come from the track in physical
+  // order regardless of the IDR, so a protection can read a track it cannot name.
+  const f = new Upd765();
+  f.insertDisk(0, twoSided());
+  const { data } = readTrack(f, { c: 25, h: 0, r: 9, n: 1, eot: 16, tc: false });
+  assert.equal(data, 256 * 3, 'all three records of the track are streamed');
+});
+
+test('READ DIAGNOSTIC: End of Cylinder replaces the verdict rather than adding to it', () => {
+  // `case timerphase: result = ST0_AT | ST1_EN;` is an assignment, not an OR —
+  // so a diagnostic read that runs off the end of the track reports EN alone,
+  // and the id comparison from the last step is discarded. Getting this wrong
+  // would print ST[40 84], a status the chip never produces.
+  const f = new Upd765();
+  f.eocTiming = true;
+  f.insertDisk(0, twoSided());
+  const { res } = readTrack(f, { c: 25, h: 0, r: 1, n: 1, eot: 3, tc: false, settle: 20 });
+  assert.equal(IC(res[0]), 1, 'running off the track is abnormal');
+  assert.equal(res[1] & 0x80, 0x80, 'ST1.EN should be set');
+  assert.equal(res[1] & 0x04, 0, 'ST1.ND must NOT survive the overwrite');
+});
