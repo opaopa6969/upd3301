@@ -643,6 +643,10 @@ export class Pc8801Machine {
         // never even reads the IM2 vector at 5008. We took 77 of them in 400
         // frames, each one landing in the game's handler mid-`LDI` block.
         this._port32 = v;
+        // b6 owns the C000 bank selector while set: M88's UpdateC0 forces
+        // `port5x = 3` (plane window shut) whenever `port32 & 0x40`, no matter
+        // which order the game wrote 5Ch-5Eh and 32h in. See the 5Ch cases.
+        if (v & 0x40) this.gvramWindow = -1;
         // Masking drops the pending flag, exactly like the other sources on E6h
         // (M88's INTC::SetMask does `stat.irq &= stat.mask2` on the same edge).
         if (v & 0x80) this.intPending &= ~(1 << 4);
@@ -661,9 +665,23 @@ export class Pc8801Machine {
       case 0xab: if (this.opna) this.opna.writeData1(v); return; // OPNA bank1 data
       case 0x34: this._alu1 = v; return; // ALU op per plane
       case 0x35: this._alu2 = v; return; // ALU mode / compare colour / enable
-      case 0x5c: this.gvramWindow = 0; return; // plane B into C000
-      case 0x5d: this.gvramWindow = 1; return; // plane R
-      case 0x5e: this.gvramWindow = 2; return; // plane G
+      // The 5Ch-5Fh plane window and the ALU share ONE bank selector in M88
+      // (`port5x`), and 32h b6 owns it while set — `Memory::UpdateC0`:
+      //
+      //     if (port32 & 0x40) {
+      //         port5x = 3;                    // <- plane window forced shut
+      //         if (port35 & 0x80) SelectALU...
+      //
+      // We kept them as independent variables, so a plane window opened while
+      // b6 was set stayed open underneath the ALU. Yaksa's demo left plane G
+      // "open" that way (32h=48 throughout) and then slept in an EI delay loop;
+      // when VSYNC arrived, the IM2 vector at F302 was fetched from
+      // gvram[2][0x3302] = 0000 instead of the handler address, and the CPU
+      // "reset" into BASIC — the tv2678 divergence in one line. M88 fetches the
+      // real vector because for it that window was never open.
+      case 0x5c: if (!(this._port32 & 0x40)) this.gvramWindow = 0; return; // plane B into C000
+      case 0x5d: if (!(this._port32 & 0x40)) this.gvramWindow = 1; return; // plane R
+      case 0x5e: if (!(this._port32 & 0x40)) this.gvramWindow = 2; return; // plane G
       case 0x5f: this.gvramWindow = -1; return; // main RAM back
       case 0x50: this.crtc.writeParam(v); return;
       case 0x51: {
