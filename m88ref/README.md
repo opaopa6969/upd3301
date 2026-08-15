@@ -76,8 +76,32 @@ refdrv <romDir> <disk.d88> [frames] [win0 win1]
 | `M88_TRACE_FROM=<frame>` | start tracing at a frame (default 0) |
 | `M88_TRACE_ARMFDC=<n>` | start after the n'th FDC result (the old 軽井沢-specific arming) |
 | `M88_TRACE_MAX=<n>` | instruction budget (default 200000) |
+| `M88_TRACE_R=1` | record the Z80 refresh register next to each PC (`pc rr`, **no dedup**) |
 | `M88_WATCH=<lo>-<hi>` | print every MAIN-CPU store into that address range (`WR f… pc=… [addr]=val`) |
 | `M88_WATCH_MAX=<n>` | cap the printed lines (default 400) |
+| `M88_RWATCH=<lo>-<hi>` | print every MAIN-CPU **load** from that range (`RD f… pc=… [addr]=val`) |
+| `M88_RWATCH_MAX=<n>` | cap the printed lines |
+| `M88_RWATCH_PC=<lo>-<hi>` | only log reads issued from these PCs |
+| `M88_VRTC=1` | print every VRTC pin transition, stamped with the instruction counter |
+| `M88_CPU=sub` | point the pc/read/write hooks at the **sub** CPU (CPU2) instead of the main one |
+
+`M88_RWATCH` is the better probe when both emulators run the *same code* over
+*different data*: it records the bytes the CPU actually saw. `M88_TRACE_R` is
+the probe for "did both sides execute the same *number* of instructions" — R
+counts M1 cycles and stalls while the CRTC's DMA holds the bus, so it catches
+cycle-stealing differences a PC-only trace hides.
+
+`M88_VRTC` exists because the two emulators share no clock but do share an
+instruction stream, so **the instruction counter is an axis both sides can be
+plotted on**. That is what settled #72:
+
+```
+$ M88_VRTC=1 refdrv <romDir> Yaksa.d88 3
+# VRTC 1 at instr 7094 frame 0      <- M88 raises VRTC inside frame 0
+# VRTC 0 at instr 7951 frame 0
+# VRTC 1 at instr 14114 frame 1
+```
+Our side has the matching `globalThis.__vrtc` hook, stamped the same way.
 
 **Use `M88_TRACE_ARMPC`.** Our emulator boots ~20 frames ahead of M88, so frame
 numbers do not name the same program point; "the first time the program reaches

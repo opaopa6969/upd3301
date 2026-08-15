@@ -1,8 +1,8 @@
 diff --git a/src/devices/Z80c.cpp b/src/devices/Z80c.cpp
-index 86c43a4..b74bc75 100644
+index 86c43a4..a237c84 100644
 --- a/src/devices/Z80c.cpp
 +++ b/src/devices/Z80c.cpp
-@@ -468,8 +468,11 @@ int Z80C::cbase;
+@@ -468,14 +468,19 @@ int Z80C::cbase;
  // ---------------------------------------------------------------------------
  //	1 ���ߎ��s
  //	
@@ -14,7 +14,30 @@ index 86c43a4..b74bc75 100644
  	SingleStep(Fetch8());
  }
  
-@@ -496,9 +499,14 @@ inline uint Z80C::Read8(uint addr)
+ // ---------------------------------------------------------------------------
+ //	I/O �����̒�` -----------------------------------------------------------
+ 
++extern void (*g_rdHook)(unsigned pc, unsigned addr, unsigned val);
++extern unsigned g_rdLo, g_rdHi;
+ inline uint Z80C::Read8(uint addr)
+ {
+ 	addr &= 0xffff;
+@@ -487,18 +492,27 @@ inline uint Z80C::Read8(uint addr)
+ #endif
+ 	{
+ 		DEBUGCOUNT(12);
+-		return ((uint8*)page.ptr)[addr & pagemask];
++		{ uint v_ = ((uint8*)page.ptr)[addr & pagemask];
++		  if (g_rdHook && (void*)this == g_mainCpu && addr >= g_rdLo && addr <= g_rdHi) g_rdHook(GetPC(), addr, v_);
++		  return v_; }
+ 	}
+ 	else
+ 	{
+ 		DEBUGCOUNT(8);
+-		return (*MemoryManager::RdFunc(intpointer(page.ptr) & ~idbit))(page.inst, addr);
++		{ uint v_ = (*MemoryManager::RdFunc(intpointer(page.ptr) & ~idbit))(page.inst, addr);
++		  if (g_rdHook && (void*)this == g_mainCpu && addr >= g_rdLo && addr <= g_rdHi) g_rdHook(GetPC(), addr, v_);
++		  return v_; }
  	}
  }
  
@@ -29,6 +52,36 @@ index 86c43a4..b74bc75 100644
  	MemoryPage& page = wrpages[addr >> pagebits];
  #ifdef PTR_IDBIT
  	if (!(intpointer(page.ptr) & idbit))
+@@ -529,8 +543,12 @@ inline uint Z80C::Read16(uint addr)
+ 	{
+ 		DEBUGCOUNT(13);
+ 		uint a = addr & pagemask;
+-		if (a < pagemask)
+-			return *(uint16*)((uint8*)page.ptr + a);
++		if (a < pagemask) {
++			uint v_ = *(uint16*)((uint8*)page.ptr + a);
++			if (g_rdHook && (void*)this == g_mainCpu && addr >= g_rdLo && addr <= g_rdHi)
++				{ g_rdHook(GetPC(), addr, v_ & 0xff); g_rdHook(GetPC(), addr + 1, (v_ >> 8) & 0xff); }
++			return v_;
++		}
+ 	}
+ #endif
+ 	return Read8(addr) + Read8(addr+1) * 256;
+diff --git a/src/pc88/base.cpp b/src/pc88/base.cpp
+index ccd0dc2..2e1bd11 100644
+--- a/src/pc88/base.cpp
++++ b/src/pc88/base.cpp
+@@ -107,8 +107,10 @@ void IOCALL Base::RTC(uint)
+ // ---------------------------------------------------------------------------
+ //	Vertical Retrace Interrupt
+ //
++extern void (*g_vrtcHook)(unsigned en);
+ void IOCALL Base::VRTC(uint, uint en)
+ {
++	if (g_vrtcHook) g_vrtcHook(en);
+ 	if (en)
+ 	{
+ 		pc->VSync();
 diff --git a/src/pc88/fdc.cpp b/src/pc88/fdc.cpp
 index e288b42..7cd1c44 100644
 --- a/src/pc88/fdc.cpp
