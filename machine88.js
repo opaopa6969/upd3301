@@ -266,6 +266,30 @@ export class Pc8801Machine {
     this.subRatio = (clockHz / frameHz) / this.frameT;
     this.tInFrame = 0;
     this.frame = 0;
+    // THE CRTC KEEPS ITS OWN CLOCK, AND IT DOES NOT DIVIDE THE FRAME EVENLY.
+    //
+    // VRTC used to be derived as "past dispFrac of this frame", which pins the
+    // blanking phase to the frame boundary forever. The real chip has no notion
+    // of our frame: it counts character rows at its own line rate and raises
+    // VRTC when the displayed rows are done. M88 models that with scheduler
+    // events (crtc.cpp: `bus->Out(vrtc,1)` then `AddEvent(linetime*vretrace,
+    // StartDisplay)`), and its CRTC period -- linetime x (rows + vretrace) --
+    // is about 1% SHORTER than its frame period (1,773 vs 1,792 ticks). So in
+    // M88 the VRTC phase drifts against the frame by ~1% per frame.
+    //
+    // That drift is observable. Yaksa waits for the vertical edge with
+    // `IN A,(40h) / AND 20h / JR NZ`; over 60 frames M88 spins that loop 535
+    // times and we spun it 207 -- and the first divergence in the entire run
+    // (identical for 7,638 instructions, PC *and* R) is exactly there. See #72.
+    // Mirror M88's two separate things: the VRTC PIN and the EVENT CHAIN.
+    //   ExpandLineEnd : bus->Out(vrtc,1); AddEvent(linetime*vretrace, StartDisplay)
+    //   StartDisplay  : bus->Out(vrtc,0); (then a row event per displayed row)
+    // Deriving the pin from a phase counter conflated them, and re-seeding the
+    // phase on every CRTC command then pushed the next rising edge a whole
+    // period away — FIREHAWK ended up with 0.18 VSYNC per frame instead of 1.0.
+    this._vrtc = false;      // the pin
+    this._crtcNext = -1;     // <0 = seed from the display period on the first step
+    this._crtcBlank = false; // which half of the chain we are in
     this._nomFrameT = clockHz / frameHz; // nominal (constant) frame length for a monotonic tape clock
 
     this.cpu = new Z80({
@@ -437,7 +461,9 @@ export class Pc8801Machine {
       // for the edge, or a "draw during blanking" window) sees the wrong budget
       // with a constant. M88 derives the same window from the CRTC
       // (`crtc.cpp`: retrace runs `linetime * vretrace`).
-      const vrtc = this.tInFrame > this.frameT * this._dispFrac();
+      const vrtc = this._crtcUsable()
+        ? this._vrtc                                     // the CRTC's own pin, see _advanceCrtc
+        : this.tInFrame > this.frameT * this._dispFrac(); // chip not programmed yet
       // b2 = CMT carrier-detect: high while the tape is parked on a MARK
       let cmt = 0;
       if (this.tape) { this.tape.pump(this._tapeNow()); cmt = this.tape.carrier() ? 0x04 : 0; }
@@ -549,7 +575,27 @@ export class Pc8801Machine {
       case 0x5e: this.gvramWindow = 2; return; // plane G
       case 0x5f: this.gvramWindow = -1; return; // main RAM back
       case 0x50: this.crtc.writeParam(v); return;
-      case 0x51: this.crtc.writeCommand(v); return;
+      case 0x51:
+        this.crtc.writeCommand(v);
+        // M88's CRTC restarts its event chain on these two commands, so the
+        // VRTC phase is anchored to them and not to power-on:
+        //   RESET         crtc.cpp:193 `DelEvent(sev); StartDisplay();`
+        //                 -> display begins immediately, VRTC low
+        //   START DISPLAY crtc.cpp:333 `DelEvent(sev);
+        //                 AddEvent(linetime*vretrace, StartDisplay)`
+        //                 -> a blanking period first, so VRTC is high right now
+        // The RESET command (crtc.cpp:245-260) only assigns status/attr/mode. It
+        // does NOT call DelEvent, StartDisplay or Out(vrtc,…) — only a physical
+        // reset (HotReset -> StartDisplay) moves the pin. So: nothing here.
+        //
+        // START DISPLAY (crtc.cpp:318-339) reschedules StartDisplay one blanking
+        // period out, and only while the display is enabled and VE is not already
+        // set. It does not raise VRTC either: the pin keeps the value it had.
+        if ((v & 0xe0) === 0x20 && !(this.crtc.status & 0x10)) {
+          this._crtcBlank = true;
+          this._crtcNext = this._crtcPeriodT() - this._crtcDispT();
+        }
+        return;
       case 0x70: this._txtwnd = (v & 0xff) << 8; return; // text window base (see readMem)
       case 0x78: this._txtwnd = (this._txtwnd + 0x100) & 0xff00; return; // text window += one page
       case 0x00: this._pcgDat = v; this._pcgWrite(); return;                          // PCG data
@@ -647,6 +693,86 @@ export class Pc8801Machine {
   // Fraction of the frame spent displaying, from what the CRTC was actually
   // programmed with. Both the polled VRTC bit and the VSYNC interrupt derive
   // from this one number so they can never disagree.
+  // One character row of CRTC time, in real T-states. M88 (crtc.cpp:282):
+  //     linetime = (line200 ? 6.258 : 4.028) * linesperchar   [10 us units]
+  // i.e. one raster is 62.58 us on a 200-line (15 kHz) screen and 40.28 us on a
+  // 400-line (24 kHz) one. `line200` is the screen geometry, not a strap.
+  _crtcLineT() {
+    const lpc = this.crtc.linesPerChar || 16;
+    // `line200` is the fv15k STRAP, not the geometry (M88 crtc.cpp:165:
+    //     line200 = (bus->In(0x40) & 2) != 0;
+    // latched at HotReset, and port 40h bit 1 is the 15 kHz monitor strap —
+    // base.cpp:63-66). Deriving it from `rows * lpc <= 200` looked harmless
+    // because every programmed geometry in the 353-title set is 400/384 lines,
+    // but at power-on `rows` is 0, so `0 <= 200` picked the 15 kHz raster
+    // (62.58 us instead of 40.28) and made the first VRTC edge arrive 2,804
+    // instructions late. We model a 24 kHz machine, so the strap is 0.
+    const line200 = false;
+    // Round exactly the way M88 does, in its own 10 us tick, before converting:
+    //     linetime = int(6.258*1024 or 4.028*1024) * linesperchar / 1024
+    // Integer division, so the result is a whole number of 10 us ticks. Keeping
+    // this in floating point looks harmless (<1% off) but the whole point of
+    // this clock is that it drifts against the frame — a sub-tick error in the
+    // period is a phase error that accumulates.
+    const base = line200 ? Math.trunc(6.258 * 1024) : Math.trunc(4.028 * 1024);
+    const ticks = Math.trunc(base * lpc / 1024); // 10 us units, M88's `linetime`
+    return ticks * 1e-5 * this.clockHz;
+  }
+
+  // `StartDisplay` drops VRTC and serves row 0 at time zero, scheduling one
+  // `linetime` per REMAINING row (crtc.cpp:506-516 -> ExpandLine), so the low
+  // period is (rows - 1) lines. M88's own `GetFramePeriod()` (rows + vretrace)
+  // is deliberately one line longer than its event chain — that line IS the ~1%
+  // drift of VRTC against the frame.
+  //
+  // The geometry falls back to HotReset's defaults (crtc.cpp:185-187: height 25,
+  // vretrace 3, linetime 4.028*16) so the chain runs from power-on, the way M88's
+  // does. Freezing it until the CRTC is programmed is exactly the window Yaksa's
+  // first VRTC wait falls into.
+  _crtcRows() { return this.crtc.rows || 25; }
+  _crtcVb() { return this.crtc.vblankRows || 3; }
+  _crtcDispT() { return this._crtcLineT() * Math.max(this._crtcRows() - 1, 0); }
+  _crtcPeriodT() { return this._crtcLineT() * Math.max(this._crtcRows() - 1 + this._crtcVb(), 1); }
+
+  // Before the boot ROM programs the CRTC there is no geometry to count rows
+  // with (rows = 0 would make the display period zero, i.e. VRTC stuck high).
+  // Until then, keep the old frame-anchored derivation.
+  _crtcUsable() { return true; } // always run the chain; geometry falls back to HotReset's
+
+  // Advance the CRTC's own clock by `dtCpu` CPU T-states. `subRatio` converts
+  // CPU time to real time (the CPU is short by the DMA steal, the CRTC is not),
+  // which is the same conversion the sub-board clock uses.
+  _advanceCrtc(dtCpu) {
+    if (this._crtcNext < 0) this._crtcNext = this._crtcDispT(); // seed the chain
+    const lineT = this._crtcLineT();
+    if (!(lineT > 0)) return;
+    // Blanking converts 1:1 (the CRTC is not taking the bus); the display period
+    // carries the whole DMA steal.
+    const period = this._crtcPeriodT();
+    const disp = this._crtcDispT();
+    // NO STEAL CORRECTION. M88's CRTC events run on the scheduler, which advances
+    // with CPU time directly (schedule.cpp); `PD8257::RequestRead` does not move
+    // the scheduler either, so there is nothing on the M88 side that stretches
+    // CRTC time during the display period. Our `k` was an invention, and it made
+    // the first VRTC edge arrive ~750 instructions early.
+    this._crtcNext -= dtCpu;
+    let guard = 8; // a geometry change can leave a stale countdown; do not spin
+    while (this._crtcNext <= 0 && guard-- > 0) {
+      if (this._crtcBlank) {          // StartDisplay: pin low, display the rows
+        this._vrtc = false;
+        this._crtcBlank = false;
+        this._crtcNext += disp;
+      } else {                        // ExpandLineEnd: pin high, VSYNC edge
+        this._vrtc = true;
+        this._crtcBlank = true;
+        this._crtcNext += period - disp;
+        if (globalThis.__edge) globalThis.__edge();
+        if (this.intMaskBits & 2) { this.intPending |= 1 << 1; if (globalThis.__irq) globalThis.__irq(1); } // VSYNC, source 1
+      }
+    }
+  }
+
+
   _dispFrac() {
     const r = this.crtc.rows, b = this.crtc.vblankRows;
     return r > 0 ? r / (r + b) : 0.86;
@@ -683,10 +809,6 @@ export class Pc8801Machine {
     // so without these 10 ticks per frame the machine halts forever
     const timerPeriod = this.frameT / 10;
     let nextTimer = this.tInFrame + timerPeriod;
-    // The display-period end, in T-states — the same boundary port 40h's VRTC
-    // bit is derived from, so the interrupt and the polled bit agree.
-    const vsyncAt = this.frameT * this._dispFrac();
-    this._vsyncFired = false;
     // raster-accurate text fetch: space the CRTC's per-row DMA + palette
     // snapshot across the frame, so mid-frame VRAM/palette rewrites land on the
     // rows actually scanning at that moment.
@@ -700,6 +822,7 @@ export class Pc8801Machine {
       while (this.tInFrame < target) {
         const cyc = this.cpu.step();
         this.tInFrame += cyc;
+        this._advanceCrtc(cyc);
         while (this._crtcRow < dispRows && this.tInFrame >= this._crtcRow * rowT) {
           this.crtc.fetchRow(this._crtcRow);
           this.rowPal.set(this.palette, this._crtcRow * 24);
@@ -736,11 +859,7 @@ export class Pc8801Machine {
         // µPD3301 end-of-screen timing, and a behavioural analysis that put
         // "the phase model of time" ahead of the 8255 as the shared root of
         // the remaining divergences. (docs/review/2026-08-10-*.md)
-        if (!this._vsyncFired && this.tInFrame >= vsyncAt) {
-          this._vsyncFired = true;
-          if (this.intMaskBits & 2) this.intPending |= 1 << 1; // VSYNC, source 1
-        }
-        this._serviceInterrupts();
+        this._serviceInterrupts(); // VSYNC is raised by _advanceCrtc, on the VRTC edge
       }
       if (this.sub) {
         // The sub runs at REAL TIME here — one slice of main T-states buys
@@ -905,6 +1024,7 @@ export class Pc8801Machine {
       // branching tree) the moment `_syncSub` was introduced.
       subClock: { mark: this._subMark, debt: this._subDebt, fdcAcc: this._fdcAcc },
       tInFrame: this.tInFrame, frame: this.frame, acc: this._acc ?? 0,
+      vrtc: this._vrtc, crtcNext: this._crtcNext, crtcBlank: this._crtcBlank,
     };
     if (this.sub) {
       s.pio = snapObj(this.pio);
@@ -969,6 +1089,7 @@ export class Pc8801Machine {
     this._subDebt = s.subClock?.debt ?? 0;
     this._fdcAcc = s.subClock?.fdcAcc ?? 0;
     this.tInFrame = s.tInFrame; this.frame = s.frame; this._acc = s.acc;
+    this._vrtc = s.vrtc ?? false; this._crtcNext = s.crtcNext ?? 0; this._crtcBlank = s.crtcBlank ?? false;
     if (this.sub && s.sub) {
       restoreObj(this.pio, s.pio);
       this.sub.cpu.setState(s.sub.cpu);
