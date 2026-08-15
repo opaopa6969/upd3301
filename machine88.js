@@ -239,8 +239,14 @@ export class Pc8801Machine {
     // then 44h, via the chip-ID read (register 0xFF → 1) — must find exactly
     // what M88's machine shows it, or it configures a different sound path and
     // diverges from there on.
+    // An OPNA runs at 7.9872 MHz — twice the OPN's 3.9936 MHz. M88 bakes this
+    // into the chip, not the config: `opnif.h` sets `baseclock = 7987200`
+    // unless USE_OPN is defined (it is not, in the m88ref build), and
+    // OPNIF::Init does `clock = baseclock` — the refdrv's `cfg.opnclock` is
+    // never consulted. Halving the clock halves every timer period and every
+    // FM/SSG pitch on the chip.
     this.opn = opna44
-      ? new Ym2608({ clockHz, sampleRate: 48000 })
+      ? new Ym2608({ clockHz: clockHz * 2, sampleRate: 48000 })
       : new Ym2203({ clockHz, sampleRate: 48000 });
     this.opn44IsOpna = opna44;
     // Sound Board II (OPNA) — optional, at ports A8h-ABh. Default off so a
@@ -935,7 +941,10 @@ export class Pc8801Machine {
         // holding intPending high while the flag stood set re-fired the
         // handler many times per period, speeding the music the other way.
         // (Two errors that half-cancelled; the ear/FFT still caught ~1.2×.)
-        this._opnCyc += cyc * this._opnClkPerCpu;
+        // One timer tick is 72 CHIP cycles. The chip's clock is not always the
+        // CPU's: an OPNA (opna44) runs at 2x, so the same CPU time must feed
+        // it twice the cycles or every period comes out double.
+        this._opnCyc += cyc * this._opnClkPerCpu * (this.opn.clockHz / this.clockHz);
         if (this._opnCyc >= 72) {
           const t = (this._opnCyc / 72) | 0;
           this._opnCyc -= t * 72;
