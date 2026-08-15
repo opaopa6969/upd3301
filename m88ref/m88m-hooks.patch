@@ -67,6 +67,41 @@ index 86c43a4..a237c84 100644
  	}
  #endif
  	return Read8(addr) + Read8(addr+1) * 256;
+diff --git a/src/devices/fmtimer.cpp b/src/devices/fmtimer.cpp
+index 720316e..327b336 100644
+--- a/src/devices/fmtimer.cpp
++++ b/src/devices/fmtimer.cpp
+@@ -7,6 +7,8 @@
+ #include "headers.h"
+ #include "fmtimer.h"
+ 
++extern void (*g_fmTimerHook)(int which); // refdrv instrumentation (global ns)
++
+ using namespace FM;
+ 
+ // ---------------------------------------------------------------------------
+@@ -80,7 +82,10 @@ bool Timer::Count(int32 us)
+ 				timera_count += timera;
+ 			
+ 			if (regtc & 4)
++			{
++				if (::g_fmTimerHook) ::g_fmTimerHook(0);
+ 				SetStatus(1);
++			}
+ 		}
+ 	}
+ 	if (timerb_count)
+@@ -93,7 +98,10 @@ bool Timer::Count(int32 us)
+ 				timerb_count += timerb;
+ 			
+ 			if (regtc & 8)
++			{
++				if (::g_fmTimerHook) ::g_fmTimerHook(1);
+ 				SetStatus(2);
++			}
+ 		}
+ 	}
+ 	return event;
 diff --git a/src/pc88/base.cpp b/src/pc88/base.cpp
 index ccd0dc2..2e1bd11 100644
 --- a/src/pc88/base.cpp

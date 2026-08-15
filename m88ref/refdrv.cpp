@@ -53,10 +53,22 @@ static unsigned g_instr = 0;
 static void vrtcLog(unsigned en) {
   printf("# VRTC %u at instr %u frame %d\n", en, g_instr, g_frame);
 }
+// M88_MARKPC=<hex>: print EVERY arrival at one PC, with the frame. The traces
+// carry no frame numbers, so "when does M88 pass X, and how many times?" — the
+// question that separated Yaksa's 13 overlay passes from our 14 — needed a
+// stamp, not a trace.
+static long g_markPc = -1;
+static int g_markN = 0;
 static void pcLog(unsigned pc) {
   g_instr++;
+  if ((long)pc == g_markPc && g_markN < 200) printf("# mark %04x pass %d at frame %d\n", pc, ++g_markN, g_frame);
   if (!g_traceOn) {
-    if (g_armPc >= 0 && (long)pc == g_armPc) g_traceOn = 1;
+    if (g_armPc >= 0 && (long)pc == g_armPc) {
+      g_traceOn = 1;
+      // Which frame the anchor fired on — "when does M88 first reach X?" keeps
+      // being the question, and the traces themselves cannot answer it.
+      printf("# armed at frame %d (pc=%04x)\n", g_frame, pc);
+    }
     else if (g_armFrame >= 0 && g_frame >= g_armFrame) g_traceOn = 1;
     else return;
   }
@@ -91,6 +103,19 @@ static void rdLog(unsigned pc, unsigned addr, unsigned val) {
   if (pc < g_rdPcLo || pc > g_rdPcHi) return;
   if (++g_rdWN > g_rdMax) return;
   printf("RD f%-4d pc=%04x [%04x]=%02x\n", g_frame, pc, addr, val);
+}
+// M88_FMTIMER=1: count FM timer flag events (the music driver's clock) and
+// print a running total each second of emulated time. The counters this feeds
+// answered "does M88's driver tick at half our rate?" for Yaksa (#69).
+void (*g_fmTimerHook)(int which) = nullptr;
+static long g_fmA = 0, g_fmB = 0;
+static int g_fmOn = 0, g_fmLastPrint = -1;
+static void fmTimerLog(int which) {
+  if (which == 0) g_fmA++; else g_fmB++;
+  if (g_fmOn && g_frame / 60 != g_fmLastPrint) {
+    g_fmLastPrint = g_frame / 60;
+    printf("# fmtimer f%d A=%ld B=%ld\n", g_frame, g_fmA, g_fmB);
+  }
 }
 unsigned g_fdcDataCount=0;
 void (*g_mrdHook)(unsigned,unsigned)=nullptr;
@@ -197,6 +222,8 @@ int main(int argc, char** argv) {
   // two can be enabled together (g_traceMax stays 0 until then, which makes
   // pcLog count without storing).
   if (getenv("M88_VRTC")) { g_vrtcHook = vrtcLog; g_pcHook = pcLog; }
+  if (const char* s2 = getenv("M88_MARKPC")) { g_markPc = strtol(s2, 0, 16); g_pcHook = pcLog; }
+  if (getenv("M88_FMTIMER")) { g_fmOn = 1; g_fmTimerHook = fmTimerLog; }
   const char* tracePath = getenv("M88_TRACE");
   if (tracePath) {
     if (const char* s = getenv("M88_TRACE_FROM"))  g_armFrame = atoi(s);
