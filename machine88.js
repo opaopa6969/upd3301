@@ -699,7 +699,15 @@ export class Pc8801Machine {
   // 400-line (24 kHz) one. `line200` is the screen geometry, not a strap.
   _crtcLineT() {
     const lpc = this.crtc.linesPerChar || 16;
-    const line200 = this.crtc.rows * lpc <= 200;
+    // `line200` is the fv15k STRAP, not the geometry (M88 crtc.cpp:165:
+    //     line200 = (bus->In(0x40) & 2) != 0;
+    // latched at HotReset, and port 40h bit 1 is the 15 kHz monitor strap —
+    // base.cpp:63-66). Deriving it from `rows * lpc <= 200` looked harmless
+    // because every programmed geometry in the 353-title set is 400/384 lines,
+    // but at power-on `rows` is 0, so `0 <= 200` picked the 15 kHz raster
+    // (62.58 us instead of 40.28) and made the first VRTC edge arrive 2,804
+    // instructions late. We model a 24 kHz machine, so the strap is 0.
+    const line200 = false;
     // Round exactly the way M88 does, in its own 10 us tick, before converting:
     //     linetime = int(6.258*1024 or 4.028*1024) * linesperchar / 1024
     // Integer division, so the result is a whole number of 10 us ticks. Keeping
@@ -742,9 +750,12 @@ export class Pc8801Machine {
     // carries the whole DMA steal.
     const period = this._crtcPeriodT();
     const disp = this._crtcDispT();
-    const steal = Math.max(0, 1 - this.frameT / (this.clockHz / this.frameHz));
-    const k = this._crtcBlank ? 1 : disp / Math.max(1, disp - period * steal);
-    this._crtcNext -= dtCpu * k;
+    // NO STEAL CORRECTION. M88's CRTC events run on the scheduler, which advances
+    // with CPU time directly (schedule.cpp); `PD8257::RequestRead` does not move
+    // the scheduler either, so there is nothing on the M88 side that stretches
+    // CRTC time during the display period. Our `k` was an invention, and it made
+    // the first VRTC edge arrive ~750 instructions early.
+    this._crtcNext -= dtCpu;
     let guard = 8; // a geometry change can leave a stale countdown; do not spin
     while (this._crtcNext <= 0 && guard-- > 0) {
       if (this._crtcBlank) {          // StartDisplay: pin low, display the rows
