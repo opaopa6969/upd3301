@@ -23,7 +23,7 @@
 
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { resolve, join } from 'path';
-import { parseD88All } from '../d88.js';
+import { mountD88 } from './mount.mjs';
 import { loadRomSet } from './romset.mjs';
 
 const argv = process.argv.slice(2);
@@ -56,7 +56,7 @@ const hex = (v, w = 2) => (v >>> 0).toString(16).padStart(w, '0');
 
 function fingerprint(Klass, bytes) {
   const m = new Klass({ main, ext, sub, mode: 'n88' });
-  parseD88All(bytes).forEach((img, u) => { if (u < 2) m.insertDisk(u, img); });
+  mountD88(m, bytes); // same machine as the sweep — tools/mount.mjs
   for (let i = 0; i < FRAMES; i++) m.stepFrame();
   let tv = 0; for (const b of m.tvram) if (b) tv++;
   // distinct PCs over two frames separates "alive" from "runaway" far better

@@ -21,7 +21,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { Pc8801Machine } from '../machine88.js';
-import { parseD88All } from '../d88.js';
+import { mountD88 } from './mount.mjs';
 import { loadRomSet } from './romset.mjs';
 import { disasm } from '../z80dis.js';
 
@@ -39,7 +39,7 @@ const { main, ext, sub } = loadRomSet(ROMDIR);
 
 function boot() {
   const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
-  parseD88All(rd(disk)).forEach((img, u) => { if (u < 2) m.insertDisk(u, img); });
+  mountD88(m, rd(disk)); // same machine as the sweep — tools/mount.mjs
   return m;
 }
 const hex = (v, w = 2) => v.toString(16).padStart(w, '0');

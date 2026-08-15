@@ -35,8 +35,8 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { Pc8801Machine } from '../machine88.js';
-import { parseD88All } from '../d88.js';
 import { loadRomSet } from './romset.mjs';
+import { mountD88 } from './mount.mjs';
 import { classifyScreen } from './verdict.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -55,8 +55,7 @@ const { main, ext, sub } = loadRomSet(ROMDIR);
 function ours(path) {
   try {
     const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
-    const imgs = parseD88All(rd(path));
-    imgs.forEach((img, u) => { if (u < 2) m.insertDisk(u, img); }); // image0→drive0, image1→drive1
+    const imgs = mountD88(m, rd(path)); // image0→drive0, image1→drive1, both read-only — tools/mount.mjs
     for (let i = 0; i < FRAMES; i++) m.stepFrame();
     // count text RAM only when the text plane is actually displayed (port 53h
     // b0=1 → text off), else a graphics-only game's stale bytes inflate tvNZ

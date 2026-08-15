@@ -21,8 +21,8 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, resolve, join } from 'path';
 import { Pc8801Machine } from '../machine88.js';
-import { parseD88All } from '../d88.js';
 import { loadRomSet } from './romset.mjs';
+import { mountD88 } from './mount.mjs';
 import { parseRefdrvResults, tally, diffTallies, disagreement, formatDiff, statusKey } from '../resultdiff.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -38,8 +38,7 @@ const { main, ext, sub } = loadRomSet(ROMDIR);
 // hook through the core — upd765.js stays free of instrumentation.
 function ours(path) {
   const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
-  parseD88All(new Uint8Array(readFileSync(path)))
-    .forEach((img, u) => { if (u < 2) m.insertDisk(u, img); });
+  mountD88(m, readFileSync(path)); // same mount as refdrv — see tools/mount.mjs
   const f = m.sub.fdc;
   const seen = [];
   const orig = f._results.bind(f);
