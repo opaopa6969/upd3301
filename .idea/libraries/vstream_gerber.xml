@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="vstream-gerber">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/hw/vstream-gerber.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

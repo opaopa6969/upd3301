@@ -306,6 +306,36 @@ export class Pc8801Machine {
   readMem(a) {
     a &= 0xffff;
     if (a < 0x8000 && this.romEnabled) {
+      // PORT 31h BIT 2 SWAPS IN THE N80 ROM WITHOUT LEAVING N88 MODE.
+      //
+      //     Memory::Update00R:  read = rom + (port31 & 4 ? n80 : n88);   // 0000-5fff
+      //     Memory::Update60R:  else if ((port31 & 6) == 4)              // 6000-7fff
+      //                             read = rom + n80 + 0x6000;
+      //
+      // So bit 2 is not "the machine is an N80" — it is a live bank select, and
+      // it covers the whole 0000-7fff window. We honoured the bit in the
+      // text-window test below and nowhere else, so a game that switched to the
+      // N80 ROM kept reading N88 bytes.
+      //
+      // Games use it as a probe, because the two ROMs differ in their first
+      // instruction: N88 opens `LD SP,0E1A0h`, N80 opens `LD SP,0FFFFh`. Reading
+      // the word at 0x0002 therefore says which one is mapped. オホーツクに消ゆ
+      // does exactly that, and treats "not FFFF" as fatal:
+      //
+      //     c000  LD HL,(0002h)      ; the LD SP operand
+      //     c003  INC HL
+      //     c004  LD A,H / OR L
+      //     c006  JR NZ,0C040h       ; not the N80 ROM -> give up
+      //     c040  LD A,04h / OUT (31h),A / RST 00h   ; select N80, reboot, retry
+      //
+      // Reading N88 bytes made the check fail forever: the title rebooted
+      // through this every ~40 frames for the whole run, clearing GVRAM each
+      // time, and never got past its loader.
+      // The 6000-7fff half matters as much as the first: the N-BASIC hook the
+      // ROM calls at `179e CALL 7F00h` lives there (`XOR A / LD (0EF22h),A /
+      // JP 0ACFh`). Serving RAM instead put the CPU on a NOP sled through
+      // uninitialised memory until it hit an 0xFF and started taking RST 38h.
+      if (!this.n80mode && (this._port31 & 4) && this.romN80) return this.romN80[a] ?? 0xff;
       if (a >= 0x6000 && this.extMapped && this.romExt && !this.n80mode) {
         const bank = this._port32 & 3; // EROMSL
         return this.romExt[bank * 0x2000 + (a - 0x6000)] ?? 0xff;

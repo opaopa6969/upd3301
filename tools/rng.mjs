@@ -123,11 +123,11 @@ const MACHINES = {
       const { Pc8801Machine } = await import('../machine88.js');
       const { mountD88 } = await import('./mount.mjs');
       const { loadRomSet } = await import('./romset.mjs');
-      const { main, ext, sub } = loadRomSet(opt('romdir', DEFAULT_ROMDIR));
+      const { main, ext, sub, n80 } = loadRomSet(opt('romdir', DEFAULT_ROMDIR));
       const diskPath = opt('disk') ?? pos(0);
       const diskBytes = diskPath ? new Uint8Array(readFileSync(resolve(diskPath))) : null;
       return () => {
-        const m = new Pc8801Machine({ main, ext, sub, mode: opt('mode', 'n88') });
+        const m = new Pc8801Machine({ main, ext, sub, n80, mode: opt('mode', 'n88') });
         if (diskBytes) mountD88(m, diskBytes); // same machine as the sweep — tools/mount.mjs
         return withKeyScript(m, opt('keys'));
       };
@@ -135,7 +135,7 @@ const MACHINES = {
     async romHash() {
       const { hashBytes } = await import('../analysisdb.js');
       const { loadRomSet } = await import('./romset.mjs');
-      const { main, ext, sub } = loadRomSet(opt('romdir', DEFAULT_ROMDIR));
+      const { main, ext, sub, n80 } = loadRomSet(opt('romdir', DEFAULT_ROMDIR));
       const out = { main: hashBytes(main), ext: hashBytes(ext), sub: hashBytes(sub) };
       const d = opt('disk') ?? pos(0);
       if (d) out.disk = hashBytes(new Uint8Array(readFileSync(resolve(d))));

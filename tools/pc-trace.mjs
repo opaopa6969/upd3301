@@ -41,9 +41,9 @@ const ROMDIR = opt('romdir', '/mnt/c/var/emulator/エミュレーター本体/PC
 const rd = (p) => new Uint8Array(readFileSync(p));
 // Load the ROM set the way M88 does (combined pc88.rom first) so both sides run
 // the same bytes — see docs/m88-comparison.md.
-const { main, ext, sub } = loadRomSet(ROMDIR);
+const { main, ext, sub, n80 } = loadRomSet(ROMDIR);
 
-const m = new Pc8801Machine({ main, ext, sub, mode: 'n88' });
+const m = new Pc8801Machine({ main, ext, sub, n80, mode: 'n88' });
 // --tvram on|off forces the F000-FFFF routing, to test whether that mapping is
 // what changes the trace (see docs/m88-comparison.md).
 const TV = opt('tvram', 'normal');
