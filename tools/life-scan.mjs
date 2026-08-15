@@ -40,7 +40,7 @@ const rd = (p) => new Uint8Array(readFileSync(p));
 // the same bytes — see docs/m88-comparison.md.
 const { main, ext, sub, n80 } = loadRomSet(ROMDIR);
 
-const m = new Pc8801Machine({ main, ext, sub, n80, mode: 'n88' });
+const m = new Pc8801Machine({ main, ext, sub, n80, opna44: true, mode: 'n88' });
 if (FORCE !== 'normal') Object.defineProperty(m, '_tvramOn', { get: () => FORCE === 'on' });
 mountD88(m, rd(resolve(disk))); // same machine as the sweep — tools/mount.mjs
 

@@ -44,7 +44,7 @@ export class Pc8801Machine {
     // frames: M88 executes 7,991 main instructions per frame, we managed 7,223
     // at 60 Hz and 7,792 at this period.
     frameHz = 3_993_600 / 71_680, clockHz = 3_993_600, dmaSteal = 0.3, sb2 = false,
-    kanji = null, kanji2 = null, rtcDate = null,
+    opna44 = false, kanji = null, kanji2 = null, rtcDate = null,
   } = {}) {
     if (!main || main.length < 0x8000) throw new Error('need a 32KB N88 main ROM');
     // Every machine in the suite carries its schema version on the instance as
@@ -229,7 +229,20 @@ export class Pc8801Machine {
     // YM2203 (OPN): FM×3 + SSG×3 + 2 timers, at ports 44h/45h. Its IRQ is
     // the μPD8214's SOUND source (number 4, level 5) — the music driver's
     // clock. Registers in, samples out; the machine only carries it.
-    this.opn = new Ym2203({ clockHz, sampleRate: 48000 });
+    //
+    // `opna44` puts a YM2608 there instead — M88's `enableopna`
+    // (`opn1->SetOPNMode(cfgflags & Config::enableopna)`), i.e. the SR-and-
+    // later machines whose onboard chip is the OPNA. This is a different thing
+    // from `sb2`: refdrv runs with `enableopna` set and NO board at A8h
+    // (`opn2->Enable((cfgflags & (opnaona8|opnona8)) != 0)` → disabled → A8h
+    // reads 0xff). Software that hunts for an OPNA — 事件パズル probes A8h,
+    // then 44h, via the chip-ID read (register 0xFF → 1) — must find exactly
+    // what M88's machine shows it, or it configures a different sound path and
+    // diverges from there on.
+    this.opn = opna44
+      ? new Ym2608({ clockHz, sampleRate: 48000 })
+      : new Ym2203({ clockHz, sampleRate: 48000 });
+    this.opn44IsOpna = opna44;
     // Sound Board II (OPNA) — optional, at ports A8h-ABh. Default off so a
     // plain machine looks driveless-OPN to the game (the empirically-observed
     // fallback). Enable to iterate SB2 detection / capture OPNA arrangements.
@@ -478,8 +491,11 @@ export class Pc8801Machine {
     if (port === 0x33) return this._port33;
     if (port === 0x20) { if (this.tape) this.tape.pump(this._tapeNow()); return this.tape ? this.tape.readData() : 0xff; }        // 8251 RX data (tape)
     if (port === 0x21) { if (this.tape) this.tape.pump(this._tapeNow()); return this.tape ? this.tape.status8251() : 0x05; }      // 8251 status: TxRDY|TxEMPTY|RxRDY|OE|FE
-    if ((port === 0x46 || port === 0xac) && this.opna) return this.opna.readStatus(); // OPNA ext status
-    if ((port === 0x47 || port === 0xad) && this.opna) return this.opna.readStatus(); // OPNA ext data (status fallback)
+    // OPNA extended status/data (bank 1). 46h/47h belong to the 44h chip when
+    // it is an OPNA (M88 ReadStatusEx: `enable && opnamode ? ReadStatusEx() :
+    // 0xff`); ACh/ADh belong to the A8h board.
+    if (port === 0x46 || port === 0x47) return this.opn44IsOpna ? this.opn.readStatusEx() : 0xff;
+    if ((port === 0xac || port === 0xad) && this.opna) return this.opna.readStatusEx();
     if (port === 0x40) {
       // d5 = VRTC (high during retrace), d1 = CMT carrier etc.
       //
@@ -516,13 +532,37 @@ export class Pc8801Machine {
       // last register write (an input port reflects pins, not stored data).
       if (this.opn.addr === 0x0e) return this.joy[0];
       if (this.opn.addr === 0x0f) return this.joy[1];
-      return this.opn.reg[this.opn.addr];
+      // Register 0xFF is the chip-ID probe: an OPNA answers 1, a plain OPN
+      // answers 0 (M88 `OPNA::GetReg: if (addr == 0xff) return 1;` against
+      // `OPNIF::ReadData0: index0 == 0xff && !opnamode → 0`). 事件パズル reads
+      // it three times before it will believe a sound chip exists; stale
+      // register RAM here would make a 2203 masquerade as whatever was written
+      // last.
+      if (this.opn.addr === 0xff) return this.opn44IsOpna ? 1 : 0;
+      if (this.opn.addr >= 0x10) return 0; // M88 OPN::GetReg: PSG regs only
+      return this.opn.reg[this.opn.addr] ?? 0;
     }
     if (this.opna) { // Sound Board II (OPNA) at A8h-ABh
-      // YM chips are write-only for registers; a read of the DATA port returns
-      // the STATUS byte (busy + timer flags), which is exactly what the SB2
-      // detection routine polls at 0xA9 (disassembled: OUT(C=A8),E; INC C; IN A,(C)).
-      if (port === 0xa8 || port === 0xa9) return this.opna.readStatus();
+      if (port === 0xa8) return this.opna.readStatus();
+      // A9h is the DATA port, and its read is how software tells the chips
+      // apart: OPNA answers register index 0xFF with its chip ID, 1. M88's
+      // `OPNA::GetReg` spells it out —
+      //
+      //     if (addr == 0xff) return 1;    // OPNA
+      //     ret = 0;  // (OPNIF::ReadData0: index0 == 0xff && !opnamode)
+      //
+      // 事件パズル probes exactly this way (`OUT (C),0FFh / INC C / IN A,(C) /
+      // DEC A / RET NZ`, three times) before it will drive the music with
+      // Timer A. Returning the status byte here made the ID read come back
+      // 0x00, the game concluded "no sound board", left 66C9h = 0, and skipped
+      // its whole graphics-loading path — the fill-0% divergence.
+      if (port === 0xa9) {
+        const a = this.opna.addr;
+        if (a === 0xff) return 1; // chip ID
+        if (a === 0x0e) return this.joy[0]; // OPN I/O ports carry the pads
+        if (a === 0x0f) return this.joy[1];
+        return a < 0x10 ? (this.opna.reg[a] ?? 0) : 0; // M88 GetReg: PSG regs only
+      }
       if (port === 0xaa || port === 0xab) return this.opna.readStatus(); // bank1 status (ADPCM flags: stubbed)
     }
     if (port === 0xe2 || port === 0xe3) return 0xff; // EMM
@@ -585,7 +625,23 @@ export class Pc8801Machine {
         this.mono = (v & 0x10) === 0;
         return;
       case 0x32: // mkII SR+: b5 = analog palette, b6 = ALU/extended VRAM window
+        // B7 IS THE SOUND INTERRUPT MASK, AND IT IS ACTIVE HIGH.
+        //
+        //     opn1->SetIMask(0x32, 0x80);
+        //     OPNIF::SetIntrMask:  opn.SetIntrMask(!(imaskbit & intrmask));
+        //
+        // so 32h b7 set = the OPN's INT pin is gated off entirely. We stored the
+        // port and never gated, which let a music driver's Timer A fire the
+        // SOUND interrupt on a machine whose mask says it cannot.
+        //
+        // 事件パズル keeps b7 set for its whole run (port32 = a8/a9/aa) while
+        // running Timer A for the music, so M88 takes ZERO sound interrupts and
+        // never even reads the IM2 vector at 5008. We took 77 of them in 400
+        // frames, each one landing in the game's handler mid-`LDI` block.
         this._port32 = v;
+        // Masking drops the pending flag, exactly like the other sources on E6h
+        // (M88's INTC::SetMask does `stat.irq &= stat.mask2` on the same edge).
+        if (v & 0x80) this.intPending &= ~(1 << 4);
         return;
       case 0x53: // display mask: b0 = 1 → text plane OFF, b1 = 1 → graphics OFF.
         // Ys II draws its whole map in GVRAM and sets b0 to hide the text plane;
@@ -639,8 +695,12 @@ export class Pc8801Machine {
       case 0x01: this._pcgAdr = (this._pcgAdr & 0xff00) | v; this._pcgWrite(); return; // PCG addr low
       case 0x02: this._pcgAdr = (this._pcgAdr & 0x00ff) | (v << 8); this._pcgWrite(); return; // PCG addr high
       case 0x33: this._port33 = v; return; // N-BASIC bank select (n80mode only) — no-op in N88
-      case 0x46: case 0xac: if (this.opna) this.opna.writeAddr1(v); return; // OPNA ext-reg index (mirrors AAh)
-      case 0x47: case 0xad: if (this.opna) this.opna.writeData1(v); return; // OPNA ext-reg data  (mirrors ABh)
+      // OPNA extended registers (bank 1): 46h/47h drive the 44h chip when it
+      // is an OPNA; ACh/ADh drive the A8h board.
+      case 0x46: if (this.opn44IsOpna) this.opn.writeAddr1(v); return;
+      case 0x47: if (this.opn44IsOpna) this.opn.writeData1(v); return;
+      case 0xac: if (this.opna) this.opna.writeAddr1(v); return; // OPNA ext-reg index (mirrors AAh)
+      case 0xad: if (this.opna) this.opna.writeData1(v); return; // OPNA ext-reg data  (mirrors ABh)
       case 0x10: this._rtcOut10(v); return; // μPD1990 command + serial-in
       case 0x40: this._rtcOut40(v); return; // μPD1990 strobe/clock (bits 1,2); other bits (wait-state) not modelled
       case 0x99: this._port99 = v; return; // CD-BIOS/EROM bank — no CD-ROM fitted, no effect
@@ -881,7 +941,12 @@ export class Pc8801Machine {
           this._opnCyc -= t * 72;
           this.opn.tickTimers(t);
           if (this.opna) this.opna.tickTimers(t); // SB2 shares the SOUND IRQ line
-          const irqNow = this.opn.irq || (this.opna && this.opna.irq);
+          // 32h b7 gates the OPN's INT pin (see the port 32h write). A masked
+          // chip does not request; it is not "requests and is ignored", which is
+          // why this is here and not in _serviceInterrupts — M88 never latches
+          // the request at all (`INTC::Request` does `bit &= stat.mask2` before
+          // touching `stat.irq`).
+          const irqNow = (this.opn.irq || (this.opna && this.opna.irq)) && !(this._port32 & 0x80);
           if (irqNow && !this._opnIrqPrev) this.intPending |= 1 << 4; // SOUND, src 4
           this._opnIrqPrev = irqNow;
         }

@@ -72,6 +72,16 @@ export class Ym2608 extends Ym2203 {
   // ---- bank 1 (ports 0xAA / 0xAB) -----------------------------------------
   writeAddr1(v) { this.addr1 = v & 0xff; }
 
+  // Extended status (ports 46h/ACh). fmgen's OPNABase::ReadStatusEx:
+  //
+  //     uint r = ((status | 8) & stmask) | (adpcmplay ? 0x20 : 0);
+  //
+  // — bit 3 (ADPCM BRDY, "buffer ready") reads as ALWAYS SET on an idle chip.
+  // 事件パズル spins on `IN A,(46h) / BIT 3,A / JR Z` right after programming
+  // the ADPCM side; without the constant bit the wait never ends. (adpcmplay's
+  // 0x20 is omitted — the ADPCM-B decoder here is still a stub.)
+  readStatusEx() { return (this.status | 8) & 0xff; }
+
   writeData1(v) {
     v &= 0xff;
     const a = this.addr1;

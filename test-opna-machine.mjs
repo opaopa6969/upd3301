@@ -31,14 +31,22 @@ test('sb2:true → OPNA at A8-AB; writes reach both banks', () => {
   assert.equal(m.opna.reg1[0x40], 0x22, 'bank1 register written');
 });
 
-test('detection: port 0xA9 returns the real Timer-A flag (0x01), no stub', () => {
+test('detection: A8h carries the status, A9h carries data — and the chip ID', () => {
+  // This test used to pin "A9h returns the status byte", which was our guess at
+  // how SB2 probes work. M88 says otherwise: A8h is ReadStatus, A9h is
+  // ReadData0 — a *register* read — and the probe software actually performs is
+  // the chip-ID read: select register 0xFF, read the data port, expect 1
+  // (OPNA::GetReg: `if (addr == 0xff) return 1;`). 事件パズル does exactly that,
+  // three times, before trusting the chip.
   const m = mkMachine(true);
   const w0 = (a, v) => { m.out(0xa8, a); m.out(0xa9, v); };
   w0(0x24, 0xff); w0(0x25, 0x03); // Timer A period
   w0(0x27, 0x05);                  // load + enable Timer A
-  assert.equal(m.in(0xa9) & 1, 0, 'not overflowed yet');
+  assert.equal(m.in(0xa8) & 1, 0, 'status: not overflowed yet');
   m.opna.tickTimers(4096);         // (stepFrame drives this from the CPU loop in a real boot)
-  assert.equal(m.in(0xa9), 0x01, 'the SB2 probe reads 0x01 from a genuine overflow');
+  assert.equal(m.in(0xa8), 0x01, 'a genuine Timer-A overflow shows in the STATUS port');
+  m.out(0xa8, 0xff);
+  assert.equal(m.in(0xa9), 1, 'data port answers register 0xFF with the OPNA chip ID');
 });
 
 test('renderAudio: OPNA FM6 + rhythm are audible through the machine', () => {

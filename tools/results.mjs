@@ -37,7 +37,7 @@ const { main, ext, sub, n80 } = loadRomSet(ROMDIR);
 // one funnel every command ends through, so wrapping it here beats threading a
 // hook through the core — upd765.js stays free of instrumentation.
 function ours(path) {
-  const m = new Pc8801Machine({ main, ext, sub, n80, mode: 'n88' });
+  const m = new Pc8801Machine({ main, ext, sub, n80, opna44: true, mode: 'n88' });
   mountD88(m, readFileSync(path)); // same mount as refdrv — see tools/mount.mjs
   const f = m.sub.fdc;
   const seen = [];

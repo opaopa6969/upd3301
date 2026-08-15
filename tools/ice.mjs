@@ -81,7 +81,7 @@ const MACHINES = {
       const { mountD88 } = await import('./mount.mjs');
       const { loadRomSet } = await import('./romset.mjs');
       const { main, ext, sub, n80 } = loadRomSet(opt('romdir', DEFAULT_ROMDIR));
-      const m = new Pc8801Machine({ main, ext, sub, n80, mode: opt('mode', 'n88') });
+      const m = new Pc8801Machine({ main, ext, sub, n80, opna44: true, mode: opt('mode', 'n88') });
       // --tvram on|off forces the F000-FFFF routing, to test whether that
       // mapping is what changes a title's fate (see docs/m88-comparison.md).
       const tv = opt('tvram', 'normal');

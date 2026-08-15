@@ -54,7 +54,7 @@ const { main, ext, sub, n80 } = loadRomSet(ROMDIR);
 
 function ours(path) {
   try {
-    const m = new Pc8801Machine({ main, ext, sub, n80, mode: 'n88' });
+    const m = new Pc8801Machine({ main, ext, sub, n80, opna44: true, mode: 'n88' });
     const imgs = mountD88(m, rd(path)); // image0→drive0, image1→drive1, both read-only — tools/mount.mjs
     for (let i = 0; i < FRAMES; i++) m.stepFrame();
     // count text RAM only when the text plane is actually displayed (port 53h
