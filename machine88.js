@@ -743,6 +743,7 @@ export class Pc8801Machine {
         this._vrtc = true;
         this._crtcBlank = true;
         this._crtcNext += period - disp;
+        if (globalThis.__edge) globalThis.__edge();
         if (this.intMaskBits & 2) { this.intPending |= 1 << 1; if (globalThis.__irq) globalThis.__irq(1); } // VSYNC, source 1
       }
     }
