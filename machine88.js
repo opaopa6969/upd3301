@@ -83,6 +83,7 @@ export class Pc8801Machine {
       this.sub.fdc.seekTiming = true;
       this.sub.fdc.readTiming = true;
       this.sub.fdc.eocTiming = true;
+      this.sub.fdc.byteTiming = true;
     }
 
     // POWER-ON DRAM IS A PATTERN, NOT A CONSTANT.

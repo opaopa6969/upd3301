@@ -44,6 +44,11 @@ export class Upd765 {
     this.seekTiming = false; // 400 x steps + 500 ticks per SEEK/RECALIBRATE
     this.readTiming = false; // 250 << min(7,n) ticks before each sector read
     this.eocTiming = false;  // 20 ticks of TC window after EOT (see _execDone)
+    this.byteTiming = false; // a byte period between execution-phase bytes (see read())
+    // 1 tick = 10 µs; 250 kbps MFM is 32 µs per byte, so 3 ticks. That is four
+    // turns of a 30 T-state poll loop on a 4 MHz main — the same number of polls
+    // M88 shows before the strobe goes high.
+    this.bytePeriod = 3;
     this.drives = [
       { disk: null, cyl: 0 }, { disk: null, cyl: 0 },
       { disk: null, cyl: 0 }, { disk: null, cyl: 0 },
@@ -119,6 +124,8 @@ export class Upd765 {
       //         result = ST0_AT | ST1_EN;
       //         ShiftToResultPhase7();
       else if (kind === 'eoc') this._endRw(ST0_AT, ST1_EN, 0);
+      // the next execution-phase byte has arrived under the head
+      else if (kind === 'byte') { this.status |= RQM; this.int = true; }
     }
   }
 
@@ -258,8 +265,38 @@ export class Upd765 {
     if (this.phase === 'execute') {
       const v = this.execBuf[this.execPos++];
       this.data = v;
-      if (this.execPos < this.execBuf.length) { this.status |= RQM; this.int = true; }
-      else { this.status &= ~EXM; this._execDone(); }
+      if (this.execPos < this.execBuf.length) {
+        // A BYTE ARRIVES EVERY 32 µs, NOT INSTANTLY.
+        //
+        // 250 kbps MFM is one byte per 32 µs, and in non-DMA mode the chip
+        // raises INT once per byte. M88 re-arms RQM|INT the moment the port is
+        // read (`status |= S_RQM, Intr(true);`) and so did we — which makes the
+        // gap zero and turns a driver that *sleeps on that interrupt* into a
+        // free-running loop.
+        //
+        // That is not academic. Wizardry II/III load through a RAM-resident sub
+        // driver that paces itself on the interrupt:
+        //
+        //     70ec  OUT (0FDh),A   ; 8255 port B = the byte the main will read
+        //     70ee  OUT (C),D      ; raise the strobe the main is polling for
+        //     70f0  EI
+        //     70f1  HALT           ; <- sleep until the FDC has the next byte
+        //     70f2  IN A,(0FBh)
+        //     70f4  OUT (0FDh),A   ; overwrite port B with the next byte
+        //
+        // With no gap the HALT falls straight through, so port B is overwritten
+        // before the main's `IN A,(0FEh) / AND 04h / JR Z` loop (30 T per poll)
+        // can sample it. The main then reads every *odd* byte twice and never
+        // sees the even ones: M88 delivers `d1 e1 22 e4 02 …`, we delivered
+        // `e1 e1 e4 e4 …`. The loader copies itself over its own body, so the
+        // corrupted bytes turn `014d IN A,(0FEh)` into a one-byte opcode and
+        // the CPU falls into `JP M,0FCFAh`.
+        //
+        // Opt-in like every other timer here, because upd765.js is shared with
+        // the X68000 board, which never calls tick().
+        if (this.byteTiming) this._arm(this.bytePeriod, 'byte');
+        else { this.status |= RQM; this.int = true; }
+      } else { this.status &= ~EXM; this._execDone(); }
       return v;
     }
     // result phase
