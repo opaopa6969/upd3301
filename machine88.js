@@ -486,6 +486,16 @@ export class Pc8801Machine {
     if (port === 0x30) return this.dipsw[0];
     if (port === 0x31) return this.dipsw[1];
     if (port === 0x32) return this._port32; // readable on mkII SR and later
+    // 5Ch read = which C000 bank is mapped, as a bit pattern (M88 Memory::In5c:
+    // `res[4] = { 0xf9, 0xfa, 0xfc, 0xf8 }` indexed by port5x). Games use it to
+    // SAVE the window across a subroutine — 事件パズル's interrupt-safe blitter
+    // opens with `IN A,(5Ch) / PUSH AF` and restores from the saved pattern.
+    // Returning 0xff (no implementation) matched none of the four states, the
+    // restore went wrong, and the title never got its graphics unpacked.
+    if (port === 0x5c) {
+      const p5x = this.gvramWindow >= 0 ? this.gvramWindow : 3;
+      return [0xf9, 0xfa, 0xfc, 0xf8][p5x];
+    }
     // 71h is READ by the cross-bank call dispatcher (3ABE): it stows the
     // current bank state in its stack frame so the return trampoline can
     // put it back. Returning a constant here means every OS call restores
