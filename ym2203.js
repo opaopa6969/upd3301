@@ -184,6 +184,7 @@ export class Ym2203 {
     this.ssgLpA = 0.828;
     this.timerA = 0; this.timerACount = 0; this.timerARun = false;
     this.timerB = 0; this.timerBCount = 0; this.timerBRun = false;
+    this._tcA = false; this._tcB = false; // last $27 load bits (fmgen's regtc)
     this.status = 0; // b0 timer A overflow, b1 timer B, b7 busy
     this.irqEnableA = false; this.irqEnableB = false;
   }
@@ -217,10 +218,27 @@ export class Ym2203 {
       this.irqEnableB = (v & 8) !== 0;
       if (v & 0x10) this.status &= ~1; // reset A flag
       if (v & 0x20) this.status &= ~2; // reset B flag
+      // LOAD BITS AT 0 DO NOT STOP THE TIMER. fmgen's SetTimerControl:
+      //
+      //     if (data & 0x01) {
+      //         if (tmp & 0x01) timera_count = timera;   // tmp = regtc ^ data
+      //     }
+      //
+      // — the outer test means a write with bit0 = 0 touches nothing: the
+      // counter keeps running, and Count()'s `while (timera_count <= 0)
+      // timera_count += timera` keeps it running forever after. Only the 0→1
+      // edge reloads.
+      //
+      // We used to stop the timer on bit0 = 0 and reload on the next 1, which
+      // matters because the DataWest sound driver (FIREHAWK, 事件パズル) writes
+      // `$27=94 / $25 / $24 / $27=95` around EVERY tempo change — under fmgen
+      // the phase sails straight through, under the old model each note rewound
+      // the timer to zero. Enough rewinds and the music (and the demo that
+      // paces itself on the flag) runs measurably slow.
       const runA = (v & 1) !== 0, runB = (v & 2) !== 0;
-      if (runA && !this.timerARun) this.timerACount = 1024 - this.timerA;
-      if (runB && !this.timerBRun) this.timerBCount = (256 - this.timerB) * 16;
-      this.timerARun = runA; this.timerBRun = runB;
+      if (runA && !this._tcA) { this.timerACount = 1024 - this.timerA; this.timerARun = true; }
+      if (runB && !this._tcB) { this.timerBCount = (256 - this.timerB) * 16; this.timerBRun = true; }
+      this._tcA = runA; this._tcB = runB; // fmgen's regtc: edge detector only
       return;
     }
     if (a === 0x28) return this._keyReg(v); // key on/off
