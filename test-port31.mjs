@@ -1,14 +1,14 @@
 // Port 31h bit 2 (PC-8801): the N80 ROM bank select that works *without*
 // leaving N88 mode.
 //
-// M88's `Memory::Update00R` is one line:
+// M88 splits the window across two functions but both follow the same bit:
 //
-//     read = rom + (port31 & 4 ? n80 : n88);
+//     Update00R:  read = rom + (port31 & 4 ? n80 : n88);   // 0000-5fff
+//     Update60R:  else if ((port31 & 6) == 4)              // 6000-7fff
+//                     read = rom + n80 + 0x6000;
 //
-// and `Update60R` maps ROM at 6000-7fff only when `(port31 & 6) == 0`, so with
-// bit 2 set that window is plain RAM. We honoured the bit in the text-window
-// test at 8000-83ff and nowhere else, which meant a game that asked for the N80
-// ROM kept reading N88 bytes.
+// We honoured the bit in the text-window test at 8000-83ff and nowhere else,
+// which meant a game that asked for the N80 ROM kept reading N88 bytes.
 //
 // Games use the bit as a *probe*, because the two ROMs differ in their opening
 // instruction — N88 starts `LD SP,0E1A0h`, N80 starts `LD SP,0FFFFh` — so the
@@ -50,14 +50,18 @@ test('31h b2=0: 0000-7fff reads the N88 ROM', () => {
   assert.equal(m.readMem(0x6000), N88);
 });
 
-test('31h b2=1: 0000-5fff swaps to the N80 ROM, 6000-7fff becomes RAM', () => {
+test('31h b2=1: the whole 0000-7fff window swaps to the N80 ROM', () => {
+  // Both halves matter. The first carries the signature games probe; the second
+  // carries the N-BASIC hook the ROM calls at `179e CALL 7F00h`, and serving
+  // RAM there put the CPU on a NOP sled through uninitialised memory.
   const m = mk();
   m.out(0x31, 0x04);
   assert.equal(m.readMem(0x0000), N80, 'the reset vector comes from the N80 ROM');
   assert.equal(m.readMem(0x0002), N80, 'and so does the LD SP operand games probe');
   assert.equal(m.readMem(0x5fff), N80);
-  assert.equal(m.readMem(0x6000), RAM, 'Update60R: ROM here only when (port31 & 6) == 0');
-  assert.equal(m.readMem(0x7fff), RAM);
+  assert.equal(m.readMem(0x6000), N80, 'Update60R: (port31 & 6) == 4 maps n80 + 0x6000');
+  assert.equal(m.readMem(0x7f00), N80, 'the hook the N80 ROM CALLs');
+  assert.equal(m.readMem(0x7fff), N80);
 });
 
 test('31h b1 still wins: 64K RAM mode ignores b2 entirely', () => {
