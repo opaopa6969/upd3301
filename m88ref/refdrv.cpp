@@ -41,7 +41,20 @@ void (*g_pcHook)(unsigned pc) = nullptr;
 // but "the first time the program reaches address X" does.
 static int g_armFrame = -1, g_armFdc = 0;
 static long g_armPc = -1;
+// M88_VRTC=1: log every VRTC pin transition, stamped with the instruction
+// counter rather than a clock. Two emulators share no time base, but they do
+// share an instruction stream — so "the Nth instruction" is an axis both sides
+// can be plotted on. This is the probe that cracked #72: it showed M88 raising
+// VRTC at instruction 7,094 (frame 0) while we had not raised it once by frame
+// 0 at all, which is exactly why Yaksa's VRTC wait spun 106 times there and
+// once here. Requires the Base::VRTC hook from m88m-hooks.patch.
+void (*g_vrtcHook)(unsigned en) = nullptr;
+static unsigned g_instr = 0;
+static void vrtcLog(unsigned en) {
+  printf("# VRTC %u at instr %u frame %d\n", en, g_instr, g_frame);
+}
 static void pcLog(unsigned pc) {
+  g_instr++;
   if (!g_traceOn) {
     if (g_armPc >= 0 && (long)pc == g_armPc) g_traceOn = 1;
     else if (g_armFrame >= 0 && g_frame >= g_armFrame) g_traceOn = 1;
@@ -179,6 +192,11 @@ int main(int argc, char** argv) {
   // g_mrdHook = mrdLog;  // (byte log off — capturing pc trace instead)
 
   // ---- env-configured instrumentation (see m88ref/README.md) ----
+  // VRTC first: it only needs pcLog running as an instruction counter, and the
+  // M88_TRACE block below re-installs the same hook with a real buffer, so the
+  // two can be enabled together (g_traceMax stays 0 until then, which makes
+  // pcLog count without storing).
+  if (getenv("M88_VRTC")) { g_vrtcHook = vrtcLog; g_pcHook = pcLog; }
   const char* tracePath = getenv("M88_TRACE");
   if (tracePath) {
     if (const char* s = getenv("M88_TRACE_FROM"))  g_armFrame = atoi(s);

@@ -70,8 +70,30 @@ refdrv <romDir> <disk.d88> [frames] [win0 win1]
 | `M88_TRACE_FROM=<frame>` | フレーム指定で開始（既定 0） |
 | `M88_TRACE_ARMFDC=<n>` | n回目のFDC result から開始（旧・軽井沢用の武装条件） |
 | `M88_TRACE_MAX=<n>` | 命令バッファ上限（既定 200000） |
+| `M88_TRACE_R=1` | 各PCと一緒に Z80 の R レジスタを記録する（`pc rr`・**重複は畳まない**） |
 | `M88_WATCH=<lo>-<hi>` | MAIN CPU のそのアドレス範囲への書き込みを全部出す（`WR f… pc=… [addr]=val`） |
 | `M88_WATCH_MAX=<n>` | 出力行数の上限（既定 400） |
+| `M88_RWATCH=<lo>-<hi>` | MAIN CPU のその範囲からの**読み出し**を全部出す（`RD f… pc=… [addr]=val`） |
+| `M88_RWATCH_MAX=<n>` | 出力行数の上限 |
+| `M88_RWATCH_PC=<lo>-<hi>` | そのPCから出た読み出しだけに絞る |
+| `M88_VRTC=1` | VRTC ピンの上下を**命令カウンタ付き**で出す |
+| `M88_CPU=sub` | pc/read/write フックを MAIN ではなく**サブCPU（CPU2）**に向ける |
+
+`M88_RWATCH` は「同じコードが**違うデータ**を読んでいる」ときの本命——CPUが実際に
+見たバイトが記録される。`M88_TRACE_R` は「両者が同じ**命令数**を実行したか」の物差し
+で、R は M1 サイクルを数え CRTC の DMA がバスを握る間は止まるので、PCだけのトレース
+では見えないサイクルスチールの差が出る。
+
+`M88_VRTC` があるのは、**両エミュに共通クロックは無いが共通の命令列はある**から。
+命令カウンタなら両者を同じ軸に載せられる。#72 はこれで決着した:
+
+```
+$ M88_VRTC=1 refdrv <romDir> Yaksa.d88 3
+# VRTC 1 at instr 7094 frame 0      <- M88 は frame 0 の中で上げている
+# VRTC 0 at instr 7951 frame 0
+# VRTC 1 at instr 14114 frame 1
+```
+うち側の対応物は `globalThis.__vrtc` フック（同じく命令カウンタでスタンプ）。
 
 **`M88_TRACE_ARMPC` を使うこと。** うちのエミュはM88より約20フレーム速く起動する
 ので、フレーム番号は同じ地点を指さない。「そのPCに最初に到達した時点」なら
