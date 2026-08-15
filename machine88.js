@@ -584,16 +584,16 @@ export class Pc8801Machine {
         //   START DISPLAY crtc.cpp:333 `DelEvent(sev);
         //                 AddEvent(linetime*vretrace, StartDisplay)`
         //                 -> a blanking period first, so VRTC is high right now
-        // Move the phase, but do NOT let that count as a VRTC edge: M88 only
-        // reschedules its event here, it never calls `bus->Out(vrtc, …)`. Without
-        // syncing `_vrtcPrev` the jump looks like a rising edge and fires a spare
-        // VSYNC every time the program touches the command port — FIREHAWK ends up
-        // spinning in its RST 18h handler (9,257 hits in 60 frames).
-        if ((v & 0xe0) === 0x00) {          // RESET -> StartDisplay immediately
-          this._vrtc = false; this._crtcBlank = false; this._crtcNext = this._crtcDispT();
-        } else if ((v & 0xe0) === 0x20) {   // START DISPLAY -> blank, then display
-          if (globalThis.__startdisp) globalThis.__startdisp();
-          this._crtcBlank = true; this._crtcNext = this._crtcPeriodT() - this._crtcDispT();
+        // The RESET command (crtc.cpp:245-260) only assigns status/attr/mode. It
+        // does NOT call DelEvent, StartDisplay or Out(vrtc,…) — only a physical
+        // reset (HotReset -> StartDisplay) moves the pin. So: nothing here.
+        //
+        // START DISPLAY (crtc.cpp:318-339) reschedules StartDisplay one blanking
+        // period out, and only while the display is enabled and VE is not already
+        // set. It does not raise VRTC either: the pin keeps the value it had.
+        if ((v & 0xe0) === 0x20 && !(this.crtc.status & 0x10)) {
+          this._crtcBlank = true;
+          this._crtcNext = this._crtcPeriodT() - this._crtcDispT();
         }
         return;
       case 0x70: this._txtwnd = (v & 0xff) << 8; return; // text window base (see readMem)
