@@ -185,6 +185,15 @@ export class Ym2203 {
     this.timerA = 0; this.timerACount = 0; this.timerARun = false;
     this.timerB = 0; this.timerBCount = 0; this.timerBRun = false;
     this._tcA = false; this._tcB = false; // last $27 load bits (fmgen's regtc)
+    // Who sees a timer overflow when its $27 IRQ-enable bit is clear?
+    //   false (default) — the real chip's answer: the status flag latches
+    //     unconditionally; the enable bit gates only /IRQ. Verified by hardware
+    //     tests on the YM2612, which subclasses this chip — Mega Drive stays on
+    //     the measured behaviour.
+    //   true — fmgen's answer (`if (regtc & 4) SetStatus(1)`), i.e. no enable,
+    //     no flag. The PC-8801 machine opts in because M88 is built on fmgen
+    //     and the parity harness measures against it.
+    this.fmgenTimerGate = false;
     this.status = 0; // b0 timer A overflow, b1 timer B, b7 busy
     this.irqEnableA = false; this.irqEnableB = false;
   }
@@ -518,22 +527,33 @@ export class Ym2203 {
   // caps every music driver at 60 Hz: half-tempo, melody notes dropped,
   // just the slow bass surviving. Ask the ear that caught it.)
   tickTimers(ticks) {
-    // The overflow flag latches UNCONDITIONALLY — the $27 enable bit gates the
-    // /IRQ line (see the `irq` getter), not the flag. Gating the flag here was
-    // wrong: it hid the flag from a poll-for-timing driver, and it conflated
-    // status with IRQ. (Independent RE review + YM2612 hardware tests.)
+    // THE STATUS FLAG IS GATED BY THE $27 ENABLE BIT — fmgen's Timer::Count:
+    //
+    //     if (timera_count <= 0) {
+    //         TimerA();
+    //         while (...) timera_count += timera;
+    //         if (regtc & 4) SetStatus(1);     // <- flag only when enabled
+    //     }
+    //     ... if (regtc & 8) SetStatus(2);
+    //
+    // The real chip disagrees — hardware tests on the YM2612 show the flag
+    // latching unconditionally, with the enable gating only /IRQ — so this is
+    // an OPT-IN (`fmgenTimerGate`, see the constructor): the PC-8801 machine
+    // takes fmgen's behaviour because M88 is the parity reference, the Mega
+    // Drive keeps the measured silicon behaviour. Either way the counter keeps
+    // running (fmgen reloads in the same pass); only the visible flag differs.
     if (this.timerARun) {
       this.timerACount -= ticks;
       while (this.timerACount <= 0) {
         this.timerACount += 1024 - this.timerA;
-        this.status |= 1;
+        if (this.irqEnableA || !this.fmgenTimerGate) this.status |= 1;
       }
     }
     if (this.timerBRun) {
       this.timerBCount -= ticks;
       while (this.timerBCount <= 0) {
         this.timerBCount += (256 - this.timerB) * 16;
-        this.status |= 2;
+        if (this.irqEnableB || !this.fmgenTimerGate) this.status |= 2;
       }
     }
   }

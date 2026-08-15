@@ -243,6 +243,10 @@ export class Pc8801Machine {
       ? new Ym2608({ clockHz, sampleRate: 48000 })
       : new Ym2203({ clockHz, sampleRate: 48000 });
     this.opn44IsOpna = opna44;
+    // M88 is built on fmgen, whose timers only raise the status flag when the
+    // $27 enable bit is set — see fmgenTimerGate in ym2203.js.
+    this.opn.fmgenTimerGate = true;
+    if (this.opna) this.opna.fmgenTimerGate = true;
     // Sound Board II (OPNA) — optional, at ports A8h-ABh. Default off so a
     // plain machine looks driveless-OPN to the game (the empirically-observed
     // fallback). Enable to iterate SB2 detection / capture OPNA arrangements.
