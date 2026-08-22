@@ -1,0 +1,25 @@
+{
+  "id": "upd3301",
+  "name": "μPD3301 Emulator",
+  "description": "NEC μPD3301 CRTC + μPD8257 DMAC エミュレータ（3301記念）— PC-8001テキストパイプライン、蛍光体/CRT管物理層、27色・RGB3プレーン、ANSIターミナル層のデモ。MCP backend: Z80アセンブラ/逆アセンブラ, CRT物理レンダラー, ROM識別, 解析DB, D88読み取り",
+  "type": "node",
+  "hostname": "3301.unlaxer.org",
+  "port": 3301,
+  "host": "192.168.1.50",
+  "runtime": "systemd",
+  "exec_start": "/home/opa/work/game-workspace/upd3301/run.sh",
+  "user": "opa",
+  "auth": "public",
+  "health_check": "/healthz",
+  "tags": ["game", "emulator", "retro", "opa", "mcp"],
+  "repo_url": "https://github.com/opaopa6969/upd3301",
+  "mcp": {
+    "enabled": true,
+    "port": 9270,
+    "path": "/mcp",
+    "namespace": "upd3301",
+    "min_role": "MEMBER",
+    "timeoutMs": 110000,
+    "description": "Z80アセンブラ/逆アセンブラ, CRT物理レンダラー, ROM識別, 解析DB検証/マージ, D88ディスク読み取り（pure JS・依存ゼロ・決定論）"
+  }
+}
