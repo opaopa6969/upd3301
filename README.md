@@ -133,12 +133,21 @@ python3 -m http.server   # リポジトリ直下で実行 → http://localhost:8
 ## 正確性メモ
 
 忠実：コマンド体系、RESETパラメータのデコード、行DMAのバイト数、
-アトリビュート展開の意味論（fill-forward、2ペア目以降の位置0=行末）、
+アトリビュート展開の意味論（fill-forward、2ペイア以降の位置0=行末）、
 アンダーランで落ちる非公開bit7を含むステータス、8257オートロード。
 近似：タイミングはフレーム粒度（ドットクロックなし、フレーム途中の
 VRTC観測不可）、ライトペンと特殊制御文字は未対応、ブリンク周期は
 資料の式どおりだが実チップ未検証。ブラウザデモの実描画はheadlessでは
 見られないため visual未検証（smoke testのみ）。
+
+## MCP
+
+namespace `upd3301` — Z80アセンブラ/逆アセンブラ, CRT物理レンダラー,
+ROM識別, 解析DB検証/マージ, D88ディスク読み取りを MCP tool として公開。
+能力仕様は `upd3301://spec` resource、使い方は `upd3301://guide`。
+volta ファサード `https://mcp.unlaxer.org/mcp` 経由で `upd3301__*` で呼べる。
+起動: `PORT=9270 node mcp/server.mjs`（`/healthz` + `/mcp`, 0.0.0.0 bind）。
+詳細は [docs/mcp/DESIGN.md](docs/mcp/DESIGN.md)。
 
 ## 参考資料
 

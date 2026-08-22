@@ -29,7 +29,7 @@ export const TAPE_RE = /\.(t88|cas|cmt)$/i;
 // basename (lowercased) → role + label. `supported:false` marks a genuine
 // PC-8801-family dump the emulator cannot boot from yet: worth keeping in the
 // library (it IS an 88 ROM) but the machine builder must not offer it.
-const ROM_TABLE = {
+export const ROM_TABLE = {
   // ---- PC-8801 N88 mode (the set that can boot game disks) ----------------
   'n88.rom': { role: 'n88main', label: 'N88 メインROM', sizes: [0x8000] },
   'n88_0.rom': { role: 'n88ext0', label: 'N88 拡張バンク0', sizes: [0x2000] },

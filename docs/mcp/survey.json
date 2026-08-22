@@ -1,0 +1,139 @@
+{
+  "repo": "upd3301",
+  "surveyed_at": "2026-08-22T00:00:00Z",
+  "kind": "service",
+  "summary": "NEC μPD3301 CRTC エミュレータを起点に、PC-8001/8801/PCエンジン/メガドライブ/ファミコン/X68000/PC-9801/ゲームボーイ/セタをブラウザで動かす純JSエミュレータ。依存ゼロ・決定論・headless テスト可能。既に 3301.unlaxer.org で稼働中（systemd, /healthz あり）。多数のライブラリモジュール（Z80/68000/6502 CPU, YM2203/2608 OPN, CRT物理レンダラー, Z80マクロアセンブラ/逆アセンブラ, ROM識別, 解析DB）を subpath exports で公開。",
+  "decision": "wrap",
+  "decision_reason": "既に volta にサービスとして登録済み（3301.unlaxer.org, /healthz）だが MCP バックエンドは無い。エミュレーション本体はブラウザ内で動き、著作権ROMを要するため agent が直接触る価値は薄い。一方、Z80アセンブラ(z80asm.js)・逆アセンブラ(z80dis.js)・CRT物理レンダラー(crt.js+tube.js)・ROM識別(romid.js)・解析DB(analysisdb.js)は pure JS・依存ゼロ・ROM不要で、agent が呼んで嬉しい計算能力になる。これら既存ライブラリ関数を薄く包んで MCP tool として公開する。エミュレーション実行系（machine.stepFrame / ICE / RNG分析）はROM必須のため対象外。",
+  "existing": {
+    "http_api": true,
+    "cli": true,
+    "mcp": false,
+    "healthz": true,
+    "volta_manifest": false,
+    "hosted_url": "https://3301.unlaxer.org"
+  },
+  "proposed_namespace": "upd3301",
+  "capabilities": [
+    {
+      "verb": "Z80ソースをアセンブルする",
+      "kind": "tool",
+      "name": "z80_assemble",
+      "io": "source text + {org} → {bytes(hex), symbols, listing, errors, warnings}",
+      "side_effect": "none",
+      "long_running": false,
+      "maps_to": "z80asm.js:assemble()"
+    },
+    {
+      "verb": "Z80バイナリを逆アセンブルする",
+      "kind": "tool",
+      "name": "z80_disassemble",
+      "io": "bytes(hex) + addr → {text, len, bytes}",
+      "side_effect": "none",
+      "long_running": false,
+      "maps_to": "z80dis.js:disasm()"
+    },
+    {
+      "verb": "フレームをCRT物理（蛍光体・マスク・管面）でレンダリングする",
+      "kind": "tool",
+      "name": "crt_render",
+      "io": "indexed pixels(0..7) or RGBA + {phosphor, mask, barrel, width, height} → RGBA pixels (base64)",
+      "side_effect": "none",
+      "long_running": false,
+      "maps_to": "crt.js:CrtPhosphor + tube.js:CrtTube"
+    },
+    {
+      "verb": "ROMファイル名を識別して役割に割り当てる",
+      "kind": "tool",
+      "name": "rom_identify",
+      "io": "filename → {role, label, sizes, supported} | null",
+      "side_effect": "none",
+      "long_running": false,
+      "maps_to": "romid.js:identify()"
+    },
+    {
+      "verb": "解析レコードを検証する",
+      "kind": "tool",
+      "name": "analysis_validate",
+      "io": "analysis doc(JSON) → {ok, errors, warnings}",
+      "side_effect": "none",
+      "long_running": false,
+      "maps_to": "analysisdb.js:validate()"
+    },
+    {
+      "verb": "2つの解析レコードをマージする",
+      "kind": "tool",
+      "name": "analysis_merge",
+      "io": "doc A(JSON) + doc B(JSON) → {doc, conflicts, warnings}",
+      "side_effect": "none",
+      "long_running": false,
+      "maps_to": "analysisdb.js:merge()"
+    },
+    {
+      "verb": "D88ディスクイメージのメタデータを読む",
+      "kind": "tool",
+      "name": "d88_info",
+      "io": "D88 bytes(hex) → {name, media, sectors, ...}",
+      "side_effect": "none",
+      "long_running": false,
+      "maps_to": "d88.js:parseD88() / tools/d88-info.mjs"
+    },
+    {
+      "verb": "能力の仕様",
+      "kind": "resource",
+      "name": "spec",
+      "uri": "upd3301://spec"
+    },
+    {
+      "verb": "使い方",
+      "kind": "resource",
+      "name": "guide",
+      "uri": "upd3301://guide"
+    },
+    {
+      "verb": "ROMハッシュ表",
+      "kind": "resource",
+      "name": "rom_hashes",
+      "uri": "upd3301://rom_hashes",
+      "maps_to": "index.html:ROM ハッシュ表"
+    },
+    {
+      "verb": "レトロPCの逆アセンブルと解析の手順",
+      "kind": "skill",
+      "name": "retro-reverse-analysis",
+      "locality": "repo"
+    }
+  ],
+  "composition_examples": [
+    "upd3301__z80_assemble → 書いたZ80コードをアセンブル → 得たbytesを upd3301__z80_disassemble で検証（往復テスト）",
+    "upd3301__crt_render → 他サービス（showcase / design）の生成したピクセルをCRT物理でレンダリング → レトロ風映像素材",
+    "upd3301__rom_identify → ROMファイル名を識別 → upd3301__d88_info → ディスク構造を把握 → 解析DBに記録"
+  ],
+  "dependencies": [
+    {
+      "repo": "ttyd-crt",
+      "direction": "provides_to",
+      "capability": "CRT物理レンダラー (crt.js + tube.js)",
+      "exists_now": true,
+      "note": "ttyd-crt はこのリポジトリの crt.js/tube.js を使ってターミナル出力をCRT管面でレンダリングしている（volta catalog に登録済み）"
+    }
+  ],
+  "library_serve": {
+    "needed": false,
+    "new_work": ["MCP server (Node.js, /mcp + /healthz, PORT env, 0.0.0.0 bind)", "volta catalog の upd3301 エントリに mcp バックエンドを追加"],
+    "runtime": "node",
+    "estimated_effort": "S"
+  },
+  "risks": [
+    "ROM著作権: アセンブラ/逆アセンブラ/CRTレンダラー/ROM識別/解析DB はROM不要だが、エミュレーション実行系はBYO-ROM必須（NEC著作権2049年まで）→ agent が直接触る対象から外した",
+    "CRTレンダリングのI/O形式: Uint8Array を MCP で受け渡すには base64/hex エンコードが必要。PNG出力なら別途エンコーダが要る（repo は依存ゼロ方針）",
+    "決定論は保証済み（Math.random不使用）だが、MCPサーバのプロセス管理・状態は別途設計が必要",
+    "解析DBの merge は可換・結合的・冪等だが、スキーマバージョン不一致や romHash 不一致を弾くため、呼び手がスキーマを理解している必要がある"
+  ],
+  "open_questions": [
+    "CRTレンダリングtool の出力形式を base64 RGBA にするか、PNG画像にするか（PNGエンコーダ追加の可否）",
+    "MCPサーバを serve.py と同じポートでは動かせない（別ポート or 別プロセス）。volta catalog の upd3301 エントリに mcp バックエンドを追加する形でよいか",
+    "z80asm.js / z80dis.js 以外に、68000逆アセンブラ（現在未実装・ニーモニックが出ない）をMCP tool に含めるか",
+    "analysis DB の tool 化で、merge の opts（force / allowUnknownRom）をどう公開するか"
+  ]
+}

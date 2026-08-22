@@ -1,0 +1,16 @@
+[Unit]
+Description=upd3301 MCP server (MCP backend for volta)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/work/game-workspace/upd3301
+Environment=PORT=9270
+Environment=NODE_PATH=/home/opa/work/volta-mcp/node_modules
+EnvironmentFile=-/home/opa/volta-secrets/upd3301-mcp.env
+ExecStart=%h/work/game-workspace/upd3301/run-mcp.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
