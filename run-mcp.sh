@@ -4,4 +4,4 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 export PORT="${PORT:-9270}"
-exec node mcp/server.mjs
+exec node --experimental-global-webcrypto mcp/server.mjs
